@@ -1,29 +1,16 @@
-Copyright Notice © 2007 Eötvös Loránd University and Ericsson Hungary
+Copyright Notice © 2008 Eötvös Loránd University and Ericsson Hungary
 Software development supported by Ericsson Hungary and
 GVOP-3.2.2-2004-07-0005/3.0 ELTE IKKK.
 
 Materials  were  created, authored,  and/or  prepared  by  the Authors  at
 Department   of  Programming  Languages   and  Compilers,   Eötvös  Loránd
 University,  Budapest,  Hungary  (ELTE)  for Ericsson  Hungary  under  the
-agreement  between  Ericsson  Hungary  and  ELTE  IKKK.  Unless  otherwise
+agreement  between  Ericsson  Hungary  and ELTE  IKKK.   Unless  otherwise
 specifically stated, no claim to copyright is being asserted and it may be
-freely  used as  in the  public domain  in accordance  with  Erlang Public
-License.  All rights,  including copyright,  are owned  or  controlled for
-these purposes by  the Ericsson Hungary and ELTE.  Copyright exists in all
+freely  used as in  the public  domain in  accordance with  Mozilla Public
+License.   All rights, including  copyright, are  owned or  controlled for
+these purposes by the Ericsson  Hungary and ELTE.  Copyright exists in all
 other original  material published on the  internet and may  belong to the
 authors depending on the circumstances of publication.
-
-You may not alter or remove any trademark, copyright or other notice from
-copies of the content.
-
-Authors: Zoltán Csörnyei
-         Zoltán Horváth
-         Roland Király
-         Róbert Kitlei
-         Tamás Kozsik
-         László Lövei
-         Tamás Nagy
-         Melinda Tóth
-         Anikó Víg
 
 Author contact: erlang@plc.inf.elte.hu

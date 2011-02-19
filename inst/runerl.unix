@@ -1,7 +1,0 @@
-
-"$ERLANG/bin/erl" +R 9      \
-  -sname refactorerl        \
-  -config "$BASE/db.config" \
-  -pz "$BASE/distel/ebin"   \
-  -pz "$BASE/mysql/ebin"    \
-  -pz "$BASE/refactor/ebin"
