@@ -32,7 +32,8 @@ function selectQuery(query) {// User has clicked on a query
     input.value = decodeQuotes(query);
     var queryP = document.getElementById('queryP');
     queryP.innerHTML = "<h3>" + decodeQuotes(query) + " </h3>";
-    var url =  "post_query.yaws?u= " + querySt("user") + "&p=" + query;
+    var url =  "post_query.yaws?u= " + querySt("user") + "&p=" + 
+                encodeURIComponent(query);
     loadUrlIntoDiv(contentObj,url);
 }
 
@@ -44,17 +45,19 @@ function loadErl() {
 function newQuery() {
     showWaitMessage();
     document.getElementById("erlSource").style.display="none";
-    var query = document.getElementById('query').value;
+    var query = removeNewlines(document.getElementById('query').value);
     var queryP = document.getElementById('queryP');
     queryP.innerHTML = "<h3>" + query + " </h3>";
-    var url = "post_query.yaws?u= " + querySt("user") + "&q=" + query;
+    var url = "post_query.yaws?u= " + querySt("user") + "&q=" + 
+              encodeURIComponent(query);
     loadUrlIntoDiv(contentObj,url);
     loadList(); 
 }
 
 function deleteQuery(query) {
     var div = document.getElementById("hiddenDiv");
-    var url = "del_query.yaws?u=" + querySt("user") + "&q=" + query;
+    var url = "del_query.yaws?u=" + querySt("user") + "&q=" + 
+               encodeURIComponent(query);
     loadUrlIntoDiv(div, url);
     loadList();
 }
@@ -102,6 +105,10 @@ function loadUrlIntoDiv(div, url) {
     xmlHttp.send(null);
     var respText = xmlHttp.responseText.split('<body>');
     div.innerHTML = respText[1].split('</body>')[0];
+}
+
+function removeNewlines(str) {
+    return str.replace(/\r\n|\r|\n/g,"");
 }
 
 function decodeQuotes(str) {

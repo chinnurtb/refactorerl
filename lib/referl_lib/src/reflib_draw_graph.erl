@@ -23,7 +23,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 %%% @author Máté Tejfel <matej@inf.elte.hu>
 -module(reflib_draw_graph).
--vsn("$Rev: 5421 $ ").
+-vsn("$Rev: 5654 $ ").
 
 -include("lib.hrl").
 -include_lib("referl_core/src/refcore_schema.hrl").
@@ -137,7 +137,7 @@ store_and_draw_node(Node = {'$gn', From, FromIdx}, St = {Dev, ToolTip}, Links, W
     ets:insert(nodes, {Node, Ind}),
 
     Fmt = io_lib:format("\"N~p~b\" [~s]", [From, FromIdx, nodelabel(Node, ToolTip)]),
-    NoEndl = re:replace(Fmt, "\n", "\\\\n", [{return, list}]),
+    NoEndl = re:replace(Fmt, "\n", "\\\\n", [{return, list}, global]),
     io:put_chars(Dev, NoEndl ++ "\n"),
 
     WalkNext(St, fun node_is_done/2),

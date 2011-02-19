@@ -70,7 +70,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_move_rec).
--vsn("$Rev: 5496 $").
+-vsn("$Rev: 5651 $").
 
 
 %%% ============================================================================
@@ -114,6 +114,10 @@ error_text(not_movable, [FileName, Name]) ->
 %        "collision (mediately) with a record in a file, " ++
 %        "which includes the target header";
 
+error_text(recobj, [Loc, Obj]) ->
+    ["No such record object found in the given module ",
+     ?MISC:format("~p:~p", [Loc, Obj])];
+
 error_text(delete, []) ->
     "Cannot delete record from the source file as it is being used".
 
@@ -124,6 +128,7 @@ error_text(delete, []) ->
 %% @private
 prepare(Args) ->
     Records  = ?Args:records(Args),
+    RecordNames = [?Rec:name(Rec) || Rec <- Records],
     [FromFile] = ?Query:exec(hd(Records), ?Rec:file()),
     FromPath = ?File:path(FromFile),
     ToName   = ?Args:filename(Args),
@@ -154,7 +159,10 @@ prepare(Args) ->
         transform(Info)
      end,
      fun(_)->
-        Records %@todo ok?
+             [Target] = ?Query:exec(?File:find(ToPath)),
+             [ ?Query:exec1(Target, ?Rec:find(Rec),
+                            ?LocalError(funobj, [ToPath, Rec]))
+               || Rec <- RecordNames]
      end].
 
 

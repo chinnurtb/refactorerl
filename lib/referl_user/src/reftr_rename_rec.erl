@@ -62,7 +62,7 @@
 
 
 -module(reftr_rename_rec).
--vsn("$Rev: 5510 $"). % for emacs"
+-vsn("$Rev: 5653 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -77,6 +77,8 @@ error_text(rec_exists, NewName) ->
 %% @private
 prepare(Args) ->
     Record  = ?Args:record(Args),
+    [File] = ?Query:exec(Record, ?Rec:file()),
+    FilePath = ?File:path(File),
 
     Files = lists:usort(?Query:exec(Record,
                 ?Query:seq(?Rec:file(),
@@ -96,7 +98,8 @@ prepare(Args) ->
         ?ESG:update(Def, (?ESG:data(Def))#form{tag=NewName})
     end,
     fun(_)->
-        [Record] %@todo where did it get lost?
+            ?Query:exec(?Query:seq([?File:find(FilePath),
+                                    ?Rec:find(NewName)]))
     end].
 
 ask_transformation_info(Args, Record) ->

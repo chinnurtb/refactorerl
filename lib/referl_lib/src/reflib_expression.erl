@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reflib_expression).
--vsn("$Rev: 5585 $ ").
+-vsn("$Rev: 5697 $ ").
 
 -export([role/1, type/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
@@ -341,8 +341,9 @@ upd_modq(Expr, NewName) ->
     [OldModName] = ?Graph:path(Modq, child(1)),
     ?Syn:replace(Modq, {node, OldModName}, [NewModName]).
 
-%% @spec expand_funexpr(node() | [node()]) -> ok
+%% @spec expand_funexpr(node() | [node()]) -> node() | [node()]
 %% @doc Makes explicit fun expression(s) in place of implicit one(s).
+%% @todo perhaps only list usage should be allowed
 expand_funexpr(Implicits) when is_list(Implicits) ->
     [expand_funexpr(I) || I <- Implicits];
 
@@ -361,7 +362,8 @@ expand_funexpr(Implicit) ->
 
     Explicit = ?Syn:construct({'fun', [{fun_scope, [Patterns], [],
                                                    [{app, CFunRef, Vars}]}]}),
-    ?Syn:replace(Parent, {node, Implicit}, [Explicit]).
+    ?Syn:replace(Parent, {node, Implicit}, [Explicit]),
+    Explicit.
 
 get_var_names(_, 0, List) -> List;
 get_var_names(Prefix, Count, List) ->

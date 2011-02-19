@@ -28,7 +28,7 @@
 %%% @author Gabor Olah <olikas.g@gmail.com>
 
 -module(refusr_spec).
--vsn("$Rev: 5569 $"). %for emacs"
+-vsn("$Rev: 5632 $"). %for emacs"
 
 -include_lib("stdlib/include/ms_transform.hrl").
 
@@ -58,6 +58,18 @@ typexp_type(Node) ->
     (?Graph:data(Node))#typexp.type.
 typexp_tag(Node) ->
     (?Graph:data(Node))#typexp.tag.
+
+%% to reflib_expr:
+all_children(Expr) ->
+    Expr_value = ?Expr:value(Expr),
+    if
+        (Expr_value == 'andalso') or (Expr_value == 'orelse') ->
+            ?Query:exec(Expr, ?Query:seq([exprcl], ?Clause:body()));
+        true ->
+            ?Query:exec(Expr, ?Expr:children())
+    end.
+
+
 %% which element is Elem in List
 % whichElem(Elem, List) ->
 %     whichElem_acc(Elem, List, 1).
@@ -292,7 +304,7 @@ processGuards(Env, Guard) ->
 
 guardType(Env, Guard, infix_expr) ->
 %     ?d(Guard),
-    [Lhs, Rhs] = ?Query:exec(Guard, ?Expr:children()),
+    [Lhs, Rhs] = all_children(Guard),
 %     ?d({Lhs,Rhs}),
     case ?Expr:value(Guard) of
         ';' ->
@@ -492,12 +504,13 @@ getType(Env, Clause, Expr, application) ->
             retTypeOfFunSigList(FunSigList)
     end;
 getType(Env, Clause, Expr, infix_expr) ->
-%      ?d(Expr),
-    [Lhs,Rhs] = ?Query:exec(Expr, ?Expr:children()),
+%     ?d(Expr),
+    [Lhs,Rhs] = all_children(Expr),
+%     ?d([Lhs,Rhs]),
     LhsT = getType(Env, Clause, Lhs),
     RhsT = getType(Env, Clause, Rhs),
     {LT, RT, RetType} = typeOfInfix(?Expr:value(Expr)),
-    % ?d({LhsT, RhsT, LT, RT}),
+%     ?d({LhsT, RhsT, LT, RT}),
     case {match(Env, LhsT, LT), match(Env, RhsT, RT)} of
         {{success, _},{success, _}} ->
             RetType;

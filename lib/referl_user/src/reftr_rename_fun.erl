@@ -65,7 +65,7 @@
 %%% @author Atilla Erdodi <erdodi@elte.hu>
 
 -module(reftr_rename_fun).
--vsn("$Rev: 5496 $ ").
+-vsn("$Rev: 5651 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -78,6 +78,7 @@
 %% @private
 prepare(Args) ->
     FunNode  = ?Args:function(Args),
+    Arity    = ?Fun:arity(FunNode),
     ArgsInfo = add_transformation_info(Args, FunNode),
     Name     = ?Args:ask(ArgsInfo, name, fun cc_funname/2, fun cc_error/3, FunNode),
     NameStr  = io_lib:write_atom(Name),
@@ -91,6 +92,8 @@ prepare(Args) ->
 %    ?Macro:check_single_usage(Updates, [{elex, 1}]),
 
     [FunDefNode] = ?Query:exec(FunNode, ?Query:seq(?Fun:definition(), ?Form:func())),
+    [File] = ?Query:exec(FunDefNode, ?Query:seq([?Fun:module(),?Mod:file()])),
+    FilePath = ?File:path(File),
     DynUpdates   = reflib_dynfun:collect({rename, func}, FunDefNode, Name),
 
     [fun() ->
@@ -106,7 +109,8 @@ prepare(Args) ->
         reflib_dynfun:transform(DynUpdates)
     end,
     fun(_)->
-        [FunNode] %@todo where is it updated...?
+        ?Query:exec(?Query:seq([?File:find(FilePath), ?File:module(),
+                                ?Fun:find(Name,Arity)]))
     end].
 
 %% Adds a `transformation_info' field to `Args'

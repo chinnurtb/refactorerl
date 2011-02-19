@@ -52,7 +52,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_rename_mod).
--vsn("$Rev: 5609 $ ").
+-vsn("$Rev: 5652 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -96,7 +96,7 @@ prepare(Args)->
         reflib_dynfun:transform(DynUpdates)
     end,
     fun(_)->
-        [ModuleObj] % @todo where is it updated...?
+            ?Query:exec(?Query:seq([?File:find(NewPath), ?File:module()]))
     end].
 
 add_transformation_info(Args, Module, Path) ->

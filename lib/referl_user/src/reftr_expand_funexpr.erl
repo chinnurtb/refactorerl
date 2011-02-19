@@ -53,7 +53,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_expand_funexpr).
--vsn("$Rev: 5134 $ ").
+-vsn("$Rev: 5697 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -79,8 +79,9 @@ prepare(Args) ->
         [Expr|_] ->
             fun() ->
                     File = ?Syn:get_file(Expr),
-                    ?Expr:expand_funexpr(Expr),
-                    ?Transform:touch(File)
+                    New = ?Expr:expand_funexpr(Expr),
+                    ?Transform:touch(File),
+                    [New]
             end
     end.
 

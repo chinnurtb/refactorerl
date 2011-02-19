@@ -20,7 +20,7 @@
 %%% @author Judit Koszegi <kojqaai@inf.elte.hu>
 
 -module(web_helper).
--vsn("$Rev: 5590 $ ").
+-vsn("$Rev: 5639 $ ").
 
 -export([start_yaws/0, start_yaws/1, stop_yaws/0]).
 -export([result_to_ehtml/1, get_files/0, query_list_from_tab/1, get_value/2]).
@@ -45,7 +45,7 @@ start_yaws(["from_script", YPath, YName, YPort, YListen]) ->
         YawsNameProp = {yaws_name,YName},
         YawsPortProp = {yaws_port, convert_list_to_integer(YPort)},
         YawsListenProp = {yaws_listen, string_to_ip(YListen)},
-        AllProp = [YawsNameProp,YawsPortProp,YawsListenProp], 
+        AllProp = [YawsNameProp,YawsPortProp,YawsListenProp],
         case YPath of
             "no_path" -> start_yaws(AllProp);
             _ -> start_yaws([YawsPathProp|AllProp])
@@ -60,7 +60,7 @@ start_yaws(Proplist) ->
         undefined -> ok;
         YawsDir ->
             case code:add_path(YawsDir) of
-                true -> ok; 
+                true -> ok;
                 {error,_} ->
                     throw(?RefError(file_notdir,[YawsDir]))
             end
@@ -71,7 +71,7 @@ start_yaws(Proplist) ->
     end,
     Port = proplists:get_value(yaws_port,Proplist,8001),
     validate_port_number(Port),
-    Listen = proplists:get_value(yaws_listen,Proplist,{0,0,0,0}), 
+    Listen = proplists:get_value(yaws_listen,Proplist,{0,0,0,0}),
     validate_ip_tuple(Listen),
     Name0 = proplists:get_value(yaws_name,Proplist,"refactorErl"),
     Name = case is_atom(Name0) of
@@ -112,14 +112,14 @@ validate_name(Name) ->
     end.
 
 is_char(Ch) ->
-    if Ch < 0 -> false;  
+    if Ch < 0 -> false;
        Ch > 255 -> false;
        true -> true
     end.
 
-is_string(Str) ->            
+is_string(Str) ->
     case is_list(Str) of
-        false -> false;           
+        false -> false;
         true -> lists:all(fun is_char/1, Str)
     end.
 
@@ -139,11 +139,11 @@ convert_list_to_integer(String) ->
             throw(?RefError(list_to_integer_error,[String]))
     end.
 
-take_and_drop(L) -> 
+take_and_drop(L) ->
     {convert_list_to_integer(lists:takewhile(fun(X) -> not(X == $.) end,L)),
      (lists:dropwhile(fun(X) -> not(X == $.) end,L))}.
 
-string_to_ip(YPort) -> 
+string_to_ip(YPort) ->
     L1 = YPort,
     {Number1,L2} = take_and_drop(L1),
     case L2 of
@@ -153,7 +153,7 @@ string_to_ip(YPort) ->
             case L3 of
                 [] -> throw(?RefError(ip_format_error,[YPort]));
                 _ ->  {Number3,L4} = take_and_drop(tl(L3)),
-                      case L4 of 
+                      case L4 of
                           [] -> throw(?RefError(ip_format_error,[YPort]));
                           _ ->  {Number4,_L5} = take_and_drop(tl(L4)),
                                 {Number1,Number2,Number3,Number4}
@@ -166,16 +166,30 @@ string_to_ip(YPort) ->
 
 calculate_result(Q) ->
     ReqID = ?UI:getid(),
-    Req = {transform,semantic_query, 
+    Req = {transform,semantic_query,
            [{ask_missing,false},
             {querystr,Q},
             {display_opt,[{positions,scalar}, {output,other}]},
             {start_opt,[]}]},
     ok = ?UI:request(ReqID,Req),
-    {ok, Result} = 
+    {ok, Result} =
         receive
             {ReqID, reply, R} ->
                 R;
+% TODO: (from bkil) do away with unneeded unpackig
+% receive
+%     {ReqID, reply, Reply}->
+%         case Reply of
+%             {ok, Success={result, _}}}->
+%                 Success;
+%             {ok, Deny={abort, _}} ->
+%                 Deny;
+%             Error={error, _} ->
+%                 Error
+%         end;
+%     Invalid->
+%         {error, ?LocalError(invalid_ui_reps, [Invalid])}
+% end.
             M ->
                 {ok, {error, M}}
         end,
@@ -194,7 +208,7 @@ result_to_ehtml({'query',Q,U}) ->
             Hash = get_database_hash(),
             Users = case find_in_tab(Q) of
                         [] -> [User];
-                        [{_Q,_R,UL,_H}] -> 
+                        [{_Q,_R,UL,_H}] ->
                             case lists:member(User,UL) of
                                 true -> UL;
                                 false -> [User|UL]
@@ -248,7 +262,7 @@ error_handler(E) ->
 ehtml_from_query_posres(Table) ->
     TableElements = to_table(list_to_term(lists:flatten(Table))),
     case TableElements of
-        [] -> 
+        [] ->
             {table, [],
              [{tr, [],
                [
@@ -263,7 +277,7 @@ to_table([]) -> [];
 to_table([{eq,Text1,Text2}]) ->
      [{tr, [], [{td, [], to_html({eq,Text1,Text2})}]}];
 to_table([{list,L}]) ->
-    case L of 
+    case L of
         [] ->  [{tr, [], [{td, [], "No result"}]}];
         _ -> [{tr, [], [{td, [], to_html({list,L})}]}]
     end;
@@ -294,12 +308,12 @@ to_html({X,{comma,IsComma}}) ->
                     no -> ""
                 end,
     case get_pos(X) of
-        nopos ->  
+        nopos ->
             {span,[],get_text(X) ++ Separator};
-        {File,StartPos,EndPos} -> 
-            [{a,[{href,"javascript:"},{onclick,"showSelection('"  ++ 
-                    File ++ "'," ++ 
-                    io_lib:format("~p,",[StartPos]) ++ 
+        {File,StartPos,EndPos} ->
+            [{a,[{href,"javascript:"},{onclick,"showSelection('"  ++
+                    File ++ "'," ++
+                    io_lib:format("~p,",[StartPos]) ++
                     io_lib:format("~p)",[EndPos])}],
              get_text(X)},{span,[],Separator}]
     end;
@@ -363,7 +377,7 @@ delete_from_tab(Query,Usr) ->
     [{Query,Result,UserList,Hash}] = dets:lookup(?TAB,Query),
     UserList2 = lists:delete(Usr,UserList),
     case UserList2 of
-        [] -> 
+        [] ->
             delete_from_tab(Query);
         _ ->
             insert_to_tab(Query,Result,UserList2,Hash)
@@ -379,17 +393,17 @@ query_list_from_tab(Usr) ->
              "all" ->
                  L;
              _ ->
-                 lists:filter(fun({_Q,_R,Users,_H}) -> 
+                 lists:filter(fun({_Q,_R,Users,_H}) ->
                                       lists:member(Usr,Users)
                               end,
-                              L)    
+                              L)
          end,
-    Lis = 
+    Lis =
         lists:map(fun ({Q,_R,_U,_H})->
                           CodedQuotedQ = code_quotes(Q),
-                          QueryA = 
+                          QueryA =
                               {a,
-                               [{onclick,"selectQuery('" ++  
+                               [{onclick,"selectQuery('" ++
                                  CodedQuotedQ ++ "')"},
                                 {href,"javascript:"},
                                 {class,"queryA"},
@@ -403,11 +417,11 @@ query_list_from_tab(Usr) ->
                                    [{a,[{href,"javascript:"},
                                         {class,"delete"},
                                         {title,"delete"},
-                                        {onclick,"deleteQuery('" ++  
+                                        {onclick,"deleteQuery('" ++
                                          CodedQuotedQ ++ "')"}],
                                      {span,[],"X"}},
                                     QueryA]}
-                          end   
+                          end
                   end,
                   L2),
     {ehtml,{ul,[{id,"queryList"},{class,"queryList"}],Lis}}.
@@ -415,7 +429,7 @@ query_list_from_tab(Usr) ->
 code_quotes(Str) ->
     Str2 = re:replace(Str,"\"","``",[{return,list},global]),
     re:replace(Str2,"'","`",[{return,list},global]).
-  
+
 %% @private
 decode_quotes(Str) ->
     Str2 = re:replace(Str,"``","\"",[{return,list},global]),
@@ -441,7 +455,7 @@ is_error_from_in_database() ->
         [] -> false;
         _ -> true
     end.
-    
+
 %%% ----------------------------------------------------------------------------
 
 %% @private

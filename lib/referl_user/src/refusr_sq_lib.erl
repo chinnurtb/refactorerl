@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq_lib).
--vsn("$Rev: 5601 $ ").
+-vsn("$Rev: 5637 $ ").
 
 -include("user.hrl").
 
@@ -402,8 +402,9 @@ entites() ->
                                                    ?Form:clauses(),
                                                    ?Clause:body(),
                                                    ?Expr:deep_sub(),
-                                                   ?Query:all([[dynfuneref],
-                                                               [ambfuneref]])]))
+                                                   ?Query:all([?Dynfun:dynfun(),
+                                                               ?Dynfun:ambdyn()
+                                                              ])]))
                    end},
 
          #selector{
@@ -829,8 +830,9 @@ entites() ->
                            ?Query:exec(Expr,
                                        ?Query:seq([?Expr:top(),
                                                    ?Expr:deep_sub(),
-                                                   ?Query:all([[dynfuneref],
-                                                               [ambfuneref]])]))
+                                                   ?Query:all([?Dynfun:dynfun(),
+                                                               ?Dynfun:ambdyn()
+                                                              ])]))
                    end},
 
          #selector{

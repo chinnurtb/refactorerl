@@ -36,6 +36,7 @@
 referlpath() -> ".".
 referlnode() -> refactorerl@localhost.
 
+
 main([]) ->
     format({format, "Give me some arguments!~n"});
 main(Args) ->
@@ -44,7 +45,7 @@ main(Args) ->
     catch
         Class:Reason -> format({error, Class, Reason})
     end.
-
+    
 parse(Str) ->
     try
         {ok, Tokens, _} = erl_scan:string(string:concat(Str, ".")),
@@ -69,12 +70,14 @@ rpc_call(Fun) when is_atom(Fun) -> rpc:call(referlnode(), ri, Fun, []).
 rpc_call(Mod, Fun, Params)      -> rpc:call(referlnode(), Mod, Fun, Params).
 
 start_refactorerl() ->
-    {os:cmd(referlpath() ++ "/bin/starttool " ++ referlpath() ++ " -server &"),
+     os:cmd(referlpath() ++ "/bin/starttool " ++ referlpath() ++ " -server &"),
      erlang:set_cookie(node(), 'secretwookie'),
-     started}.
+     ok.
 
 %% -----------------------------------------------------------------------------
 
+format(SqArgs) when is_list(SqArgs)->
+    io:format("~s", [SqArgs]);   
 format({error, Class, Reason}) ->
     io:format("[CLI error] ~w: ~w~n", [Class, Reason]);
 format({error, Reason}) when is_list(Reason) ->
@@ -82,7 +85,7 @@ format({error, Reason}) when is_list(Reason) ->
 format({format, F}) ->
     format({format, F, []});
 format({format, F, Params}) ->
-    io:format(F, Params);
+    io:format(F, [Params]);
 format({badrpc, nodedown}) ->
     format({format, "RefactorErl is not running at ~w.~n", [referlnode()]});
 format(Params) ->

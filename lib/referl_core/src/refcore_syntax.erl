@@ -29,7 +29,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_syntax).
--vsn("$Rev: 5585 $ ").
+-vsn("$Rev: 5697 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -502,9 +502,10 @@ update_lex_with_text(Lex, Text) ->
 %% @todo Make constructs that can be inferred omissible.
 %%       Example: {list_gen, Pattern, Generator} instead of
 %%                {list_gen, {pexpr, Pattern}, {clause_expr, Generator}}
+%% @todo spec? return type should be fixed
 construct(Node = {'$gn', _, _}) -> Node;
 construct({Node1, InfixAtom, Node2}) when (InfixAtom == 'orelse') or
-					  (InfixAtom == 'andalso') ->
+                      (InfixAtom == 'andalso') ->
     L = create(#clause{type=expr}, [{body, construct(Node1)}]),
     R = create(#clause{type=expr}, [{body, construct(Node2)}]),
     create(#expr{type=infix_expr, value=InfixAtom}, [{exprcl, L}, {exprcl, R}]);

@@ -215,9 +215,9 @@ erlang_rules() ->
         %#tokenRule{
         %    parents = [{lex, subst}], % Macro subsituation
         %    rules   = [{[','],              [{ws,0,1}]} ]},
-        %#tokenRule{
-        %    parents = [{lex, subst}], % Macro subsituation
-        %    rules   = [{[',',{position,last}],   [{ws,0,1}]},
+        #tokenRule{
+            parents = [{lex, subst}], % Macro subsituation
+            rules   = [{[',',{position,last}],   [{ws,0,1}]} ]},
         %               {[{position,first}],      [{ws,1,0}]} ]},
         #tokenRule{
             parents = [{lex, arg}],   % macro definition parameter

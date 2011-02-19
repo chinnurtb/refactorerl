@@ -74,11 +74,18 @@ remove_unreachable_dataflow(Nodes, Links) ->
 
 %% Removes those #expr{} nodes and related links that are bag ends for
 %% the data flow.
-leave_only_reached({Nodes, Links}, Reacheds) ->
-    Nodes2 = lists:filter(fun({Node, #expr{}}) -> lists:member(Node, Reacheds); (_) -> true end, Nodes),
+leave_only_reached({NodeWDatas, Links}, Reacheds) ->
+    Nodes2 = [ND || ND <- NodeWDatas, is_reached(ND, Reacheds)],
     Nodes3 = [expr_role_to_dflow(ND) || ND <- Nodes2],
     Links3 = [FTT || FTT <- Links, only_reached_exprs(FTT, Reacheds, Nodes2)],
     {Nodes3, Links3}.
+
+is_reached({_, #expr{type=Type}}, _) when Type == fpar; Type == fret ->
+    true;
+is_reached({Node, #expr{}}, Reacheds) ->
+    lists:member(Node, Reacheds);
+is_reached(_, _) ->
+    true.
 
 %% Removes the looping flow edges.
 remove_loop_flows({Nodes, Links}) ->
@@ -90,6 +97,8 @@ only_reached_exprs({From, {_Tag, To}}, Reacheds, Nodes3) ->
 
 test_reached(Node, Nodes, Reacheds) ->
     case proplists:get_value(Node, Nodes) of
+        #expr{type=Type} when Type == fpar; Type == fret ->
+            true;
         #expr{} ->
             lists:member(Node, Reacheds);
         undefined ->

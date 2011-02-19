@@ -103,15 +103,16 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_upgrade_regexp).
--vsn("$Rev: 3820 $").
+-vsn("$Rev: 5733 $").
 -compile([export_all]).
 
 -export([prepare/1]).
 
 -include("user.hrl").
 
-%% Note: I _really_ don't like importing function `do/1'.
--import(reftr_upgrade_iface, [do/1, simple_infix_expr/1]).
+-define(IFace, reftr_upgrade_iface).
+%@todo bkil: I propose you use the macro instead of this import
+-import(?IFace, [simple_infix_expr/1]).
 
 -define(ErrorCD, {"{error, Reason}", "catch error:badarg"}).
 %% regexp.erl:
@@ -130,7 +131,9 @@
 
 %% @private
 prepare(_) ->
-    [fun() -> init end] ++ [fun(_) -> do(?MODULE:F()) end || F <- cds()].
+    [fun() -> init end] ++
+    [fun(_) -> ?IFace:do(?MODULE:F()) end || F <- cds()] ++
+    [fun(U) -> U end].
 
 
 %% -----------------------------------------------------------------------------
@@ -213,7 +216,7 @@ cd_matches() ->
      %% Change desctiptors
 
      [{"Str, RE",           "Str, RE, [global, {capture, first}]"},
-      
+
       %%{"{match, []}",       "nomatch"},
       %%{"{match, Matches}",  "{match, map(melem, Matches)}"},
 

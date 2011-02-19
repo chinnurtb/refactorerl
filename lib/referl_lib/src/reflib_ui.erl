@@ -239,7 +239,7 @@ error_text(no_dups, []) ->
     ["Wrangler did not find any ",
      "duplicated code fragments"];
 error_text(not_found, [Path])->
-    ["No file could be handled from \"", Path, "\""];
+    ["No module or BEAM could be handled from \"", Path, "\""];
 error_text(somebad, [])->
     ["Processing failed for some files, check the errors"].
 

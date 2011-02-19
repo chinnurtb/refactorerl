@@ -46,7 +46,7 @@ print(List) ->
                 FuncArity = reflib_function:arity(Func),
                 _Clause    = element(2, H),
                 FunSig    = element(3, element(4, H)),
-                % ?d({FuncName,FuncArity,Clause}),
+%                ?d({FuncName,FuncArity,_Clause}),
                 L         = separate([type(X) || X <- element(1, FunSig)], ", "),
                 %?d(L),
                 ArgTypes  = lists:append(L),

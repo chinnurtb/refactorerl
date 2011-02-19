@@ -35,7 +35,7 @@
 %% Exports
 
 %% Queries
--export([ambdyn_call/0, dynfun_call/0]).
+-export([ambdyn_call/0, ambdyn/0, dynfun_call/0, dynfun/0]).
 
 %% Transformations
 -export([collect/3, transform/1]).
@@ -47,9 +47,14 @@ ambdyn_call() ->
     ?Query:all([{may_be, back}, {ambfuneref, back}],
 	       [{ambfuneref, back}]).
 
+ambdyn() ->
+    [ambfuneref, may_be].
+
 dynfun_call() ->
     [{dynfuneref, back}].
 
+dynfun() ->
+    [dynfuneref].
 
 %% =============================================================================
 %% Dynamic function related transformations

@@ -54,7 +54,7 @@
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(reftr_elim_var).
--vsn("$Rev: 5483 $"). % for emacs"
+-vsn("$Rev: 5697 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -107,13 +107,18 @@ prepare(Args) ->
     DefUsed = def_is_used(Match),
 
     [fun () ->
-             lists:foreach(fun (R) -> replace(R, enclose(copy(Def))) end, Refs)
+             [begin
+                 DefCopy = enclose(copy(Def)),
+                 replace(R, DefCopy),
+                 DefCopy
+              end || R <- Refs]
      end,
-     fun (_) ->
+     fun (Replacements) ->
              ?Transform:touch(Match),
              if not DefUsed -> delete(Match);
                 true        -> replace(Match, enclose(copy(Def)))
-             end
+             end,
+             Replacements
      end].
 
 %%% ----------------------------------------------------------------------------
@@ -150,7 +155,8 @@ enclose(Node) ->
 
 replace(From, To) ->
     [{_, Parent}] = ?Syn:parent(From),
-    ?Syn:replace(Parent, {node, From}, [To]).
+    [New] = ?Syn:replace(Parent, {node, From}, [To]),
+    New.
 
 delete(Node) ->
     [{_, Parent}] = ?Syn:parent(Node),

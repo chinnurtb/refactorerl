@@ -21,7 +21,7 @@
 %%% macros. Macros are represented with the form that defines them.
 
 -module(reflib_macro).
--vsn("$Rev: 5585 $ ").
+-vsn("$Rev: 5698 $ ").
 
 %% =============================================================================
 %% Exports
@@ -245,7 +245,7 @@ refs(Macro) ->
     Substs = ?Query:exec(Macro, [{mref, back}]),
     F = fun(Subst) -> ?Query:exec(Subst, ?Query:seq([{llex, back}],
                                 ?Query:any([[{elex, back}], [{clex, back}],
-                                            [{flex, back}], [{tlex, bacl}]])))
+                                            [{flex, back}], [{tlex, back}]])))
         end,
     [F(X) || X <- Substs].
 

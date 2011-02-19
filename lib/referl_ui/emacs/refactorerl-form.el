@@ -92,7 +92,7 @@
                      :notify (lambda (&rest ignore)
                                (let ((results (list)))
                                  (dolist (widget widgets)
-                                   (push (when widget (widget-value widget)) results))
+                                   (push (if widget (widget-value widget) 'info) results))
                                  (kill-buffer buffer)
                                  (delete-window (get-buffer-window buffer))
                                  (apply cb-submit results)))

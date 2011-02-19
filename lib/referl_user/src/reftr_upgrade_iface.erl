@@ -33,7 +33,7 @@
 %%% ----------------------------------------------------------------------------
 
 -module(reftr_upgrade_iface).
--vsn("$Rev: 5134 $").%"
+-vsn("$Rev: 5732 $").%"
 
 %%% ----------------------------------------------------------------------------
 %%% Exports
@@ -95,38 +95,42 @@ warning(S, D) -> error_logger:warning_msg(S ++ "~n", D).
 %%% ============================================================================
 %%% Interface
 
-%% @private
+%% @todo document!
 do(CD) ->
     ets:new(?TableName, [named_table, bag]),
     [fun()  -> change_interface(CD)             end,
      fun(_) -> do_upgrades()                    end,
-     fun(_) -> do_delayed_transforms()          end,
-     fun(_) -> do_clause_movings()              end,
-     fun(_) -> ets:delete(?TableName)           end].
+     fun(U) -> do_delayed_transforms(),U        end,
+     fun(U) -> do_clause_movings(),U            end,
+     fun(U) -> ets:delete(?TableName),U         end].%,
+     %%fun(U) -> ?d(U) end].
 
 %% @doc Doing the scheduled upgrades
 do_upgrades() -> do_upgrades([]).
 do_upgrades(L) ->
-    [begin
+    U=[begin
          upgrade(Expr, Fun, CDs),
-         ets:delete_object(?TableName, {upgrade, Expr, Fun, CDs})
+         ets:delete_object(?TableName, {upgrade, Expr, Fun, CDs}),
+         Expr
      end ||
         {upgrade, Expr, Fun, CDs} <- L],
 
     ?Analyse_batch,
 
-    [begin
+    UP = [begin
          upgrade_pattern(Pattern, CDs),
-         ets:delete_object(?TableName, {upgradep, Pattern, CDs})
+         ets:delete_object(?TableName, {upgradep, Pattern, CDs}),
+         Pattern
      end ||
         {upgradep, Pattern, CDs} <- ets:lookup(?TableName, upgradep)],
 
     ?Analyse_batch,
 
-    case ets:lookup(?TableName, upgrade) of
-        [] -> ok;
-        News -> do_upgrades(News)
-    end.
+    U ++ UP ++
+        case ets:lookup(?TableName, upgrade) of
+            [] -> [];
+            News -> do_upgrades(News)
+        end.
 
 %% @doc Doing the scheduled transformations
 do_delayed_transforms() -> do_delayed_transforms([]).
@@ -289,7 +293,7 @@ change_with_compfun(FromFun, ToFun, Ps, Apps) ->
                  ?Transform:touch(App),
                  replace_app(App, CName)
              end || App <- Apps];
-       true -> ok
+       true -> []
     end.
 
 find_applications(FunObj) ->
@@ -372,7 +376,7 @@ generic_variables(FD, Vars) ->
                   [{node, N}|_] ->
                       case ?Expr:type(N) of
                           variable -> true;
-                          _                      -> false
+                          _        -> false
                       end;
                   _ ->
                       false
@@ -479,7 +483,8 @@ replace_app(X, T_FunName) ->
     ArgLs = ?Query:exec(X, ?Expr:child(2)),
     Args = ?Query:exec(ArgLs, ?Expr:children()),
     NewApp = create_application(T_FunName, Args),
-    replace(X, NewApp).
+    replace(X, NewApp),
+    NewApp.
 
 
 %%% ============================================================================
@@ -888,15 +893,16 @@ keysearch(List, Key) ->
         false -> throw(not_found)
     end.
 
-%% @private
+%% @todo document!
 simple_infix_expr(S) ->
     [{op,1,InfixOp,{var,1,'P'},{integer,1,C}}] = scan_and_parse(S),
     fun(Node) ->
             case ?Expr:type(Node) of
-                Type when Type =/= joker ->
+                joker -> [];
+                _ ->
                     New = ?Syn:construct({copy(Node), InfixOp, {integer, C}}),
-                    replace(Node, New);
-                joker -> ok
+                    replace(Node, New),
+                    [New]
             end
     end.
 

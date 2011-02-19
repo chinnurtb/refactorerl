@@ -28,7 +28,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(reflib_token).
--vsn("$Rev: 5622 $ ").
+-vsn("$Rev: 5640 $ ").
 
 -export([get_value/1]).
 
@@ -145,7 +145,7 @@ map_pos(File,Tokens,PosType) ->
     end.
 
 put_form_positions(File, Form2Pos) ->
-    Forms = ?Query:exec(File, ?File:forms()),
+    Forms = ?Query:exec(File, ?File:real_forms()),
     lists:foldl(
         fun(Form, {Pos, LineCol}) ->
             ets:insert(Form2Pos, {f2p, Form, Pos}),

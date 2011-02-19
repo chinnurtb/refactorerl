@@ -56,7 +56,7 @@
 %%% @todo Perhaps also consider fusion with move_fun?
 
 -module(reftr_move_mac).
--vsn("$Rev: 5496 $").
+-vsn("$Rev: 5651 $").
 
 %%% ============================================================================
 %%% Exports
@@ -140,7 +140,7 @@ prepare(Args) ->
         transform(Info)
      end,
      fun(_)->
-        Macros %@todo ok?
+        Macros
      end].
 
 

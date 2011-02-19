@@ -29,9 +29,11 @@
 -export([q/1,q1/1,qstr/1, desugar/1, unpack/1]).
 -export([show/1,show/2, print/1, print/2]).
 
--export([add/1, add_byname/1, drop/1]).
--export([envs/0, env/1, env/2, addenv/3, setenv/2,
-         delenv/1, delenv/2, delenv/3]).
+-export([undo/0, add/1, add_byname/1, drop/1]).
+
+% undocumented
+%-export([envs/0, env/1, env/2, addenv/3, setenv/2,
+%         delenv/1, delenv/2, delenv/3]).
 
 -export([rename/2, move/2, extract/2, inline/1, eliminate/1, reorder/2,
      extfun/2, intrec/2, merge/2, genfun/2, expfun/1, tupfun/2, %%intmac/2,
@@ -42,6 +44,9 @@
 -include("ui.hrl").
 -include_lib("referl_core/include/core_export.hrl").
 
+-define(LocalA(T,E,A), {T,{?LocalError(E,A), ?Error:error_text(?LocalError(E,A))}}).
+-define(LocalError2(E,A), ?LocalA(error,E,A)).
+-define(LocalAbort2(E,A), ?LocalA(abort,E,A)).
 -define(SQ,refusr_sq).
 -define(TRANSFORM_SERVER,transform_server).
 -record(statistic,{v}).
@@ -50,6 +55,22 @@
 -record(rich, {text, nodes}).
 
 % @todo
+error_text(prop_cont, [Result]) ->
+    ["ris: can only continue from nodes (",
+    io_lib:print(Result), ")"];
+error_text(need_nonempty, [Result]) ->
+    ["ris: a non-empty result list is needed instead of (",
+    io_lib:print(Result), ")"];
+error_text(invalid_type, [X]) ->
+    ["ris internal error: unexpected type for value (",
+     io_lib:print(X), ")"];
+error_text(bad_namefields, [X]) ->
+    ["ris: expecting a tuple of a name and a list of fields instead of (",
+     io_lib:print(X), ")"];
+error_text(no_match, [Types])->
+    ["ris: your selection type of ",
+     io_lib:print(Types),
+     " did not match any supported input combination"];
 error_text(ErrType, ErrParams) ->
     ["ris internal error - unknown error message: {",
      io_lib:print(ErrType), ", ", io_lib:print(ErrParams), "}"].
@@ -125,6 +146,12 @@ q_start(Sel,none)->
 q_start(_Sel,[])->
     [];
 q_start(Sel,Start)->
+    NonEntity = lists:append(
+        [case E of
+            #entity{e=N} -> [N];
+            _ -> []
+         end || E <- Start]),
+    ?Check(NonEntity /= [], ?LocalAbort2(prop_cont, [Start])),
     Nodes = [N || #entity{e=N} <- Start],
     case Nodes of
         [] -> [];
@@ -139,7 +166,13 @@ is_entity(_)->
     %@todo ?SQ:is_entity/1
 
 q1(Sel)->
-    hd(unpack(q(Sel))).
+    Res = unpack(q(Sel)),
+    case Res of
+        [_|_]->
+            hd(Res);
+        _->
+            throw(?LocalAbort2(need_nonempty,[Res]))
+    end.
 
 unpack(Sel) ->
     [case X of
@@ -170,8 +203,8 @@ erlang_type(X) when is_integer(X)->
     integer;
 erlang_type(X) when is_list(X)->
     list;
-erlang_type(_) ->
-    todo.
+erlang_type(X) ->
+    throw(?LocalError2(invalid_type,[X])).
 
 print(R)->
     show(R, [{out, stdio}]).
@@ -238,7 +271,7 @@ guard_nodetype(Nodes,NodeTypes)->
     end.
 
 dispatch_nodetype([],_Dispatchers)->
-    throw(?LocalError(empty_selection,[]));
+    throw(?LocalError2(empty_selection,[]));
 dispatch_nodetype(Nodes,Dispatchers)->
     Got = entity_types(Nodes),
     R = [Value ||
@@ -247,11 +280,11 @@ dispatch_nodetype(Nodes,Dispatchers)->
         true == is_subset(Got,Accepted)],
     case R of
         [] ->
-            throw(?LocalError(no_match,[Got]));
+            throw(?LocalError2(no_match,[Got]));
         [_] ->
             R;
         [_|_] ->
-            throw(?LocalError(multi_match,[Got,R]))
+            throw(?LocalError2(multi_match,[Got,R]))
     end.
 
 entity_types(#statistic{})->
@@ -288,16 +321,21 @@ refac(Name, Args)->
     to_entities(Res).
 
 transform(Name, Args)->
-    Res = ui({transform, Name, [{ask_missing,false} | Args]}),
+    Res = uie({transform, Name, [{ask_missing,false} | Args]}),
     case Res of
-        {ok, ResultU} ->
-            case ResultU of
-                {result,R} ->
-                    [Result] = ?MISC:pgetu([result],R),
-                    Result;
-                {abort, {_,_}} -> throw(ResultU)
-            end;
-        {error, {_,_}} -> throw(Res)
+    {result,R} ->
+        [Result] = ?MISC:pgetu([result],R),
+        Result;
+    {abort, {_,_}} -> throw(Res)
+    end.
+
+uie(FuncArgs)->
+    Res = ui(FuncArgs),
+    case Res of
+        {ok, ResultOK} ->
+        ResultOK;
+        {error, {_,_}} ->
+        throw(Res)
     end.
 
 ui(NameArgs)->
@@ -316,14 +354,17 @@ ui_loop(ReqID,Errors)->
         {ReqID, reply, R} ->
             case Errors of
                 []     -> R;
-                [Error]-> {ok,{error,{Error,?Error:error_text(Error)}}}
+                [Error]-> {ok,Error}
             end;
         {ReqID, progress, _D} ->
             ui_loop(ReqID,Errors);
         {ReqID, question, Q={QID,_Questions}} ->
             ?UI:request(ReqID, {cancel, QID}),
-            ui_loop(ReqID,[?LocalError(no_interaction,[Q])])
+            ui_loop(ReqID,[?LocalError2(no_interaction,[Q])])
     end.
+
+undo()->
+    uie({undo,[]}).
 
 add({Filename=[C|_]}) when is_integer(C)->
     add_byname(Filename);
@@ -335,7 +376,7 @@ drop(Source)->
     add_drop(drop_dir,Source).
 
 add_byname(Source)->
-    {ok, N} = ui({add_dir,[Source]}),
+    N = uie({add_dir,[Source]}),
     to_entities(N).
 
 add_drop(Which,Source)->
@@ -550,9 +591,11 @@ intrec(Source,NameFields)->
 
     Res =
         case NameFields of
-            {Name, Fields} when is_atom(Name), is_list(Fields)->
+            {Name, FieldList} when is_atom(Name), is_list(FieldList)->
+                SList = lists:map(fun atom_to_list/1, FieldList),
+                FieldText = string:join(SList," "),
                 [refac(Fun, [{nodes, unpack([Node])},
-                             {name, Name}, {text, Fields}])
+                             {name, Name}, {text, FieldText}])
                  || Node <- Nodes];
 
             F when is_function(F, 1)->
@@ -560,7 +603,9 @@ intrec(Source,NameFields)->
                     {Name, Fields} = F([Node]),
                     refac(Fun,[{nodes, unpack([Node])},
                                {name, Name}, {text, Fields}])
-                 end || Node <- Nodes]
+                 end || Node <- Nodes];
+
+            _ -> throw(?LocalAbort2(bad_namefields, [NameFields]))
         end,
     lists:append(Res).
 
@@ -585,10 +630,10 @@ genfun(Source,NewVar)->
     L=[{expression,gen}],
     Nodes = qd(Source),
     [Fun] = dispatch_nodetype(Nodes,L),
-    refac(Fun, [{nodes,unpack(Nodes)}, {name,NewVar}]).
+    refac(Fun, [{nodes,unpack(Nodes)}, {varname,NewVar}]).
 
 expfun(Source)->
-    L=[{function,expand_funexpr}],
+    L=[{expression,expand_funexpr}],
     Nodes = qd(Source),
     [Fun] = dispatch_nodetype(Nodes,L),
     Res = [refac(Fun,[{nodes,unpack([Node])}]) || Node <- Nodes],

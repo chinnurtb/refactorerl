@@ -59,7 +59,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(reftr_merge).
--vsn("$Rev: 5621 $").
+-vsn("$Rev: 5697 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -114,13 +114,14 @@ prepare(Args) ->
     InsLoc = {TopCl, _} = insertion_location(Insts),
 
     ?Transform:touch(TopCl),
-    [   fun() ->
+    [fun() ->
             MatchExpr = new_match_expr(VarName, Expr),
-            insert_new_match_expr(MatchExpr, InsLoc)
-        end,
-        [ fun(_) -> change_instance(VarName, Parent, Inst) end
-            || {[{_Link, Parent}], Inst} <- InstParents]
-        ].
+            insert_new_match_expr(MatchExpr, InsLoc),
+            []
+     end,
+     [fun([]) -> %@todo bkil remove []
+        change_instance(VarName, Parent, Inst)
+      end || {[{_Link, Parent}], Inst} <- InstParents]].
 
 %%% ============================================================================
 %%% Transformation
@@ -145,7 +146,8 @@ insert_new_match_expr(MatchExpr, {TopCl, PrevBody}) ->
 %% @todo Remove superfluous parentheses.
 change_instance(NewVarName, Parent, Inst) ->
     NewVar = ?Syn:construct({var, NewVarName}),
-    ?Syn:replace(Parent, {node, Inst}, [NewVar]).
+    ?Syn:replace(Parent, {node, Inst}, [NewVar]),
+    NewVar.
 
 
 %%% ============================================================================

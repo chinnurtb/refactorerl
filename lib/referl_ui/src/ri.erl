@@ -119,7 +119,7 @@
 %
 
 -module(ri).
--vsn("$Rev: 5623 $ ").
+-vsn("$Rev: 5746 $ ").
 
 -export([help/0, h/0, h/1]).
 
@@ -162,6 +162,8 @@
 
 -export([start_yaws/0, start_yaws/1, stop_yaws/0]).
 
+-export([check_layered_architecture/1]).
+
 -export([errors/0, errors/1]).
 
 -export([error_text/2]).
@@ -173,7 +175,11 @@
 
 -export([modsave/1, modload/1]).
 
--export([draw_dep/2, print_dep/2]).
+-export([draw_dep/1, print_dep/1]).
+
+-export([dir_sort/0, dir_sort/1]).
+
+-export([fb_relations/1]).
 
 % @private only for internal use!
 -export([global_printer_process/0, get_constrained/3, ui_loop/1]).
@@ -2301,48 +2307,186 @@ stop_yaws() ->
 
 %% -----------------------------------------------------------------------------
 
-%% @spec draw_dep(Level, Par) -> any()
-%%           Level = mod | func
-%%           Par =  node() | Name | string()
-%%           Name = Module | Function
-%%           Module = atom()
-%%           Function = string()
+%% @spec draw_dep(Options::proplists()) -> any()
 %% @doc Draws out the dependency graph (in either module or function
-%% level) into a dot file. A function can be specified (as
-%% "Module:Function/Arity" or as a graph node) to only look at cycles
-%% touching that fun. `Par' also can be `all' for drawing the whole
-%% graph or `cycles' for only drawing the cycles.
-draw_dep(mod,  Par) -> draw_dep_mod(Par);
-draw_dep(func, Par) -> draw_dep_fun(Par);
-draw_dep(_,      _) -> message("Error: unknown dependency level given.").
+%% level) into a dot file. <br/>
+%% See {@link print_dep/1} for Options.
+draw_dep([]) -> message("Error: no option list given");
+draw_dep(Options) -> 
+	case proplists:get_value(level, Options) of
+		mod -> draw_dep_mod(proplists:delete(level, Options));
+		func -> draw_dep_fun(proplists:delete(level, Options));
+		_ -> message("Error: unknown dependency level given.")
+	end.
 
-%% @spec print_dep(Level, Par) -> any()
-%%           Level = mod | func
-%%           Par =  node() | Name | string()
-%%           Name = Module | Function
-%%           Module = atom()
-%%           Function = string()
-%% @doc Prints out the dependency graph in either module or function
-%% level. A function can be specified (as "Module:Function/Arity" or
-%% as a graph node) to only look at cycles touching that fun. `Par'
-%% also can be `all' for printing the whole graph or `cycles' for only
-%% printing the cycles.
-print_dep(mod,  Par) -> print_dep_mod(Par);
-print_dep(func, Par) -> print_dep_fun(Par);
-print_dep(_,      _) -> message("Error: unknown dependency level given.").
 
-draw_dep_fun("all")    -> refusr_cyclic_fun:draw();
-draw_dep_fun("cycles") -> refusr_cyclic_fun:draw("cycle");
-draw_dep_fun(Node)     -> refusr_cyclic_fun:draw(Node).
+%% @spec print_dep(Options::proplists()) -> any()
 
-draw_dep_mod("all")    -> refusr_cyclic_mod:draw();
-draw_dep_mod("cycles") -> refusr_cyclic_mod:draw("cycle");
-draw_dep_mod(Node)     -> refusr_cyclic_mod:draw(Node).
+%% @doc Prints out the dependency graph in either module or function level.
+%%
+%% Options:
+%% ```
+%% {level, Level}
+%% Level = mod | func
+%% '''
+%%     Determines the examination level: module or function.
+%%
+%% ```
+%% {type, Type}
+%% Type = all | cycles
+%% '''
+%% Deteremines whether the printing or the drawing is on the entire graph, or just on the cycle subgraph
+%% (if there is). Subgraph from a given function or module should be given with the <b>gnode</b> key.
+%% ```
+%% {gnode, Node}
+%% Node = node() | Name 
+%% Name = Module::atom() | Function::string()
+%% '''
+%% Subgraph from the given node on both levels.
+%% A function can be specified (as "Module:Function/Arity" or
+%% as a graph node) to only look at cycles touching that fun. 
+%% @end
 
-print_dep_fun("all")    -> refusr_cyclic_fun:check_cycle();
-print_dep_fun("cycles") -> refusr_cyclic_fun:print_cycle();
-print_dep_fun(Node)     -> refusr_cyclic_fun:check_function(Node).
+print_dep([]) -> message("Error: no option list given");
+print_dep(Options) -> 
+	case proplists:get_value(level, Options) of
+		mod -> print_dep_mod(proplists:delete(level, Options));
+		func -> print_dep_fun(proplists:delete(level, Options));
+		_ -> message("Error: unknown dependency level given.")
+	end.
 
-print_dep_mod("all")    -> refusr_cyclic_mod:check_cycle();
-print_dep_mod("cycles") -> refusr_cyclic_mod:print_cycle();
-print_dep_mod(Node)     -> refusr_cyclic_mod:check_module(Node).
+draw_dep_fun([]) -> message("Error: no type or gnode given");
+draw_dep_fun(Options)	->
+	case proplists:get_value(type, Options) of
+		all -> refusr_cyclic_fun:draw();
+		cycles -> refusr_cyclic_fun:draw("cycle");
+		undefined -> case proplists:get_value(gnode, Options) of
+				undefined -> 	message("Error: bad argument keys given");
+				Node -> refusr_cyclic_fun:draw(Node)
+			     end;
+		_ -> message("Error: bad type key given")
+	end.
+
+draw_dep_mod([]) -> message("Error: no type or gnode given");
+draw_dep_mod(Options) ->
+	case proplists:get_value(type, Options) of
+		all -> refusr_cyclic_mod:draw();
+		cycles -> refusr_cyclic_mod:draw("cycle");
+		undefined -> case proplists:get_value(gnode, Options) of
+				undefined -> 	message("Error: bad argument keys given");
+				Node -> refusr_cyclic_mod:draw(Node)
+			     end;
+		_ -> message("Error: bad type key given")
+	end.
+
+print_dep_fun([]) -> message("Error: no type or gnode given");
+print_dep_fun(Options) -> 
+	case proplists:get_value(type, Options) of
+		all -> refusr_cyclic_fun:check_cycle();
+		cycles -> refusr_cyclic_fun:print_cycle();
+		undefined -> case proplists:get_value(gnode, Options) of
+				undefined -> 	message("Error: bad argument keys given");
+				Node -> refusr_cyclic_fun:check_function(Node)
+			     end;
+		_ -> message("Error: bad type key given")
+	end.
+
+print_dep_mod([]) -> message("Error: no type or gnode given");
+print_dep_mod(Options) -> 
+	case proplists:get_value(type, Options) of
+		all -> refusr_cyclic_mod:check_cycle();
+		cycles -> refusr_cyclic_mod:print_cycle();
+		undefined -> case proplists:get_value(gnode, Options) of
+				undefined -> 	message("Error: bad argument keys given");
+				Node -> refusr_cyclic_mod:check_module(Node)
+			     end;
+		_ -> message("Error: bad type key given")
+	end.
+
+%%---------------------------------------------------------------------------
+%% @spec dir_sort()-> [{Directory, [Modules]}] | {error, no_list_given} |
+%%                    {error, no_modules_in_database}
+%% Directory = string()
+%% Modules = atom()
+%% @doc  Directory sorting for all modules added to the database.
+%% The modules are sorted in a list according to their directory in which they are in.
+%% Those modules which don't have a directory are put into the "Other" category.
+dir_sort()->
+    refusr_dir_sort:sort().
+
+%%---------------------------------------------------------------------------
+%% @spec dir_sort(ModList)-> [{string(), [Modules]}] | {error, no_list_given} |
+%%                    {error, no_modules_in_database}
+%% ModList = [node() | atom()]
+%% Directory = string()
+%% Modules = atom()
+%% @doc Directory sorting for a given list of modules added to the database.
+%% The modules are sorted in a list according to their directory in which they are in.
+%% Those modules which don't have a directory are put into the "Other" category.
+%% Modules can be given with their names or as nodes.
+dir_sort(ModList)->
+    refusr_dir_sort:sort(ModList).
+
+
+%%---------------------------------------------------------------------------
+%% @spec fb_relations(Options::proplists())-> GetRel | IsRel | Cycle | Error | ok
+%% GetRel = [{Path::string(), Path::string()}]
+%% IsRel = true | false
+%% Cycle = {ok, no_cyclic_dependency} | {NoCycles::integer(), ListCycles::list()}
+%% Error = string() | tuple()
+%%
+%% @doc Interface for functionblock examiner module.<br/>
+%% Options:
+%% ```
+%% {command, Command}
+%% Command = get_rel | is_rel | check_cycle | draw | draw_cycle
+%% '''
+%%      - <b>get_rel</b> - Displays the relationship between the given functionblock list.
+%% There is a relationship between fb1 block and fb2 block if a module of fb1 is dependent 
+%% from a module of fb2. The result is a tuplelist where a tuple represents a relation.<br/>
+%%	- <b>is_rel</b> - Decides whether there is a connection between the two given functionblocks. <br/>
+%%	- <b>check_cycle</b> - Checks for cycles in the dependencies between the given functionblock list.<br/>
+%%	- <b>draw</b>- Prints out the entire graph or creates a subgraph drawing from the given functionblock list.
+%%		 Output file is fb_relations.dot.<br/>
+%% 	- <b>draw_cycle</b> - Prints out a subgraph which contains the cycle(s).
+%% 		Unless cycles exist, prints out the entire graph.
+%% 		Output file is fb_rel_cycles.dot.<br/>
+%%
+%% ```
+%% {fb_list, List}
+%% List = [string()] | [{Basename::string(), [FunctionBlock::atom()]}]
+%% '''
+%% Chosen functionblock lists for further examinations. If no list given, then the it takes every functionblock list.
+fb_relations([])->
+	message("Error: no argument given");
+fb_relations(Options)->
+	type_opt(proplists:get_value(command, Options), 
+			proplists:delete(command, 
+				convert_list(proplists:get_value(fb_list, Options)))).
+
+type_opt(get_rel, Options)-> 
+	refusr_fb_relations:get_relations(Options);
+type_opt(is_rel, Options)->
+	refusr_fb_relations:is_relation(Options);
+type_opt(check_cycle, Options)->
+	refusr_fb_relations:check_cycle(Options);
+type_opt(draw, Options)->
+	refusr_fb_relations:draw(Options);
+type_opt(draw_cycle, _)->
+	refusr_fb_relations:draw_cycles();
+type_opt(undefined, Options)->
+	refusr_fb_relations:get_relations(Options);
+type_opt(_, _)->
+	message("Error: bad command argument given").
+
+convert_list(undefined)-> [];
+convert_list(List) when is_list(List)->List;
+convert_list(_) -> message("Error: bad command argument given").
+
+%% ------------------------------------------------------------------------------
+
+%% @doc Checks whether the given three lists of modul names, defining
+%% architecture layers do not insult the hierarchy with function calls.
+check_layered_architecture(List) ->
+	message(io_lib:format("~p", [refusr_layer:check_layered_architecture(List)])).
+

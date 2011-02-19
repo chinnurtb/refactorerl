@@ -78,7 +78,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reflib_args).
--vsn("$Rev: 5608 $ ").
+-vsn("$Rev: 5664 $ ").
 
 -export([string/1, string/2, string/3, recfield_names/1,
          integer/1, integer/3,
@@ -98,7 +98,7 @@
 %%% @type node() = refcore_graph:node()
 
 %%% ============================================================================
-%%% Error text
+%%% Error text and actions
 
 error_text(bad_atom, [Text]) ->
     ["\"", Text, "\" is not a valid atom (use single quotes)"];
@@ -107,93 +107,103 @@ error_text(bad_funclusters, [Clusters]) ->
 error_text(not_inside_funcl, _) ->
     "The given position has to be inside a function clause.".
 
-error_action(bad_mod_name, ModName) ->
-    Info = ?MISC:format("The given module (" ++
-                                atom_to_list(ModName) ++ ") does not exist."),
+%% Module actions
+error_action(bad_mod_pos, [_File, Pos]) ->
+    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
+                            ") has to indicate a module."),
     module([{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_moduse_name, ModName) ->
+error_action(bad_mod_name, [ModName]) ->
     Info = ?MISC:format("The given module (" ++
-                                atom_to_list(ModName) ++ ") does not exist."),
+                            atom_to_list(ModName) ++ ") does not exist."),
+    module([{ask_missing, true}, {info_text, Info}]);
+
+error_action(bad_moduse_pos, [File, Pos]) ->
+    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
+                            ") has to indicate a module."),
+    moduse([{file, File},{ask_missing, true}, {info_text, Info}]);
+
+error_action(bad_moduse_name, [ModName]) ->
+    Info = ?MISC:format("The given module (" ++
+                            atom_to_list(ModName) ++ ") does not exist."),
     moduse([{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_file, File) ->
+%% File actions
+error_action(bad_file, [File]) ->
     Info = ?MISC:format("The given file (" ++
-                                File ++ ") cannot be found in the database."),
+                            File ++ ") cannot be found in the database."),
     file([{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_fun_name, [ModName, [FunName, Arity]]) ->
+%% Function actions
+error_action(bad_fun_pos, [ModName, Pos]) ->
+    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
+                            ") has to indicate function."),
+    function([{module, ModName}, {ask_missing, true}, {info_text, Info}]);
+
+error_action(bad_fun_name, [ModName, FunName, Arity]) ->
     Info = ?MISC:format("The function " ++
-                                         atom_to_list(FunName) ++ "/" ++
-                                         integer_to_list(Arity) ++ " does not exist."),
+                            atom_to_list(FunName) ++ "/" ++
+                            integer_to_list(Arity) ++ " does not exist."),
     function([{module, ModName},{ask_missing, true}, {info_text, Info}]);
+
+%% Macro actions
+error_action(bad_macro_pos, [File, Pos]) ->
+    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
+                            ") has to indicate a macro."),
+    macro([{file, File},{ask_missing, true}, {info_text, Info}]);
 
 error_action(bad_macro_name, [File, Macro]) ->
     Info = ?MISC:format("The macro ?~p does not exist.", [Macro]),
     macro([{file, File},{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_rec_name, [File, Record]) ->
-    Info = ?MISC:format("The record field #~p does not exist.", [Record]),
-    record([{file, File},{ask_missing, true}, {info_text, Info}]);
-
-error_action(bad_var_name, Var) ->
-    Info = ?MISC:format("The name ~p is not a valid variable name", [Var]),
-    varname([{ask_missing, true}, {info_text, Info}]).
-
-
-error_action(bad_recfield_name, File, [Record, RecField]) ->
-    Info = ?MISC:format("The record field #~p.~p does not exist.", [Record, RecField]),
-    record_field([{file, File},{record, Record},{ask_missing, true}, {info_text, Info}]);
-
-error_action(bad_fun_pos, ModName, Pos) ->
+error_action(bad_macuse_pos, [File, Pos]) ->
     Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate function."),
-    function([{module, ModName},{ask_missing, true}, {info_text, Info}]);
-
-error_action(bad_mod_pos, _File, Pos) ->
-    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a module."),
-    module([{ask_missing, true}, {info_text, Info}]);
-
-error_action(bad_moduse_pos, File, Pos) ->
-    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a module."),
-    moduse([{file, File},{ask_missing, true}, {info_text, Info}]);
-
-error_action(bad_macro_pos, File, Pos) ->
-    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a macro."),
-    macro([{file, File},{ask_missing, true}, {info_text, Info}]);
-
-error_action(bad_macuse_pos, File, Pos) ->
-    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a macro usage."),
+                            ") has to indicate a macro usage."),
     macuse([{file, File},{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_rec_pos, File, Pos) ->
+%% Record actions
+error_action(bad_rec_pos, [File, Pos]) ->
     Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a record."),
+                            ") has to indicate a record."),
     record([{file, File},{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_recfield_pos, File, Pos) ->
+error_action(bad_rec_name, [File, Record]) ->
+    Info = ?MISC:format("The record #~p does not exist.", [Record]),
+    record([{file, File},{ask_missing, true}, {info_text, Info}]);
+
+error_action(bad_recfield_pos, [File, Pos]) ->
     Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a record field."),
+                            ") has to indicate a record field."),
     record_field([{file, File},{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_importform_pos, File, Pos) ->
+error_action(bad_recfield_name, [File, Record, RecField]) ->
+    Info = ?MISC:format("The record field #~p.~p does not exist.", 
+                        [Record, RecField]),
+    record_field([{file, File},{record, Record},{ask_missing, true}, 
+                  {info_text, Info}]);
+
+%% Variable actions
+error_action(bad_var_pos, [File, Pos]) ->
+    ?Transform:question([[{format,info},
+                          {text,"The given position (" ++ 
+                               integer_to_list(Pos) ++
+                               ") has to indicate a variable or has" ++ 
+                               " to be inside a function clause."}]]),
+    variable([{file,File},{ask_missing,true}]);
+
+error_action(bad_var_name, [Var]) ->
+    Info = ?MISC:format("The name ~p is not a valid variable name", [Var]),
+    varname([{ask_missing, true}, {info_text, Info}]);
+
+%% Form actions
+error_action(bad_importform_pos, [File, Pos]) ->
     Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
                             ") has to indicate an import form."),
-    import_form([{file,File},{ask_missing,true}, {info_text, Info}]);
+    import_form([{file,File},{ask_missing,true}, {info_text, Info}]).
 
-error_action(bad_var_pos, File, Pos) ->
-    ?Transform:question([[{format,info},{text,"The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a variable or has to be inside a function clause."}]]),
-    variable([{file,File},{ask_missing,true}]).
 
-error_case(true, {ErrAction, Arg1}, _) ->
-    error_action(ErrAction, Arg1);
-error_case(true, {ErrAction, Arg1, Arg2}, _) ->
-    error_action(ErrAction, Arg1, Arg2);
+error_case(true, {ErrAction, Arg}, _) ->
+    error_action(ErrAction, Arg);
 error_case(false, _, {ErrAtom, ErrArgList}) ->
     throw(?RefError(ErrAtom, ErrArgList)).
 
@@ -537,7 +547,7 @@ funbyname(Mod, Fun, Arity, AskMissing) ->
     case Function of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_fun_name, [Mod,[Fun,Arity]]},
+                               {bad_fun_name, [Mod, Fun, Arity]},
                                {fun_not_found, [Mod, Fun, Arity]})
     end.
 
@@ -548,7 +558,7 @@ funbypos(File, Pos, AskMissing) ->
                           ?File:token(Pos),
                           ?Token:expr()])),
 
-    ModName = ?Mod:name(modbyfile(File,true)),
+    ModName = ?Mod:name(modbyfile(File,AskMissing)),
 
     case Expr of
         [_Result] ->
@@ -560,7 +570,7 @@ funbypos(File, Pos, AskMissing) ->
                     funbyexportlist(Expr, Pos, AskMissing, ModName)
             end;
         _         -> error_case(AskMissing,
-                                {bad_fun_pos, ModName, Pos},
+                                {bad_fun_pos, [ModName, Pos]},
                                 {pos_bad_type, ['fun', Pos]})
     end.
 
@@ -586,7 +596,7 @@ funbyref(Expr, Pos, AskMissing, ModName) ->
                     case Func of
                         [Result] -> Result;
                         _        -> error_case(AskMissing,
-                                               {bad_fun_pos, ModName, Pos},
+                                               {bad_fun_pos, [ModName, Pos]},
                                                {pos_bad_type, ['fun', Pos]})
                     end;
                 infix_expr ->
@@ -596,11 +606,11 @@ funbyref(Expr, Pos, AskMissing, ModName) ->
                     case Func of
                         [Result] -> Result;
                         _        -> error_case(AskMissing,
-                                               {bad_fun_pos, ModName, Pos},
+                                               {bad_fun_pos, [ModName, Pos]},
                                                {pos_bad_type, ['fun', Pos]})
                     end;
                 _          -> error_case(AskMissing,
-                                         {bad_fun_pos, ModName, Pos},
+                                         {bad_fun_pos, [ModName, Pos]},
                                          {pos_bad_type, ['fun', Pos]})
             end
     end.
@@ -735,12 +745,12 @@ macbypos(File, Pos, AskMissing) ->
                     case Mac of
                         [Res] -> Res;
                         _     -> error_case(AskMissing,
-                                            {bad_macro_pos, File, Pos},
+                                            {bad_macro_pos, [File, Pos]},
                                             {pos_bad_type, [mac, Pos]})
                     end
             end;
         _         -> error_case(AskMissing,
-                                {bad_macro_pos, File, Pos},
+                                {bad_macro_pos, [File, Pos]},
                                 {pos_bad_type, [mac, Pos]})
     end.
 
@@ -799,11 +809,11 @@ macusebypos(File, Pos, AskMissing) ->
             case ?Query:exec([P], [mref]) of
                 [_] -> P;
                 []  -> error_case(AskMissing,
-                                  {bad_macuse_pos, File, Pos},
+                                  {bad_macuse_pos, [File, Pos]},
                                   {pos_bad_type, [mac, Pos]})
             end;
         _         -> error_case(AskMissing,
-                                {bad_macuse_pos, File, Pos},
+                                {bad_macuse_pos, [File, Pos]},
                                 {pos_bad_type, [mac, Pos]})
     end.
 
@@ -942,7 +952,7 @@ recbypos(File, Pos, AskMissing) ->
                     case Record of
                         [Result] -> Result;
                         _        -> error_case(AskMissing,
-                                               {bad_rec_pos, File, Pos},
+                                               {bad_rec_pos, [File, Pos]},
                                                {pos_bad_type, [rec, Pos]})
                     end
     end.
@@ -991,17 +1001,23 @@ fldnode([Node])-> %@todo verify
     Node.
 
 recfieldbyname(File, Record, Field, AskMissing) ->
-    Rec = ?Query:exec1(
-             ?Query:seq([?File:find(File),
-                         ?Rec:find(Record)]),
-             ?RefError(rec_not_found, Record)),
+    R = ?Query:exec(
+           ?Query:seq([?File:find(File),
+                       ?Rec:find(Record)])),
+
+    Rec = case R of
+              [Result] -> Result;
+              _        -> error_case(AskMissing,
+                                     {bad_rec_name, [File, Record]},
+                                     {rec_not_found, [Record]})
+          end,
 
     RecField = ?Query:exec(Rec, ?Rec:field(Field)),
     case RecField of
         [Res] -> Res;
         _     -> error_case(AskMissing,
-                            {bad_recfield_name, File, Record},
-                            {recfld_not_found, [Record,Field]})
+                            {bad_recfield_name, [File, ?Rec:name(Rec),Field]},
+                            {recfld_not_found, [?Rec:name(Rec),Field]})
     end.
 
 recfieldbypos(File, Pos, AskMissing) ->
@@ -1014,7 +1030,7 @@ recfieldbypos(File, Pos, AskMissing) ->
             case RecField of
                 [Result] -> Result;
                 _        -> error_case(AskMissing,
-                                       {bad_recfield_pos, File, Pos},
+                                       {bad_recfield_pos, [File, Pos]},
                                        {pos_bad_type, [recfield, Pos]})
             end
     end.
@@ -1209,7 +1225,7 @@ varstr(Var, AskMissing) ->
         true  -> Var;
         false ->
             case AskMissing of
-                true  -> error_action(bad_var_name, Var);
+                true  -> error_action(bad_var_name, [Var]);
                 false -> throw(?RefErr0r(bad_var_name))
             end
     end.
@@ -1277,12 +1293,12 @@ getFile(Args) ->
             Args
     end.
 
-filenode([Node])-> %@todo verify
+filenode([Node])-> %@todo verify + don't lookup here
     case ?Syn:node_type(Node) of
-	file ->
-	    Node;
-	_ ->
-	     hd([File || {file, File} <- ?Syn:root_path(Node)])
+    file ->
+        Node;
+    _ ->
+         hd([File || {file, File} <- ?Syn:root_path(Node)])
     end.
 
 filebyname(File, AskMissing) ->
@@ -1291,7 +1307,7 @@ filebyname(File, AskMissing) ->
     case F of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_file, File},
+                               {bad_file, [File]},
                                {file_not_present, [File]})
     end.
 
@@ -1347,12 +1363,12 @@ import_form_bypos(File, Position, AskMissing) ->
             case ?Form:type(Result) == import of
                 true  -> Result;
                 false -> error_case(AskMissing,
-                                    {bad_importform_pos, File, Position},
+                                    {bad_importform_pos, [File, Position]},
                                     {illegal_pos, [File, Position]})
             end;
         _        ->
             error_case(AskMissing,
-                       {bad_importform_pos, File, Position},
+                       {bad_importform_pos, [File, Position]},
                        {illegal_pos, [File, Position]})
     end.
 
@@ -1454,7 +1470,7 @@ modbyname(Mod, AskMissing) ->
     case Module of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_mod_name, Mod},
+                               {bad_mod_name, [Mod]},
                                {mod_not_found, [Mod]})
     end.
 
@@ -1468,7 +1484,7 @@ modbypos(File, Pos, AskMissing) ->
     case Mod of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_mod_pos, File, Pos},
+                               {bad_mod_pos, [File, Pos]},
                                {pos_bad_type, [module, Pos]})
     end.
 
@@ -1480,7 +1496,7 @@ modbyfile(File, AskMissing) ->
     case Mod of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_file, File},
+                               {bad_file, [File]},
                                {file_not_module, [File]})
     end.
 
@@ -1533,7 +1549,7 @@ modusebyname(Mod, AskMissing) ->
     case Module of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_moduse_name, Mod},
+                               {bad_moduse_name, [Mod]},
                                {mod_not_found, [Mod]})
     end.
 
@@ -1547,7 +1563,7 @@ modusebypos(File, Pos, AskMissing) ->
     case Mod of
         [Result] -> Result;
         _        -> error_case(AskMissing,
-                               {bad_moduse_pos, File, Pos},
+                               {bad_moduse_pos, [File, Pos]},
                                {pos_bad_type, [module, Pos]})
     end.
 

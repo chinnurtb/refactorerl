@@ -53,7 +53,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_rename_recfield).
--vsn("$Rev: 5496 $"). % for emacs"
+-vsn("$Rev: 5656 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -75,6 +75,8 @@ error_text(name_collision, []) ->
 prepare(Args) ->
     Field     = ?Args:record_field(Args),
     [Record]  = ?Query:exec(Field, ?RecField:recorddef()),
+    [File]    = ?Query:exec(Record, ?Rec:file()),
+    FilePath  = ?File:path(File),
     RecName   = ?Rec:name(Record),
     ArgsInfo  = add_info_text(Args, RecName, Field),
     Names     = recfield_names(Field, Record),
@@ -96,7 +98,9 @@ prepare(Args) ->
         ?Macro:update_macro(TypExp, {tlex, 1}, NameStr)
     end,
     fun(_)->
-        [Field] %@todo others?
+            ?Query:exec(?Query:seq([?File:find(FilePath),
+                                    ?Rec:find(RecName),
+                                    ?Rec:field(NewName)]))
     end].
 
 add_info_text(Args, RecName, Field) ->

@@ -117,7 +117,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reftr_gen).
--vsn("$Rev: 5489 $").
+-vsn("$Rev: 5698 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -140,25 +140,26 @@ error_text(guard_var, []) ->
 
 %%% @private
 prepare(Args) ->
-    Exprs   = ?Args:expr_range(Args),
-    {Link, Parent} = check_expr_link(Exprs),
-    Module = ?Args:module(Args),
-    lists:foreach(fun check_expr/1, Exprs),
+    [Expr1|_] = Exprs = ?Args:expr_range(Args),
 
-    Form = ?Query:exec1(hd(Exprs), ?Query:seq([?Expr:clause(),
-                                               ?Clause:funcl(),
-                                               ?Clause:form()]),
-                        ?RefErr0r(parent_not_form)),
+    {Link, Parent} = check_expr_link(Exprs),
+    lists:foreach(fun check_expr/1, Exprs),
+    [Clause] = ?Query:exec(Expr1, ?Query:seq([?Expr:clause(),
+                                              ?Clause:funcl()])),
+    Form     = ?Query:exec1(Clause, ?Clause:form(),
+                            ?RefErr0r(parent_not_form)),
 
     Fun      = ?Query:exec1(Form, ?Form:func(), ?RefErr0r(parent_not_form)),
     FunName  = ?Fun:name(Fun),
     Arity    = ?Fun:arity(Fun),
     check_recursive_calls(Exprs, Fun),
+    [File]   = ?Query:exec(Form, ?Form:file()),
+    FilePath = ?File:path(File),
+    [Module] = ?Query:exec(File, ?File:module()),
     check_fun(Module, FunName, Arity + 1),
 
-    [File] = ?Query:exec(Form, ?Form:file()),
     SideE  = [Expr || Expr <- Exprs, ?Expr:has_side_effect(Expr)],
-    GuardE = ?Expr:role(hd(Exprs)) == guard,
+    GuardE = ?Expr:role(Expr1) == guard,
     {TApps, TImps, RecApps, RecImps, RecCls} = get_fun_calls(Exprs, Fun, File),
     Apps   = TApps ++ RecApps,
     not GuardE orelse [check_side_effect(App) || App <- Apps],
@@ -170,12 +171,13 @@ prepare(Args) ->
     AppForms = ?Query:exec(TApps, ?Query:seq([?Expr:clause(),
                                               ?Clause:funcl(),
                                               ?Clause:form()])),
+    ClIndex = ?Syn:index(Form, funcl, Clause),
     Index  = ?Syn:index(File, form, Form),
     {Moves, AppInd} = check_record_macro(AppForms, Index, Exprs),
     UsedVarNames = lists:usort([?Var:name(Var) || Var <- NotBound]),
     Export = ?Fun:is_exported(Fun) orelse (TImps /= []) orelse (RecImps /= []),
 %% TODO: Should we trasform the implicit funs???
-    FunCl  = ?Query:exec(hd(Exprs),
+    FunCl  = ?Query:exec(Expr1,
                          ?Query:seq(?Expr:clause(), ?Clause:funcl())),
     Pairs = get_pairs_for_guard_tr(Exprs, FunCl, TApps, GuardE),
     FunCls = ?Query:exec(Form, ?Form:clauses()),
@@ -197,7 +199,7 @@ prepare(Args) ->
 
     Vars     = ?Query:exec(Form, ?Query:seq(?Form:clauses(), ?Clause:variables())),
     VarNames = [?Var:name(Var) || Var <- Vars],
-    % todo Add transformation info
+    % @todo Add transformation info
     VarName  = ?Args:ask(Args, varname, fun cc_varname/2, fun cc_error/3, VarNames),
 
     ?Transform:touch(File),
@@ -223,6 +225,14 @@ prepare(Args) ->
             1 -> ?Syn:put_comments([R], Comments);
             _ -> [?Syn:put_comments(NewExprs2, Comments) || NewExprs2 <- NewApps]
         end
+     end,
+     fun(_)->
+        ?Query:exec(?Query:seq([?File:find(FilePath),
+                                ?File:module(),
+                                ?Fun:find(FunName,Arity+1),
+                                ?Fun:definition(),
+                                ?Form:clause(ClIndex),
+                                ?Clause:pattern(Arity+1)]))
      end].
 
 get_comments({Fun, Apps}) ->
@@ -442,7 +452,7 @@ separate_guard(Expr)->
 is_from_mac_subst(Apps) when is_list(Apps) ->
     lists:any(fun(App) -> is_from_mac_subst(App) end, Apps);
 is_from_mac_subst(App) ->
-    [] =/= [Token || Token <- ?Syn:leaves(App), ?Syn:is_virtual(Token)].
+    ?Expr:virtuals(App) =/= [].
 
 %%% ----------------------------------------------------------------------------
 %%% Checks

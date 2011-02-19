@@ -3,7 +3,7 @@
   </head>
   <body><erl>  
   out(Args) ->
-       FileName = Args#arg.querydata,
+       FileName = yaws_api:url_decode(Args#arg.querydata),
        case file:open(FileName,[read]) of
            {ok,IODevice} ->
                FileContent = case file:read_file(FileName) of

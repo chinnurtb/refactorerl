@@ -89,7 +89,7 @@
 %%% @author Matyas Karacsonyi <k_matyas@inf.elte.hu>
 
 -module(reftr_introduce_rec).
--vsn("$Rev: 5482 $ ").
+-vsn("$Rev: 5661 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -124,7 +124,8 @@ prepare(Args) ->
     ?Check(is_fundef_param(Expr, Parent), ?LocalErr0r(illegal_selection)),
     ?Check([] =:= implicit_refs(Parent), ?LocalErr0r(implicit)),
 
-    File     = ?Args:file(Args),
+    File     = ?Args:file(Args), % @todo expr - form - file
+    FilePath = ?File:path(File),
     Recnames = [?Rec:name(R) || R <- ?Query:exec(File, ?File:records())],
     Args2    = info1(Args, Expr, Fun),
     RName    = ?Args:ask(Args2, name, fun cc_recname/2, fun cc_error/3, Recnames),
@@ -157,6 +158,10 @@ prepare(Args) ->
         [replace(Node, make_record(RName, RFields, Children))
             || {Node, Children} <- UCalledWChs],
         [?Dynfun:transform(DCall) || DCall <- DynFunCalls]
+     end,
+     fun(_)->
+            ?Query:exec(?Query:seq([?File:find(FilePath),
+                                    ?Rec:find(RName)]))
      end].
 
 %%% ============================================================================

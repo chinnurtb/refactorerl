@@ -25,7 +25,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_misc).
--vsn("$Rev: 5576 $ ").
+-vsn("$Rev: 5651 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -1339,7 +1339,7 @@ integer_to_list(N,P) ->
     end.
 
 is_erl(F)->
-    nomatch /= re:run(F, "\\.[eEhH][rR][lL]$", [{capture,first}]).
+    nomatch /= re:run(F, "\\.[eE][rR][lL]$", [{capture,first}]).
 %    lists:suffix(".erl",File).
 
 is_beam(F)->

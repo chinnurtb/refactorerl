@@ -24,7 +24,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(refcore_fileman).
--vsn("$Rev: 5622 $"). % for emacs"
+-vsn("$Rev: 5649 $"). % for emacs"
 
 %% Client interface
 -export([add_file/1, add_file/2, drop_file/1, drop_file/2, save_file/1]).
@@ -150,9 +150,9 @@ drop_file(File) ->
 %%    called during analysis.</dd>
 %%
 %% </dl>
-drop_file(File, Opts) ->
+drop_file(FileName, Opts) ->
     Progress = proplists:get_value(progress, Opts, none),
-    ?Call({drop_file, File, Progress}).
+    ?Call({drop_file, FileName, Progress}).
 
 
 %% @spec save_file(node()) -> ok | {error, Reason :: string()}
@@ -212,6 +212,9 @@ handle({drop_form, File, Form}) ->
     handle_drop_form(File, Form);
 handle({add_text, File, Index, Text}) ->
     handle_add_text(File, Index, Text);
+handle({drop_file, FileName, Progress}) when is_list(FileName) ->
+    CFName = ?MISC:canonical_filename(FileName),
+    handle_drop_file(CFName, Progress);
 handle({drop_file, File, Progress}) ->
     handle_drop_file(File, Progress);
 handle({save_file, File}) ->

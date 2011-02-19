@@ -16,6 +16,9 @@ andalso|\, :
 orelse|\; :
     {token, {'or', TokenLine}}.
 
+= :
+    {token, {comparator, TokenLine, '=='}}.
+
 ({Lower}|@)({Lower}|{Upper}|{Digit}|_|@)* :
     Atom = list_to_atom(TokenChars),
     {token, case reserved_word(Atom) of
@@ -33,10 +36,10 @@ orelse|\; :
     String = lists:sublist(TokenChars, 2, TokenLen-2),
     {token, {string, TokenLine, String}}.
 
-[\[\]\.\+\{\}\(\)\:] :
+[\[\]\.\+\{\}\(\)\:\?] :
     {token, {list_to_atom(TokenChars), TokenLine}}.
 
-(/=|==|\>=|=\<|\<|\>) :
+(/=|==|\>=|=\<|\<|\>|=\:=|=/=) :
     {token, {comparator, TokenLine, list_to_atom(TokenChars)}}.
 
 {Whitespace}+ :
