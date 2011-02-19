@@ -55,11 +55,22 @@
 %% This module implements the refactoring merge subexpression duplicates.
 %% 
 %% @end
+
+%% Changelog
+%%  Version 0.1.2: Anikó Nagyné Víg added a new sideeffect check, which checks 
+%%                 that the selected expression has sideeffect inside the 
+%%                 expression. At the moment it checks if the expression 
+%%                 contains any application or message passing. The change 
+%%                 is in the merge_subexpression/6 function, the added function
+%%                 call is refac_checks:check_if_body_doesnt_have_sideffects/2.
+%% End Changelog
 -module(refac_merge_subexpr).
 
 -export([merge_subexpression/6]).
 
 -include("node_type.hrl").
+
+-vsn('0.2').
 
 -define(NO_PREVIOUS_NODE, 0).
 
@@ -91,15 +102,16 @@ merge_subexpression(File, Line1, Col1, Line2, Col2, NewName) ->
   MId = refac_common:get_module_id(File),
   {Found, PathFromRootClause, ExprId} =
     get_expression_id(MId, Line1, Col1, Line2, Col2),
-
   refac_checks:check_found_expression(Found),
 
   RootClause = hd(PathFromRootClause),
   ExprParent = hd(tl(lists:reverse(PathFromRootClause))),
-  ExprSideeffects = refac_common:get_sideeffects_by_parent(MId, [ExprId], ExprParent),
+  ExprSideeffects = refac_common:get_sideeffects_by_parent(
+  			MId, [ExprId], ExprParent),
 
   refac_checks:check_if_name_exists(MId, NewName, RootClause),
   refac_checks:check_sideeffects(ExprId, ExprSideeffects),
+  refac_checks:check_if_body_doesnt_have_sideffects(MId, ExprId),
   refac_checks:check_send(MId, ExprId),
 
   ExprVars = refac_common:get_variables(MId, ExprId, with_root),

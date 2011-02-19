@@ -60,6 +60,8 @@
 
 -module(refactor).
 
+-vsn('0.1').
+
 -export([get_functions/1,get_module_names/0,
 	 get_module_name_if_exists_in_module/3,get_imported_functions/2,
 	 get_imported_functions_and_ids/2, get_export_list/1,
@@ -67,7 +69,6 @@
 	 replicate_subtree/4, replicate_subtree/3, 
          connect_variable_to_first_occurrence/3,
 	 matcher/2,stop/1,get_last_match/1,get_match_of/2,
-	 %%nem biztos hogy kell
 	 get_matches_of/2, add_match/3, is_compile_export_all/1,
 	 not_end_of_block_expr/2, not_end_of_clause_body/2,
 	 not_end_of_receive_expr_action/2, not_end_of_try_expr_body/2,
@@ -189,7 +190,11 @@
 	 insert_var_visib/3, update_scope_visibility/3, 
 	 update_var_visib/3, update_scope/4, 
 	 get_fun_expr_clause_from_fun_id/2,
-	 get_scope_visib/2]).
+	 get_scope_visib/2,
+         get_nodes/3,
+         get_record_definition_ids/1,
+         get_record_name/2,
+         get_pattern_ids/2]).
 
 -export([create_condition_list/1, create_condition_list/2, 
 	 create_condition_list3/2]).
@@ -5016,7 +5021,7 @@ get_fun_expr_clause_from_fun_id(MId, Id)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>Id/b> : Id.
+%% <b>Id</b> : Id.
 %% <b>OldScope</b> : The old scope id.
 %% <b>NewScope</b> : The new scope id.
 %% </pre>
@@ -5053,7 +5058,7 @@ update_var_visib(MId, VarId, NewBindingId)->
 
 
 %% =====================================================================
-%% @spec update_scope_visib(MId::integer(),Id::integer(),
+%% @spec update_scope_visibility(MId::integer(),Id::integer(),
 %%                   NewVisibId::integer()) -> ok
 %% @doc
 %% Update the scope's visibility .
@@ -5168,3 +5173,89 @@ get_scope_visib(MId, Scope)->
 	 ++ integer_to_list(MId) ++ " and id=" 
 	 ++ integer_to_list(Scope) ++ ";"),
   Visib.
+
+%% =====================================================================
+%% @spec get_nodes(
+%%         MId::integer(), Scopes::[integer()], Type::integer()) 
+%%                -> [integer()]
+%%
+%% @doc
+%% Gets the nodes which scope is in Scopes and type is Type.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Scopes</b> : Ids of the scope.
+%% <b>Type</b> : Node type.
+%% </pre>
+%% @end
+%% ===================================================================== 
+get_nodes(MId, Scopes, Type) ->
+    TypeNodes = 
+        refactor_db:select(
+          "select n.id from node_type as n, scope as s where n.mid=s.mid and"
+          " n.id=s.id and n.type=" ++ integer_to_list(Type) ++ " and n.mid="
+          ++ integer_to_list(MId) ++ " and" 
+          ++ create_condition_list3("s.scope=", Scopes) ++ ";"),
+    erl_syntax_db:untuple(TypeNodes).
+
+%% =====================================================================
+%% @spec get_record_definition_ids(
+%%         MId::integer())-> [integer()]
+%%
+%% @doc
+%% Gets the record definitions from the module.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% </pre>
+%% @end
+%% ===================================================================== 
+get_record_definition_ids(MId) -> 
+    erl_syntax_db:untuple(
+      refactor_db:select("select a.id from attribute_ as a, form_list as f,"
+                         " name as n where f.mid=a.mid and a.mid=n.mid and"
+                         " f.mid=" ++ integer_to_list(MId) ++ " and"
+                         " f.form=a.id and n.id=a.argument and a.pos=0 and"
+                         " n.name=\"record\";")).
+
+%% =====================================================================
+%% @spec get_record_name(
+%%         MId::integer(), RecordId::integer())-> string()
+%%
+%% @doc
+%% Gets the record definition's name.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>RecordId</b> : Id of the record definition.
+%% </pre>
+%% @end
+%% ===================================================================== 
+get_record_name(MId, RecordId) ->
+    [{RecordName}] = 
+        refactor_db:select(
+          "select n.name from name as n, attribute_ as a"
+          " where n.mid=a.mid and a.mid=" ++ integer_to_list(MId) 
+          ++ " and a.pos=1 and a.argument=n.id and a.id=" 
+          ++ integer_to_list(RecordId)++ ";"),
+    RecordName.
+
+%% =====================================================================
+%% @spec get_pattern_ids(
+%%         MId::integer(), ClauseId::integer())-> [integer()]
+%%
+%% @doc
+%% Gets the clause's pattern ids.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>ClauseId</b> : Id of the Clause.
+%% </pre>
+%% @end
+%% ===================================================================== 
+get_pattern_ids(MId, ClauseId) ->
+    erl_syntax_db:untuple(
+      refactor_db:select(
+        "select argument from clause where mid=" ++ integer_to_list(MId) 
+        ++ " and id=" ++ integer_to_list(ClauseId) ++" and qualifier=0;")).
+

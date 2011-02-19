@@ -54,6 +54,8 @@
 
 -module(graph_printer).
 
+-vsn('0.1').
+
 -export([print/4]).
 
 print(FileName, MId, RootId, SpecialNodes) ->

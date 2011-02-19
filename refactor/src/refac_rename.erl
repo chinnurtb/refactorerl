@@ -57,6 +57,8 @@
 
 -module(refac_rename).
 
+-vsn('0.1').
+
 -export([rename/4
          ]).
 

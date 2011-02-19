@@ -59,11 +59,14 @@
 
 -module(d_client).
 
+-vsn('0.1').
+
 -export([db_init/0,db_tofrom/1,check_out/1,
          rename/4,
          rename_variable/4,rename_function/4,
 	 merge_subexpression/6, extract_function/6,
-	 reorder_funpar/4,tuple_funpar/4,var_elim/3]).
+	 reorder_funpar/4,tuple_funpar/4,var_elim/3,
+         tuple_to_record/7]).
 
 %% =====================================================================
 %% @spec db_init() ->
@@ -340,6 +343,36 @@ extract_function(File, FromLine, FromCol, ToLine, ToCol,NewName) ->
 		      File, FromLine, FromCol, ToLine, ToCol, NewName) 
 	    end).
 
+%% =====================================================================
+%% @spec tuple_to_record(File::string(), 
+%%             FromLine::integer(), FromCol::integer(),
+%%             ToLine::integer(), ToCol::integer(), RecordName :: string(),
+%%             RecordParams::string()) ->
+%%                 {atom(), term()}
+%%
+%% @doc
+%% Performs the extract function on the given module.
+%% 
+%% Parameter description:<pre>
+%% <b>File</b> : The path of the module.
+%% <b>FromLine</b> : The begining of the selection(Line).
+%% <b>FromCol</b> : The begining of the selection(Column).
+%% <b>ToLine</b> : The end of the selection(Line).
+%% <b>ToCol</b> : The end of the selection(Column).
+%% <b>RecordName</b> : The name of the record.
+%% <b>RecordParams</b> : The name of the record fields.
+%% </pre>
+%% @end
+%% =====================================================================
+tuple_to_record(File, FromLine, FromCol, ToLine, ToCol, RecordName, 
+                RecordParams) ->
+    do_refactoring(
+      File, fun() -> 
+		    refac_tuple_to_record:tuple_to_record(
+		      File, FromLine, FromCol, ToLine, ToCol, 
+                      RecordName, RecordParams) 
+	    end).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% =====================================================================
@@ -361,14 +394,3 @@ init()->
 	Error -> Error
     end.
 
-%% =====================================================================
-%% @spec stop() -> term()
-%%                 
-%%
-%% @doc
-%% Stops the refactoring system.
-%% 
-%% @end
-%% =====================================================================
-stop()->
-    application:stop(refactorer).

@@ -1,4 +1,4 @@
-RefactorErl 0.1.1
+RefactorErl 0.2
 Installation instructions on Unix
 
 

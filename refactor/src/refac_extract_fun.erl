@@ -57,6 +57,8 @@
 %%
 -module(refac_extract_fun).
 
+-vsn('0.1').
+
 -export([extract_function/6]).
 
 -include("node_type.hrl").
@@ -107,7 +109,7 @@ extract_function(File, FromLine, FromCol, ToLine, ToCol, NewName) ->
 
 
     OutList = 
-        get_outsideused_var_bining_data(MId, Root, VarList, BoundVarList),
+        get_outsideused_var_binding_data(MId, Root, VarList, BoundVarList),
     refac_checks:check_all_var_bound_ok(OutList),
 
     NotBoundVarListName = VarNameList -- BoundVarNameList,
@@ -234,9 +236,8 @@ get_root_clause(MId, Id) ->
   end.
 
 %% =====================================================================
-%% @spec get_bound_varlist(MId::integer(),VarList::[integer()],
-%%                         VarNameList::[atom()], Root:: integer()) 
-%%                                                           -> [integer()]
+%% @spec get_bound_varlist(MId::integer(),VarList::[integer()]) 
+%%                                  -> [integer()]
 %%
 %% @doc
 %% Gets the variables which bounded in the selected sequence of expression.
@@ -256,29 +257,9 @@ get_bound_varlist(MId, VarList) ->
 			     VarList),
     BoundList.
 
-%% =====================================================================
-%% @spec get_root_id(Path::[integer()],(
-%%                  Ids:: {integer(), integer()} | integer()) -> [integer()]
-%%
-%% @doc
-%% Gets the root of the selected sequence of expression.
-%%
-%% Parameter description:<pre>
-%% <b>Path</b> : The path to the root of the selected sequence of expression.
-%% <b>Ids</b> : Ids of the first and the last expression or
-%%              id of the expression.
-%% </pre>
-%% @end
-%% =====================================================================
-
-get_root_id(Path, Ids) ->
-    case Ids of
-      {_Id1, _Id2} -> lists:last(Path);
-      _ExprId -> hd(tl(lists:reverse(Path)))
-    end.
 
 %% =====================================================================
-%% @spec get_idlist(Root::integer(),
+%% @spec get_idlist(MId::integer(), Root::integer(),
 %%               Ids::{integer(), integer()} | integer()) -> [integer()]
 %%
 %% @doc
@@ -354,7 +335,7 @@ get_used_variable(MId, IdList, Ids) ->
 %% @end
 %% =====================================================================
 
- get_outsideused_var_bining_data(MId, Root, VarList, BoundVarList) ->
+ get_outsideused_var_binding_data(MId, Root, VarList, BoundVarList) ->
     All = lists:flatten(erl_syntax_db:subtrees(MId, Root)),
     AllVarList = 
         lists:flatten(
@@ -619,7 +600,7 @@ connect_body_to_parameters( MId, VarList, NewVarList)->
 		NewVarList).
 
 %% =====================================================================
-%% @spec connect_variables_to_parameters(MId::integer(),VarList::[integer()],
+%% @spec connect_variables_to_parameter(MId::integer(),VarList::[integer()],
 %%                            NewBindingId::integer()) -> ok
 %% @doc
 %% Connects the variables to the new binding.
@@ -696,7 +677,7 @@ insert_new_variables_visib(MId, VarList)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>VarlList/b> : Id of the variables.
+%% <b>VarlList</b> : Id of the variables.
 %% <b>Old</b> : The old scope id.
 %% <b>Clauses</b> : The new scope id.
 %% </pre>
@@ -718,7 +699,7 @@ update_varlist_scope(MId, VarList, Old, Clauses)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>List/b> : Ids.
+%% <b>List</b> : Ids.
 %% <b>OldScope</b> : The old scope id.
 %% <b>Scope</b> : The new scope id.
 %% </pre>
@@ -751,7 +732,7 @@ update_expr_scope(MId, List, OldScope, Scope)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>IdList/b> : Ids.
+%% <b>IdList</b> : Ids.
 %% <b>Type</b> : The type.
 %% </pre>
 %% @end
@@ -771,7 +752,7 @@ select_id(MId, IdList, Type)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>IdList/b> : Ids.
+%% <b>IdList</b> : Ids.
 %% <b>OldScope</b> : The old scope id.
 %% <b>Scope</b> : The new scope id.
 %% </pre>
@@ -792,7 +773,7 @@ update_idlists_scope(MId, IdList, OldScope, Scope)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>IdList/b> : Ids.
+%% <b>IdList</b> : Ids.
 %% <b>Scope</b> : The new scope id.
 %% </pre>
 %% @end
@@ -812,7 +793,7 @@ update_idlists_scope_visib(MId, IdList, Scope)->
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : The id of the module.
-%% <b>List/b> : Fun expressions ids.
+%% <b>List</b> : Fun expressions ids.
 %% </pre>
 %% @end
 %% =====================================================================

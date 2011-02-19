@@ -59,10 +59,15 @@
 %%      between the refactorings.
 %% @end
 
-
+%% Changelog
+%%  Version 0.1.2: Tamas Nagy changed the behaviour of the 
+%%                 check_if_body_doesnt_have_sideffects/2. Checks sideeffect of 
+%%                 root not just the subtrees' sideeffect. (it was a BUG.)
+%% End Changelog
 
 -module(refac_checks).
 
+-vsn("0.2").
 
 -export([error_handler/1,contains_match_expr/2,
 	 check_if_binding_is_unambiguous/3, 
@@ -89,7 +94,10 @@
 	 check_all_var_bound_ok/1,
          check_is_legal_body/8,
          check_not_in_head_pattern_guard_macro/3,
-         check_is_legal_function_name/4
+         check_is_legal_function_name/4,
+         check_if_tuple/7,
+         check_param_number_equal_to_tuple_length/3,
+         check_if_not_embedded_tuple/2
          ]).
 
 -include("node_type.hrl").
@@ -119,7 +127,7 @@ error_handler({ErrorType, Message}) ->
 
 %% =====================================================================
 %% @spec check_if_binding_is_unambiguous(
-%%          MId::integer(), VarName::string(), Scope::integer)
+%%          MId::integer(), VarName::string(), Scope::integer())
 %%                -> ok
 %%
 %% @doc
@@ -162,7 +170,9 @@ check_if_binding_is_unambiguous(MId, VarName, Scope) ->
 %% ===================================================================== 
 check_if_body_doesnt_have_sideffects(MId,BodyId) ->
     Result=refac_common:preorder(MId,BodyId, fun check_sideeffect/2),
-    SideEffects=lists:member(true, lists:flatten([Result])),
+    RootSideEffect = check_sideeffect(MId, BodyId),
+    SideEffects=lists:member(
+                  true, lists:flatten([Result] ++ [RootSideEffect])),
     if
 	SideEffects -> error_handler( {sideffect_error,0} );
 	true -> ok
@@ -1248,7 +1258,7 @@ check_if_bindings_are_unambiguous(MId, BoundIds, Scope) ->
 
 %% =====================================================================
 %% @spec check_send(
-%%          MId::integer(), ExprId::integer()
+%%          MId::integer(), ExprId::integer())
 %%                -> ok
 %%
 %% @doc
@@ -1282,7 +1292,7 @@ check_send(MId, ExprId) ->
 
 %% =====================================================================
 %% @spec check_non_binding_in_match_pattern(
-%%          MId::integer(), Root::integer(), VarName::integer()
+%%          MId::integer(), Root::integer(), VarName::integer())
 %%                -> ok
 %%
 %% @doc
@@ -1365,7 +1375,6 @@ check_is_legal_function_name(NewName,Arity,FunctionData,ImportFunctions) ->
 %% </pre>
 %% @end
 %% =====================================================================
-
 check_not_in_head_pattern_guard_macro(MId, Ids, Path) ->
     case Ids of
       {_Id1, _Id2} -> ok;
@@ -1399,7 +1408,6 @@ check_not_in_head_pattern_guard_macro(MId, Ids, Path) ->
 %% </pre>
 %% @end
 %% =====================================================================
-
 check_is_legal_body(Found,FromLine,FromCol,ToLine,ToCol,MId,Ids,Path)->
     case Found of
       found_body -> ok;
@@ -1422,7 +1430,7 @@ check_is_legal_body(Found,FromLine,FromCol,ToLine,ToCol,MId,Ids,Path)->
       _ -> ok
     end.
 
- %% =====================================================================
+%% =====================================================================
 %% @spec check_all_var_bound_ok(List::[integer()]) -> ok
 %%
 %% @doc
@@ -1434,11 +1442,108 @@ check_is_legal_body(Found,FromLine,FromCol,ToLine,ToCol,MId,Ids,Path)->
 %% </pre>
 %% @end
 %% =====================================================================
-
- check_all_var_bound_ok(List) ->
+check_all_var_bound_ok(List) ->
     case List of
-      [] -> ok;
-      _ ->
-	  refac_checks:error_handler({not_all_var_bound_ok,
-				      [List]})
+        [] -> ok;
+        _ ->
+            refac_checks:error_handler({not_all_var_bound_ok,
+                                        [List]})
     end.
+
+%% =====================================================================
+%% @spec check_if_tuple(
+%%          MId::integer(), Found::atom(), ExprId::integer(),
+%%          FromLine::integer(), FromCol::integer(), ToLine::integer(),
+%%          ToCol::integer())
+%%                -> ok
+%%
+%% @doc
+%% Checks if the expression is a tuple. If it is not, it 
+%% raises an invalid_expr error.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Found</b> : The result of the search for the expression.
+%% <b>ExprId</b> : Id of the expression.
+%% <b>FromLine</b> : Begining of the selection(Line).
+%% <b>FromCol</b> : Begining of the selection(Column).
+%% <b>ToLine</b> : The end of the selection(Line).
+%% <b>ToCol</b> : The end of the selection(Column).
+%% </pre>
+%% @end
+%% ===================================================================== 
+check_if_tuple(MId,Found, ExprId, FromLine, FromCol, ToLine, ToCol) ->
+    case Found of
+        found_expr->
+            ok;
+        _ ->
+            refac_checks:
+                error_handler(
+                  {invalid_expr, {{FromLine, FromCol},{ToLine,ToCol}}})
+    end,
+    case erl_syntax_db:type(MId, ExprId) of
+        ?TUPLE ->
+            ok;
+        _  ->
+            refac_checks:
+                error_handler(
+                  {invalid_expr, {{FromLine, FromCol},{ToLine,ToCol}}})
+    end.
+%% =====================================================================
+%% @spec check_param_number_equal_to_tuple_length(
+%%          RecordParams::[string()], MId::integer(), ExprId::integer())
+%%                -> ok
+%%
+%% @doc
+%% Checks if the number of the given record field names is equal 
+%% to the number of elements in the tuple. 
+%% If it is not, it raises a length_mismatch error.
+%% 
+%% Parameter description:<pre>
+%% <b>RecordParams</b> : The given record field names.
+%% <b>MId</b> : Id of the module.
+%% <b>ExprId</b> : Id of the expression.
+%% </pre>
+%% @end
+%% ===================================================================== 
+check_param_number_equal_to_tuple_length(RecordParams, MId, ExprId) ->
+    TupleElementIds = refactor:get_tuple_element_ids_from_tuple_id(MId, ExprId),
+    case length(RecordParams) == length(TupleElementIds) of
+        true ->
+            ok;
+        false ->
+            refac_checks:
+                error_handler(
+                  {length_mismatch, 
+                   {length(RecordParams), length(TupleElementIds)}})
+    end.
+
+%% =====================================================================
+%% @spec check_if_not_embedded_tuple(
+%%          MId::integer(), PathFromRootClause::[integer()])
+%%                -> ok
+%%
+%% @doc
+%% Checks if the tuple is embedded in an other tuple, list or 
+%% list comprihension. If it is, it raises a not_supported error.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>PathFromRootClause</b> : 
+%%             The path from the root clause to the tuple.
+%% </pre>
+%% @end
+%% ===================================================================== 
+check_if_not_embedded_tuple(MId, PathFromRootClause) ->
+    lists:filter(
+      fun (Id) -> 
+              Type = erl_syntax_db:type(MId, Id),
+              if Type =:= ?TUPLE orelse 
+                 Type =:= ?LIST orelse 
+                 Type =:= ?LIST_COMP ->
+                      refac_checks:error_handler(
+                        {not_supported, Type});
+                 true ->
+                      false
+              end
+      end, tl(lists:reverse(PathFromRootClause))),ok.

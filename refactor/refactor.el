@@ -107,10 +107,11 @@
       ("Rename function" erl-refactor-function)
       ("Rename variable" erl-refactor-variable)
       ("Reorder function parameters" erl-refactor-reorder)
-      ("Untuple/Tuple function parameters" erl-refactor-tuple)
+      ("Tuple function parameters" erl-refactor-tuple)
       ("Eliminate variable" erl-refactor-varelim)
       ("Merge subexpression duplicates" erl-refactor-merge)
       ("Extract function" erl-refactor-exfun)
+      ("Tuple to record(BETA)" erl-refactor-record)
       nil
       ("Into_db and reload from there" erl-refactor-intodb)
       ("Initialise database" erl-refactor-dbinit)
@@ -130,6 +131,7 @@
       ("\C-c\C-ee" erl-refactor-varelim)
       ("\C-c\C-em" erl-refactor-merge)
       ("\C-c\C-ef" erl-refactor-exfun)
+      ("\C-c\C-ed" erl-refactor-record)
    )
   "Keys to bind for refactoring.")
 
@@ -147,7 +149,7 @@
 (defun erl-refactor-dbinit (node)
 "Initialise the database"
   (interactive (list (erl-target-node)))
-  (message "*Initializing*")
+  (message "*Initialising*")
   (erl-spawn
     (erl-send-rpc node
 		  'd_client
@@ -155,7 +157,7 @@
 		  (list ))
     (erl-receive ()
 	((['rex ['ok 'ok]]
-	  (message "*Initialized*"))
+	  (message "*Initialised*"))
 	 (['rex ['error reason]]
 	  (message "Error: %S" reason))
 	 (other
@@ -184,7 +186,7 @@
 	  (message "Unexpected: %S" other))))))
 
 (defun erl-refactor-check-out (node name bf)
-"Put the erlang code to the database, and reload it from there"
+"Reload file from database"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (current-buffer)))
@@ -199,18 +201,18 @@
 	   (set-buffer (get-file-buffer file))
 	   (revert-buffer t t) (set-timestamp))
 	  (message "*Reloaded*"))
-	 (['rex ['not_exsists file]]
+	 (['rex ['not_exists file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
 	    (revert-buffer t t) (set-timestamp))
-	  (message "This file( %S ) does not exsist in the database. You have to put it in, to be able to check it out" file))	 
+	  (message "This file( %S ) does not exist in the database. You have to put it in, to be able to check it out" file))	 
 	 (['rex ['error reason]]
 	  (message "Error: %S" reason))
 	 (other
 	  (message "Unexpected: %S" other))))))
 
 (defun erl-refactor-function (node name bf line col newname)
-"Put the erlang code to the database, and reload it from there"
+"Rename function"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (current-buffer)
@@ -241,12 +243,12 @@
 	  (message "Error: The new function name ( %S ) clashes with reserved names. File:%S" newname file))
 	 (['rex ['user_denied_error newname file]]
 	  (message "Error: The new function name ( %S ) clashes with user denied names. File:%S" newname file))
-	 (['rex ['exsists_error [newname arity] file]]
+	 (['rex ['exists_error [newname arity] file]]
 	  (message "Error: The new function name ( %S ) clashes with an exsisting function(%S\%S). File:%S" newname newname arity file))
 	 (['rex ['import_error [newname arity] file]]
 	  (message "Error: The new function name ( %S ) clashes with an imported function(%S\%S). File:%S" newname newname arity file))
          (['rex ['out_of_scope 0 file]]
-	  (message "Error: The renamed function's definition is out of scope of the system. File:%S" file))
+	  (message "Error: The renamed function's definition is not in the database. File:%S" file))
 	 (['rex ['warning 'dynamic file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
@@ -274,16 +276,15 @@
 ;;3 {autoimported_error, Newname
 ;;4 {reserved_error, Newname
 ;;5 {user_denied_error, Newname
-;;6 {exsists_error,{Newname,Arity}}
+;;6 {exists_error,{Newname,Arity}}
 ;;7 {import_error,{Newname,Arity}}
-
 ;;8 {warning, dynamic}
 ;;9 {warning, apply}
 ;;10 {warning, spawn}
 ;;11 {warning, hibernate}
 
 (defun erl-refactor-variable (node name bf line col newname)
-"Put the erlang code to the database, and reload it from there"
+"Rename variable"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (current-buffer)
@@ -359,7 +360,7 @@
 	  (message "Error: The given new order list is long enough, but it doesn't contain all the elements.")
 	  (message "It should contain all the elements from 1 to %S." arity))
          (['rex ['out_of_scope 0 file]]
-	  (message "Error: The reordered function's definition is out of scope of the system. File:%S" file))
+	  (message "Error: The reordered function's definition is not in the database. File:%S" file))
 	 (['rex ['warning 'dynamic file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
@@ -392,13 +393,13 @@
 ;;{element_error, {Length, Arity}}
 ;;{ok,{done}}
 (defun erl-refactor-tuple (node name bf line col number)
-"Tuple/Untuple function parameters"
+"Tuple function parameters"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (current-buffer)
 		     (current-line)
 		     (current-column)
-		     (read-string "How many elements would you like to tuple(to untuple press <Enter>):")))
+		     (read-string "How many elements would you like to tuple:")))
   (if (not (check-modification-p))
   (erl-spawn
     (erl-send-rpc node
@@ -410,7 +411,7 @@
 	  (save-excursion
 	   (set-buffer (get-file-buffer file))
 	   (revert-buffer t t) (set-timestamp))
-	  (message "Tuple/Untuple successful in %S file" file))
+	  (message "Tuple successful in %S file" file))
 	 (['rex ['not_exists file file2]]
 	  (message "Error: File %S doesn't exist in the database" file))
 	 (['rex ['pos_error [line col] file]]
@@ -454,7 +455,7 @@
 	  (message "Unexpected: %S" other)))))))
 
 (defun erl-refactor-varelim (node name bf line col)
-"Tuple/Untuple function parameters"
+"Eliminate variable"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (current-buffer)
@@ -487,26 +488,28 @@
 	 (['rex ['body_variable_shadowed_error [name line col] file]]
 	  (message "Error: The resulting expression bound to the variable contains a variable(%S)" name)
 	  (message "that is shadowed(line %S, col %S) near an appearance of the eliminated variable." line col))
+	 (['rex ['non_binding_pattern_occurrence nil file]]
+	  (message "Error: The variable occurs on the left hand side of a match expression. File: %S" file))
 	 (['rex ['warning 'dynamic file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
 	    (revert-buffer t t) (set-timestamp))
-	  (message "Warning: This tupleing may cause runtime problems, because the module uses dynamic function calls. File:%S" file))
+	  (message "Warning: This eliminating may cause runtime problems, because the module uses dynamic function calls. File:%S" file))
 	 (['rex ['warning 'apply file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
 	    (revert-buffer t t) (set-timestamp))
-	  (message "Warning: This tupleing may cause runtime problems, because the module uses the apply BIF. File:%S" file))
+	  (message "Warning: This eliminating may cause runtime problems, because the module uses the apply BIF. File:%S" file))
 	 (['rex ['warning 'spawn file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
 	    (revert-buffer t t) (set-timestamp))
-	  (message "Warning: This tupleing may cause runtime problems, because the module uses the spawn BIF. File:%S" file))
+	  (message "Warning: This eliminating may cause runtime problems, because the module uses the spawn BIF. File:%S" file))
 	 (['rex ['warning 'hibernate file]]
 	  (save-excursion
 	    (set-buffer (get-file-buffer file))
 	    (revert-buffer t t) (set-timestamp))
-	  (message "Warning: This tupleing may cause runtime problems, because the module uses the erlang:hibernate function. File:%S" file))
+	  (message "Warning: This eliminating may cause runtime problems, because the module uses the erlang:hibernate function. File:%S" file))
 	 (other
 	  (message "Unexpected: %S" other)))))))
 
@@ -521,15 +524,8 @@
     (define-key erlang-extended-mode-map (car spec) (cadr spec))))
 
 
-
-
-
-
-
-
-
 (defun erl-refactor-rename (node name line col newname)
-"Put the erlang code to the database, and reload it from there"
+"Rename function or variable"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (current-line)
@@ -559,11 +555,13 @@
 	  (message "Error: The new function name ( %S ) clashes with reserved names. File:%S" newname file))
 	 (['rex ['user_denied_error newname file]]
 	  (message "Error: The new function name ( %S ) clashes with user denied names. File:%S" newname file))
-	 (['rex ['exsists_error [newname arity] file]]
+	 (['rex ['exists_error [newname arity] file]]
 	  (message "Error: The new function name ( %S ) clashes with an exsisting function(%S\%S). File:%S" newname newname arity file))
 	 (['rex ['import_error [newname arity] file]]
 	  (message "Error: The new function name ( %S ) clashes with an imported function(%S\%S). File:%S" newname newname arity file))
-	 (['rex ['not_variable_name_error newname file]]
+         (['rex ['out_of_scope 0 file]]
+	  (message "Error: The renamed function's definition is not in the database. File:%S" file))
+	  (['rex ['not_variable_name_error newname file]]
 	  (message "Error: Invalid new variable name %S." newname))
 	 (['rex ['name_capture [newname [line col]] file]]
 	  (message "Error: New name (%S) would capture variable at line:%S, col:%S, file:%S" newname line col file))
@@ -606,6 +604,7 @@
                   (current-column)))
 
 (defun erl-refactor-merge (node filename begin end newname)
+"Merge subexpressions"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (region-beginning)
@@ -651,10 +650,15 @@
 	  (message "Error: The selection is part of a clause pattern. File:%S" file))
 	 (['rex ['in_macro parent file]]
 	  (message "Error: The selection is part of a macro. File:%S" file))
+	 (['rex ['in_send parent file]]
+	  (message "Error: The selection contains message passing. File:%S" file))
+	 (['rex ['sideffect_error 0 file]]
+	  (message "Error: The selected expression has sideeffect.File:%S" file)) 
 	 (other
 	  (message "Unexpected: %S" other)))))))
 
 (defun erl-refactor-exfun (node filename begin end newname)
+"Extract function"
   (interactive (list (erl-target-node)
 		     (buffer-file-name (current-buffer))
 		     (region-beginning)
@@ -706,5 +710,41 @@
 	  (message "Error: The selection is part of a clause pattern. File:%S" file))
 	 (['rex ['in_macro parent file]]
 	  (message "Error: The selection is part of a macro. File:%S" file))
+	 (other
+	  (message "Unexpected: %S" other)))))))
+
+(defun erl-refactor-record (node filename begin end newname params)
+  (interactive (list (erl-target-node)
+		     (buffer-file-name (current-buffer))
+		     (region-beginning)
+		     (region-end)
+                     (read-string "New record name:")
+                     (read-string "Record fields:")))
+  (set 'line1 (find-line begin))
+  (set  'col1 (find-col  begin))
+  (set 'line2 (find-line end  ))
+  (set  'col2 (find-col  end  ))
+  (if (not (check-modification-p))
+  (erl-spawn
+    (erl-send-rpc node
+		  'd_client
+		  'tuple_to_record
+		  (list filename line1 col1 line2 col2 newname params))
+    (erl-receive ()
+	((['rex ['ok 'done file]]
+	  (save-excursion
+	    (set-buffer (get-file-buffer file))
+	    (revert-buffer t t) (set-timestamp))
+	  (message "Tuple to record refactoring successful. File:%S" file))
+	 (['rex ['not_exists file file2]]
+	  (message "Error: %S file doesn't exist in database" file))
+	 (['rex ['invalid_paramname error file]]
+	  (message "Error: Given record fields are bad. File:%S" file))
+	 (['rex ['invalid_expr [[fromline fromcol] [toline tocol]] file]]
+	  (message "Error: Selected area is not a tuple. from(%S, %S) to(%S, %S)File:%S" fromline fromcol toline tocol file))
+	 (['rex ['length_mismatch [given tuples] file]]
+	  (message "Error: The given record fields number(%S) and the number of tuple's elements(%S) are not equal. File:%S" given tuples file))
+	 (['rex ['not_supported type file]]
+	  (message "Error: Embedded tuples are not yet supported. File:%S" file))
 	 (other
 	  (message "Unexpected: %S" other)))))))

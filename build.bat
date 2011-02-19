@@ -6,10 +6,10 @@ REM Please use forward slashes in the paths below.
 
 REM Base directory drive and path of RefactorErl source code
 set BASEDRIVE=C:
-set BASEPATH=RefactorErl-0.1.1
+set BASEPATH=RefactorErl-0.2
 
 REM Base directory of Erang/OTP
-set ERLANG=C:/Program Files/erl5.5.5
+yset ERLANG=C:/Program Files/erl5.5.5
 
 REM No changes are needed below this line -----------------------------------
 

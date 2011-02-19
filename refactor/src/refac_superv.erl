@@ -59,6 +59,8 @@
 
 -module(refac_superv).
 
+-vsn('0.1').
+
 -behaviour(application).
 -behaviour(supervisor).
 

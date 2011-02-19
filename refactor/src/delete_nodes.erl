@@ -58,6 +58,8 @@
 
 -module(delete_nodes).
 
+-vsn('0.1').
+
 -include("node_type.hrl").
 
 -export([delete_node/2,delete_arity_qualifier/2,
@@ -1475,6 +1477,88 @@ detach_node(MId, Id, From, ?MATCH_EXPR) ->
         true ->
             ok
     end;
+detach_node(MId, Id, From, ?TUPLE) ->
+    [{Pos}] = 
+        refactor_db:select(
+          "select pos from tuple where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(From) ++ " and element=" 
+          ++ integer_to_list(Id) ++";"),
+    [{MaxPos}] = 
+        refactor_db:select(
+          "select max(pos) from tuple where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(From) ++ " ;"),
+    refactor_db:delete(
+      "delete from tuple where mid=" ++ integer_to_list(MId) 
+      ++ " and id=" ++ integer_to_list(From) ++ " and pos=" 
+      ++ integer_to_list(Pos) ++ ";" ),
+    if 
+        MaxPos /= Pos ->
+            lists:foreach(
+              fun (Pos2) ->
+                      refactor_db:update(
+                        "update tuple set pos=pos-1 where mid=" 
+                        ++ integer_to_list(MId)
+                        ++ " and id="++ integer_to_list(From)  
+                        ++ " and pos=" ++ integer_to_list(Pos2) ++ ";")
+              end, lists:seq(Pos+1, MaxPos));
+        true ->
+            ok
+    end;
+detach_node(MId, Id, From, ?APPLICATION) ->
+    [{Pos}] = 
+        refactor_db:select(
+          "select pos from application where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(From) ++ " and argument=" 
+          ++ integer_to_list(Id) ++";"),
+    [{MaxPos}] = 
+        refactor_db:select(
+          "select max(pos) from application where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(From) ++ " ;"),
+    refactor_db:delete(
+      "delete from application where mid=" ++ integer_to_list(MId) 
+      ++ " and id=" ++ integer_to_list(From) ++ " and pos=" 
+      ++ integer_to_list(Pos) ++ ";" ),
+    if 
+        MaxPos /= Pos ->
+            lists:foreach(
+              fun (Pos2) ->
+                      refactor_db:update(
+                        "update application set pos=pos-1 where mid=" 
+                        ++ integer_to_list(MId)
+                        ++ " and id="++ integer_to_list(From)  
+                        ++ " and pos=" ++ integer_to_list(Pos2) ++ ";")
+              end, lists:seq(Pos+1, MaxPos));
+        true ->
+            ok
+    end;
+detach_node(MId, Id, From, ?MACRO) ->
+    [{Pos}] = 
+        refactor_db:select(
+          "select pos from macro where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(From) ++ " and argument=" 
+          ++ integer_to_list(Id) ++";"),
+    [{MaxPos}] = 
+        refactor_db:select(
+          "select max(pos) from macro where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(From) ++ " ;"),
+    refactor_db:delete(
+      "delete from macro where mid=" ++ integer_to_list(MId) 
+      ++ " and id=" ++ integer_to_list(From) ++ " and pos=" 
+      ++ integer_to_list(Pos) ++ ";" ),
+    if 
+        MaxPos /= Pos ->
+            lists:foreach(
+              fun (Pos2) ->
+                      refactor_db:update(
+                        "update macro set pos=pos-1 where mid=" 
+                        ++ integer_to_list(MId)
+                        ++ " and id="++ integer_to_list(From)  
+                        ++ " and pos=" ++ integer_to_list(Pos2) ++ ";")
+              end, lists:seq(Pos+1, MaxPos));
+        true ->
+            ok
+    end;
+
 detach_node(_MId, _Id, _From, _Type) ->
     error_logger:info_msg("Detach not implemented for this node_type yet.").
 

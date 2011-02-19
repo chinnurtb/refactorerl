@@ -62,6 +62,8 @@
 
 -module(out_from_db).
 
+-vsn('0.1').
+
 -export([create_code/2,create_code/1]).
 
 %% =====================================================================
@@ -129,7 +131,7 @@ create_code(MId) ->
 build_tree(MId, FormLId) ->
     Elements = refactor_db:select(
 		 "select * from form_list where mid=" ++ integer_to_list(MId) 
-		 ++ " and id=" ++ integer_to_list(FormLId) ++";"),
+		 ++ " and id=" ++ integer_to_list(FormLId) ++" order by pos;"),
     Trees = 
 	lists:map(
 	  fun(Element)->

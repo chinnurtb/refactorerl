@@ -46,6 +46,8 @@
 
 -module(erl_scan1).
 
+-vsn('0.1').
+
 -export([format_error/1, reserved_word/1, string/1,
 	 string/2, tokens/3]).
 

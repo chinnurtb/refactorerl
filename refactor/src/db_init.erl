@@ -58,6 +58,9 @@
 
 
 -module(db_init).
+
+-vsn('0.1').
+
 -export([init/0
          ]).
 

@@ -57,9 +57,22 @@
 %% This module implements the eliminate variable refactoring.
 %% 
 %% @end
+
+%% Changelog
+%%  Version 0.1.2: Bugfixing, when the reordered function has only 
+%%                 applications as its calls, not implicit function.
+%%                 One case added into the change_application_parameter_order/3
+%%                 function to avoid the needless call of the 
+%%                 change_parameter_order/4 function.
+%%                 Bugfixing in the reorder_funpar/4 function, because it 
+%%                 called the refactor:get_fun_calls/2 with wrong module id.
+%% End changelog
+
 -module(refac_reorder_funpar).
 
 -export([reorder_funpar/4]).
+
+-vsn('0.2.').
 
 -include("node_type.hrl").
 
@@ -91,7 +104,7 @@ reorder_funpar(File, Line, Col, Order) ->
 
     {ApplicationIds, _ApplicationTypeandNameIds,
      _ImplicitFunCallIds, ImplicitFunCallandTypeIds,
-     _ImplicitFunCallTypeandNameIds} = refac_common:get_fun_calls(MId, FunId),
+     _ImplicitFunCallTypeandNameIds} = refac_common:get_fun_calls(MId2, FunId),
 
     refac_checks:check_orderList(OrderList, Arity),
 
@@ -302,14 +315,19 @@ change_clauses_parameter_order(MId, FunId, ChangeOrderList, Arity) ->
 %% =====================================================================
 change_application_parameter_order(ChangeOrderList, Arity, ApplicationIds) ->
     case ApplicationIds of
-      [{_, _, _}|_] -> {MIds, Ids, _} = lists:unzip3(ApplicationIds);
-      [{_, _}|_] -> {MIds, Ids} = lists:unzip(ApplicationIds);
-      [] -> {MIds, Ids} = {[],[]}
+        [{_, _, _}|_] -> {MIds, Ids, _} = lists:unzip3(ApplicationIds);
+        [{_, _}|_] -> {MIds, Ids} = lists:unzip(ApplicationIds);
+        [] -> {MIds, Ids} = {[],[]}
     end,
     ReorderedApplicationIds = lists:zip(MIds, Ids),
-    change_parameter_order(
-      ChangeOrderList, refactor:create_condition_list(ReorderedApplicationIds), Arity,
-      fun refactor:update_application/3).
+    case ReorderedApplicationIds of
+        [] -> ok;
+        _ ->
+            change_parameter_order(
+              ChangeOrderList, 
+              refactor:create_condition_list(ReorderedApplicationIds), Arity,
+              fun refactor:update_application/3)
+    end.
 
 %% =====================================================================
 %% @spec change_parameter_order(

@@ -58,6 +58,8 @@
 %% @end
 -module(refac_ren_fun).
 
+-vsn('0.1').
+
 -export([rename_function/4]).
 
 -include("node_type.hrl").

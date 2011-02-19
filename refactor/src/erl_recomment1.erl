@@ -34,6 +34,8 @@
 
 -module(erl_recomment1).
 
+-vsn('0.1').
+
 -export([recomment_forms/2, quick_recomment_forms/2, recomment_tree/2]).
 
 

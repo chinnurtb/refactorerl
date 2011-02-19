@@ -61,6 +61,8 @@
 
 -module(refac_common).
 
+-vsn('0.1').
+
 -export([get_module_id/1, find_the_function/2, get_id_from_pos/4,
 	 get_function_definition/2, warnings/0,
 	 get_inner_scope/2, produce_inner_scopes/2,
@@ -668,7 +670,7 @@ find_expression_root_id(MId, NodeId, FromId, ToId) ->
 %% <b>Pos</b> : The position found below the node (found_expr etc.).
 %% <b>Id</b> : Id of the actual node.
 %% <b>Info</b> : Result information when appropriate.
-%% <b>FirstChild</b> : Id of the first child node.</pre>
+%% <b>FirstChild</b> : Id of the first child node.
 %% <b>LastChild</b> : Id of the last child node.</pre>
 %% @end
 %% ===================================================================== 
@@ -951,7 +953,9 @@ get_lowest_id(MId, [{Id}|Ids]) ->
 %%       
 %%
 %% @doc
-%% Returns which occurrences have sideeffects.
+%% Returns which occurrences have sideeffects, which are inside a 
+%%  list head, list body, generator pattern, clause guard, clause
+%%   pattern, macro.
 %% 
 %% Parameter description:<pre>
 %% <b>MId</b> : Id of the module.
@@ -994,3 +998,4 @@ get_sideeffects_by_parent(MId, ExprOccurrences, Parent) ->
             {Parent, Id, ErrorMessage}
         end
       end, CheckedType)).
+

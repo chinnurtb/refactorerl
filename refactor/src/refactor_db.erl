@@ -58,6 +58,8 @@
     
 -module(refactor_db).
 
+-vsn('0.1').
+
 -behaviour(gen_server).
 
 %% API
@@ -807,7 +809,7 @@ get_conversion_list([{_Table,_Field,_Length,_Name} | Xs], ConvList, Pos) ->
 %% 
 %% Parameter description:<pre>
 %% <b>Value</b> : The wrong float format.
-%%
+%% </pre>
 %% @end
 %% Used in: get_conversion_list/3
 %% =====================================================================    

@@ -58,6 +58,8 @@
 
 -module(create_nodes).
 
+-vsn('0.1').
+
 -include("node_type.hrl").
 
 -export([create_application/4,create_application/3,
@@ -113,7 +115,8 @@
 	 create_variables/4,create_fresh_variable/1,
 	 init_position/2,init_scope/3,create_scope/3,
 	 connect_fun_call/4,connect_variables/3,
-	 conv_from_ast_to_id/1, attach_subtree_to_node/4]).
+	 conv_from_ast_to_id/1, attach_subtree_to_node/4,
+         move_node/2]).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -3153,7 +3156,10 @@ get_next_id(MId) ->
 
 
 create_fresh_variable(MId) ->
-    Length = get_max_variable_length(MId),
+    case get_max_variable_length(MId) of
+        null -> Length = "0";
+        Length -> ok
+    end,
     case list_to_integer(Length) =< 9 of
 	true ->
 	    { "RefacVar_", 1 };
@@ -3471,5 +3477,97 @@ attach_subtree_to_node(MId, Id, To, _After, ?MATCH_EXPR) ->
         true ->
             ok
     end;
+attach_subtree_to_node(MId, Id, To, After, ?APPLICATION) ->
+    if 
+        After =:= 0 ->
+            Pos = 0;
+        true ->
+            [{Pos}] = 
+                refactor_db:select(
+                  "select pos from application where mid=" 
+                  ++ integer_to_list(MId) 
+                  ++ " and id=" ++ integer_to_list(To) ++ " and argument=" 
+                  ++ integer_to_list(After) ++ " ;")
+    end,
+    [{MaxPos}] = 
+        refactor_db:select(
+          "select max(pos) from application where mid=" ++ integer_to_list(MId) 
+          ++ " and id=" ++ integer_to_list(To) ++ " ;"),
+    if 
+        Pos /= MaxPos ->
+            lists:foreach(
+              fun (Pos2) ->
+                      refactor_db:update(
+                        "update application set pos=pos+1 where mid=" 
+                        ++ integer_to_list(MId) 
+                        ++ " and id= " ++ integer_to_list(To) ++ " and pos=" 
+                        ++ integer_to_list(Pos2) ++ " ;")
+              end, lists:seq(MaxPos, Pos+1, -1));
+        true ->
+            ok
+    end,
+    refactor_db:insert(
+      "insert into application(mid, id, pos, argument) values (" 
+      ++ integer_to_list(MId) ++ ", " ++ integer_to_list(To)++ ", " 
+      ++ integer_to_list(Pos+1) ++ ", " ++ integer_to_list(Id)++ ");");
 attach_subtree_to_node(_MId, _Id, _To, _After, _Type) ->
     error_logger:info_msg("Attach not implemented for this node_type yet.").
+
+%% =====================================================================
+%% @spec move_node(MId::integer(), Id::integer()) -> integer()
+%%
+%% @doc
+%% Changes a node id. Therefore making it possible to insert a new 
+%% elements between it and it's parent without knowing the parent's id.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Id</b> : Id of the node.
+%%</pre>
+%% @end
+%% =====================================================================    
+move_node(MId, Id) ->
+    move_node(MId, Id, erl_syntax_db:type(MId, Id)).
+
+%% =====================================================================
+%% @spec move_node(MId::integer(), Id::integer(), Type::integer()
+%%                    ) -> integer()
+%%
+%% @doc
+%% Changes a node id. Therefore making it possible to insert a new 
+%% elements between it and it's parent without knowing the parent's id.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Id</b> : Id of the node.
+%% <b>Type</b> : Type of the node.
+%%</pre>
+%% @end
+%% =====================================================================    
+move_node(MId, Id, ?VARIABLE) ->
+    Name = erl_syntax_db:variable_literal(MId, Id),
+    NewId = create_nodes:create_variable(MId, Name),
+    create_nodes:init_scope(
+      MId, refactor:get_scope_from_id(MId, Id), [NewId]),
+    refactor_db:update("update var_visib set id=" ++ integer_to_list(NewId) 
+                       ++ " where mid=" ++ integer_to_list(MId) ++ " and id=" 
+                       ++ integer_to_list(Id) ++ ";"),
+    refactor_db:update("update var_visib set target=" ++ integer_to_list(NewId) 
+                       ++ " where mid=" ++ integer_to_list(MId) 
+                       ++ " and target=" ++ integer_to_list(Id) ++ ";"),
+    delete_nodes:delete_node(MId, Id),
+    NewId;
+move_node(MId, Id, ?APPLICATION) ->
+    NameId = erl_syntax_db:application_operator(MId, Id),
+    Arguments = erl_syntax_db:application_arguments(MId, Id),
+    NewId = create_nodes:create_application(MId, NameId, Arguments),
+    create_nodes:init_scope(
+      MId, refactor:get_scope_from_id(MId, Id), [NewId]),
+    lists:map(
+      fun (Element) -> delete_nodes:detach_node(MId, Element, Id) end,
+      [NameId] ++ Arguments),
+    refactor_db:update("update fun_call set id=" ++ integer_to_list(NewId) 
+                       ++ " where mid=" ++ integer_to_list(MId) ++ " and id=" 
+                       ++ integer_to_list(Id) ++ ";"),
+    delete_nodes:delete_node(MId, Id),
+    NewId.

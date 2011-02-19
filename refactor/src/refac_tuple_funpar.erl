@@ -59,6 +59,8 @@
 
 -module(refac_tuple_funpar).
 
+-vsn('0.1').
+
 -export([untuple_or_tuple_funpar/4,preorder/3]).
 
 -include("node_type.hrl").

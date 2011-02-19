@@ -61,6 +61,8 @@
 
 -include("node_type.hrl").
 
+-vsn('0.1').
+
 -define(CONJUNCTIVE, true).
 -define(DISJUNCTIVE, true).
 

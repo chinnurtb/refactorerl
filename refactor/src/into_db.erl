@@ -58,6 +58,9 @@
 
 
 -module(into_db).
+
+-vsn('0.1').
+
 -export([parse/1, increment/1, get_id/1,set_positions/1]).
 -import(erl_syntax,[subtrees/1,update_tree/2,set_ann/2,add_ann/2,get_ann/1]).  
 

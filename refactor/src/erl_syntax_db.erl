@@ -58,6 +58,8 @@
 
 -module(erl_syntax_db).
 
+-vsn('0.1').
+
 -export([application_operator/2, application_arguments/2, 
 	 arity_qualifier_body/2, arity_qualifier_argument/2, 
 	 atom_name/2, attribute_arguments/2, attribute_name/2, 
@@ -642,7 +644,7 @@ float_value(MId, Id) ->
 form_list_elements(MId, Id) ->
     Body = refactor_db:select(
 	     "select form from form_list where mid=" ++ integer_to_list(MId) 
-	     ++ " and id=" ++ integer_to_list(Id) ++ " ;" ),
+	     ++ " and id=" ++ integer_to_list(Id) ++ " order by pos;" ),
     untuple(Body).     
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
