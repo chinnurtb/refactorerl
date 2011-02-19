@@ -31,6 +31,7 @@
 -record(module,   {name}).
 -record(record,   {name}).
 -record(field,    {name}).
--record(func,     {type, name, arity, dirty=int}).
+-record(func,     {name, arity, dirty=int,
+                   opaque = false :: false | module | name | arity}).
 -record(variable, {name}).
 -record(env,      {name, value}).

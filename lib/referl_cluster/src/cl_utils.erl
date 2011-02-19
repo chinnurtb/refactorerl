@@ -22,7 +22,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_utils).
--vsn("$Rev: 3675 $").
+-vsn("$Rev: 5049 $").
 
 -export([ignore/1, leave/1, transform_to_01/3, 
          get_defined_value/2, proplist_update/2,
@@ -36,11 +36,15 @@ ignore(Modules) ->
             lists:member(Module, Modules)
     end.
 
+%% @spec leave(term()) -> (term(),[{Attr,Out::integer()}]) -> bool()
+%%
+%% @doc Entity filter that keeps the modules given as arguments.
 leave(Modules) ->
     fun (Module, _Calls) ->
             not lists:member(Module, Modules)
     end.
 
+%% @private
 transform_to_01(_,size,N) -> N;
 transform_to_01(_,entities,L) -> L;
 transform_to_01(default,default,_N) -> 1;

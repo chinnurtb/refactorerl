@@ -78,7 +78,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reflib_args).
--vsn("$Rev: 4985 $ ").
+-vsn("$Rev: 5088 $ ").
 
 -export([string/1, string/3, integer/1, integer/3, name/1, atom/3, bool/3]).
 -export([function/1, variable/1, module/1, file/1, form/1, expression/1,
@@ -263,8 +263,19 @@ funbypos(File, Pos) ->
                                        ?Clause:form(),
                                        ?Form:func()])) of
         [Fun] -> Fun;
-        []    -> funbyref(Expr, Pos)
+        []    -> funbyexportlist(Expr, Pos)
     end.
+
+funbyexportlist(Expr, Pos) ->
+    case ?Query:exec(Expr, ?Expr:function()) of
+	[Fun] -> Fun;
+	[] -> 
+	    case ?Query:exec(Expr, ?Query:seq(?Expr:parent(), 
+					      ?Expr:function())) of
+		[Fun] -> Fun;
+		[] -> funbyref(Expr, Pos)
+	    end
+    end.						     
 
 funbyref(Expr, Pos) ->
     case ?Query:exec(Expr, ?Expr:parent()) of
@@ -419,11 +430,11 @@ recfieldbyname(File, Record, Field) ->
              ?RefError(recfld_not_found, [Record,Field])).
 
 recfieldbypos(File, Pos) ->
-    [Token] = ?Query:exec(?Query:seq([?File:find(File), ?File:token(Pos)])),
-    case ?Query:exec(Token, ?Query:seq([?Token:typexp(), [fielddef]])) of
+    [Token] = ?Query:exec(?Query:seq(?File:find(File), ?File:token(Pos))),
+    case ?Query:exec(Token, ?Query:seq(?Token:typexp(), ?Expr:fielddef())) of
         [Field]  -> Field;
         []       -> ?Query:exec1(Token,
-                                 ?Query:seq([?Token:expr(), [fieldref]]),
+                                 ?Query:seq(?Token:expr(), ?Expr:field()),
                                  ?RefError(pos_bad_type, [recfield, Pos]))
     end.
 
@@ -546,7 +557,7 @@ modbypos(File, Pos) ->
        ?Query:seq( [?File:find(File),
                     ?File:token(Pos),
                     ?Token:expr(),
-                    [modref] ]),
+                    ?Expr:module() ]),
        ?RefError(pos_bad_type, [module, Pos])).
 
 modbyfile(File) ->

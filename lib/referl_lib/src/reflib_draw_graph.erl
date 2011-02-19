@@ -23,7 +23,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 %%% @author Máté Tejfel <matej@inf.elte.hu>
 -module(reflib_draw_graph).
--vsn("$Rev: 4825 $ ").
+-vsn("$Rev: 5076 $ ").
 
 -include("lib.hrl").
 -include_lib("referl_core/src/refcore_schema.hrl").
@@ -70,10 +70,19 @@ draw(Type, Args, Filter, ToFile, ToolTip) ->
         {ok, Dev} = file:open(ToFile, [write]),
         io:format(Dev, "digraph erl {~n", []),
         {ErrTxt, Nodes} = collect_nodes(Type, Args),
-        [?Syn:walk_graph(Node, Filter,
-                         fun store_and_draw_node/4,
-                         {Dev, ToolTip})
-            || Node <- Nodes],
+        %% todo Make an option out of the additional function.
+        case Filter of
+            semdf ->
+                [?Syn:walk_graph(Node, Filter,
+                                 fun store_and_draw_node/4,
+                                 {Dev, ToolTip}, fun refanal_dataflow:back_nodes/1)
+                    || Node <- Nodes];
+            _ ->
+                [?Syn:walk_graph(Node, Filter,
+                                 fun store_and_draw_node/4,
+                                 {Dev, ToolTip})
+                    || Node <- Nodes]
+        end,
         io:format(Dev, "}~n", []),
         file:close(Dev),
         case ErrTxt of
@@ -127,7 +136,9 @@ store_and_draw_node(Node = {'$gn', From, FromIdx}, St = {Dev, ToolTip}, Links, W
     Ind = ets:update_counter(nodes, max, 1),
     ets:insert(nodes, {Node, Ind}),
 
-    io:format(Dev, "\"N~p~b\" [~s]~n", [From, FromIdx, nodelabel(Node, ToolTip)]),
+    Fmt = io_lib:format("\"N~p~b\" [~s]", [From, FromIdx, nodelabel(Node, ToolTip)]),
+    NoEndl = re:replace(Fmt, "\n", "\\\\n", [{return, list}]),
+    io:put_chars(Dev, NoEndl ++ "\n"),
 
     WalkNext(St, fun node_is_done/2),
 

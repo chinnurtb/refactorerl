@@ -1,0 +1,91 @@
+<html>
+  <head>
+    <title>RefactorErl Queries</title>
+    <meta http-equiv="result-type" result="text/html; charset=iso-8859-1">
+    <link rel="stylesheet" type="text/css" href="style.css"/>  
+  </head>
+  <body>
+    <div id="container">
+      <div id="header">
+        <h1> RefactorErl </h1>
+        <a id="logout" href="index.yaws"></a>
+      </div>
+      <div id="input">
+       <form onsubmit="newQuery();return false;">
+          <!--<strong>File:</strong>
+          <select id="fileselect" onchange="loadErl();">
+            <option value="nofile">Select...</option>
+            <erl>
+                out(Args) ->
+                    {ehtml,web_helper:get_files()}.
+            </erl>
+          </select>
+          <strong>Pos:</strong>
+          <input name="pos" id="pos" type="text" size="5">-->
+          <strong>Query:</strong>
+          <input name="query" id="query" type="text" size="55">
+          <button type="button" onclick="newQuery();">Run</button> 
+       </form>
+      </div>
+      <div id="wrapper">
+        <div id="result">
+          <h2>Query Result</h2>
+          <p id="resultP">
+          </p>
+        </div>
+      </div>
+      <div id="prev">
+        <h2>Previous Queries 
+          <button type="button" onclick="location.reload(true);">Refresh list</button> 
+        </h2>
+        <select id="query_filter" onChange="loadList()">
+          <option value="my"> My Queries </option>
+          <option value="all"> All Queries </option>
+        </select>
+        <ul id="queryList" class="queryList">
+        </ul>
+      </div>
+      <div id="footer">
+        <a href="https://plc.inf.elte.hu/erlang/dl/cheat-sheet.pdf">
+          RefactorErl Cheat-Sheet
+        </a>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://plc.inf.elte.hu/erlang/dl/manual.pdf">
+          Manual
+        </a>
+      </div>
+    </div>
+    <script>
+    function loadList() {
+        contentObj = document.getElementById('resultP');
+        var container = document.getElementById('queryList');
+        if (container) { 
+            container.innerHTML = "";
+            var li;
+            var nobr;
+            var filter = document.getElementById('query_filter');
+	    var usr = filter.options[filter.selectedIndex].value;
+            if (usr == "all") {
+	    <erl>		
+            out(Args) ->
+                web_helper:tab_to_js_create_list(all).
+            </erl>
+            } else {
+            <erl>		
+            out(Args) ->
+                Usr = 
+                     web_helper:get_value("user",yaws_api:parse_query(Args)),
+                web_helper:tab_to_js_create_list(Usr).
+            </erl>
+         }
+	 initAjax();  
+        }
+    } 
+    loadList(); 
+    </script>
+    <script src="referl.js.yaws" type="text/javascript">
+    </script>
+    <script type="text/javascript">AddFillerLink("result","prev","input")
+    </script>
+  </body>
+</html>

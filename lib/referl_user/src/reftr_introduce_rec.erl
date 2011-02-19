@@ -89,7 +89,7 @@
 %%% @author Matyas Karacsonyi <k_matyas@inf.elte.hu>
 
 -module(reftr_introduce_rec).
--vsn("$Rev: 4988 $ ").
+-vsn("$Rev: 5233 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -154,7 +154,6 @@ prepare(Args) ->
 
 transform(RName, RFields, Schema, Fun) ->
     List = lists:flatten(collect(Schema, Fun)),
-
     Called =
         [begin
              PC = ?Query:exec(Pattern, ?Expr:children()),
@@ -165,12 +164,13 @@ transform(RName, RFields, Schema, Fun) ->
                           make_record_pattern(VarName, RName, RFields, PFields)
                   end,
              replace(Pattern, PR),
-
-	     [begin
-		  Fields = ?Query:exec(R, ?Expr:children()),
+	     
+	     lists:foreach(
+	       fun (Node) ->
+		  Fields = ?Query:exec(Node, ?Expr:children()),
 		  Ret = make_record(RName, RFields, Fields),
-		  replace(R, Ret)
-	      end || R <- Return, R /= []],
+		  replace(Node, Ret)
+	       end, Return),
 
              lists:foreach(
                fun (Node) ->
@@ -182,10 +182,14 @@ transform(RName, RFields, Schema, Fun) ->
          end || {Pattern, PFields, VarName, FunCalls, Back, Return} <- List],
 
     lists:foreach(
-      fun (X) ->
-              Expr = ?Query:exec(X, ?Expr:children()),
-              Record = make_record(RName, RFields, Expr),
-              replace(X, Record)
+      fun (Node) ->
+	      case ?Query:exec(Node, ?Expr:children()) of
+		  [] ->
+		      ok;
+		  Expr ->
+		      Record = make_record(RName, RFields, Expr),
+		      replace(Node, Record)
+	      end
       end, lists:umerge(Called)).
 
 collect(Schema, Fun) ->
@@ -292,7 +296,7 @@ collect_clauses(Schema, Clause, Pattern, Fields, Visited, UsedNamesBuffer) ->
 	    
 	    {Pattern, PFields, VarName, FunCalls, Back, Return};
 	
-	_ ->
+	false ->
 	    []
     end.
 
@@ -307,6 +311,7 @@ pattern_fields(FData, [Field|Rest]) ->
         case Data of
             #expr{type=joker} ->
                 no;
+
             #expr{type=variable} ->
                 var_occ(Data, FData,
                         lists:delete(Field,
@@ -323,12 +328,12 @@ pattern_fields(FData, [Field|Rest]) ->
                     _ ->
                         Field
                 end;
+
             _ ->
                 Field
         end,
     [Ret | pattern_fields(FData, Rest)].
 
-%% @doc Collects every same typed tuple in a function clause
 var_occ(_, _, []) ->
     no;
 var_occ(C, Pattern, [Node|Rest]) ->

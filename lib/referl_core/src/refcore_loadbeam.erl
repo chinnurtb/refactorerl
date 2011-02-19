@@ -39,49 +39,39 @@ start(Input, OutputDir, ToSave) ->
             case filelib:is_file(NewName) of
                 false ->
                     case is_loaded(Module) of
-                        [] ->
-                            Result = beam_lib:chunks(Input, [abstract_code]),
-                            
-                            case Result of
-                                {ok, {_, [{abstract_code, {_, AbstractCode}}]}} ->
-                                    Ret = ?Syn:construct(transform(AbstractCode, OutputDir)),
-                                    
-                                    case ToSave of
-                                        true ->
-                                            ?FileMan:save_file(Ret);
-                                        false ->
-                                            []
-                                    end,
-                                    {ok, Ret};
-                                
-                                {error, Reason} ->
-                                    {error, Reason}
-                            end;
-                        _ ->
-                            {error, "Module is already loaded"}
+                        false -> perform(Input, OutputDir, ToSave);
+                        true  -> {error, "Module is already loaded"}
                     end;
-                true ->
-                    {error, "Output file already exists"}
+                true -> {error, "Output file already exists"}
             end;
-        false ->
-            {error, "Output directory does not exist"}
+        false -> {error, "Output directory does not exist"}
     end.
 
-%% @spec is_loaded(string()) -> Result
-%%           Result = [node()] | []
-%% @doc Checks whether the file has already loaded.
+perform(Input, OutputDir, ToSave) ->
+    case beam_lib:chunks(Input, [abstract_code]) of
+        {ok, {_, [{abstract_code, {_, AbstractCode}}]}} ->
+            FileNode = ?Syn:construct(transform(AbstractCode, OutputDir)),
+            ToSave andalso ?FileMan:save_file(FileNode),
+            {ok, FileNode};
+        {error, Reason} -> {error, Reason}
+    end.
+
+%% @spec is_loaded(string()) -> boolean()
+%% @doc Checks whether the file is already loaded.
 is_loaded(ModuleName) ->
-    Files = [filename:basename((?Graph:data(Node))#file.path, ".erl") || {file, Node} <- ?Graph:links(?Graph:root())],
-    [Node || Node <- Files, Node == ModuleName].
+    LoadedFiles = [filename:basename((?Graph:data(Node))#file.path, ".erl")
+                   || Node <- ?Graph:path(?Graph:root(), [file])],
+    [1 || FileName <- LoadedFiles, FileName == ModuleName] /= [].
 
 %% @spec transform([AbstractCode], string()) -> AbstractCodeTree
 %%   AbstractCodeTree = {atom(), Value} |
 %%                      {{atom(), atom()}, Value} |
 %%                      {{atom(), atom(), int()}, Value}
 %%   Value = atom() | float() | int() | list()
-%% @doc Creates a more general abstract code tree, from the Erlang abstract code,
-%% which was compiled into a Beam file. It can easily load to RefactorErl using
-%% build/1 function.
+%% @doc Creates a tree description from an Erlang abstract code, which
+%% easily can be loaded into RefactorErl by using {@link
+%% erl_syntax:construct/1}.
+
 transform([{attribute, _, file, {FileName, 1}} | AbsCode], OutputDir) ->
     {{file, filename:join(OutputDir, FileName)},
      [Node || Node <- [transform(Node) || Node <- AbsCode], Node /= []]}.

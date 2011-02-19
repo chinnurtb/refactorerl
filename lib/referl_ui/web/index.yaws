@@ -1,0 +1,19 @@
+<html>
+  <head>
+    <title>RefactorErl Queries</title>
+    <meta http-equiv="result-type" result="text/html; charset=iso-8859-1">
+    <link rel="stylesheet" type="text/css" href="style.css"/>  
+  </head>
+  <body>
+    <div id="header">
+      <h1> RefactorErl - Semantic Queries </h1>
+    </div>
+    <div id="input">     
+      <form type="post" action="main.yaws">
+        <strong>Username:</strong>
+        <input name="user" id="user" type="text" size="30">
+          <button type="submit">Ok</button> 
+      </form>
+    </div>
+  </body>
+</html>

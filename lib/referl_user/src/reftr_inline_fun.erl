@@ -115,7 +115,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_inline_fun).
--vsn("$Rev: 4763 $ ").
+-vsn("$Rev: 5043 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -556,10 +556,6 @@ get_pair(N, NList)->
         false ->
             no_pair
     end.
-
-
-%% FIXME ?Expr:top() vagy 3 melysegig maszunk fel..
-%% Miert csak infix_expr lehet parameter? Pl: list cons is lehet es meg sok mas
 
 get_app_node(Expr)->
     Parent = ?Query:exec1(Expr, ?Expr:parent(),

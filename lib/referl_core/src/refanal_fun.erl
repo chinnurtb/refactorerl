@@ -27,6 +27,8 @@
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
 
+-export([update_funprop/1]).
+
 -include("core.hrl").
 
 %%% @private
@@ -135,12 +137,28 @@ insert(Parent, _, {Tag, Child}, _) ->
     end,
     update_funprop(Child).
 
+
+%% Connects the parameter semantic nodes to the formal parameters by `flow' edges.
+add_param_flows(Fun, FunCls) ->
+    [add_cl_param_flows(Fun, FunCl) || FunCl <- FunCls].
+
+
+add_cl_param_flows(Fun, FunCl) ->
+    Patts = ?Graph:path(FunCl, [pattern]),
+    FPars = ?Graph:path(Fun, [fpar]),
+    [?Graph:mklink(FPar, flow, Patt) || {Patt, FPar} <- lists:zip(Patts, FPars)].
+
+
 add(Form, #form{type=func}, Mod) ->
     Cls = [Cl || {funcl, Cl} <- ?Anal:children(Form)],
     Defs = [fundef(Cl) || Cl <- Cls],
     case lists:usort(Defs) of
-        [Def] -> ?NodeSync:add_ref(func, {def, Form}, {Mod, Def});
-        _     -> ok
+        [Def] ->
+            ?NodeSync:add_ref(func, {def, Form}, {Mod, Def}),
+            [Fun] = ?Graph:path(Form, [fundef]),
+            add_param_flows(Fun, Cls);
+        _ ->
+            ok
     end,
     [{Cl, {Mod, Cl}} || Cl <- Cls];
 add(Form, #form{type=export}, Mod) ->
@@ -323,6 +341,9 @@ update(_,_) -> ok.
 
 
 name(N, #expr{type=atom, value=Name}) -> {N, Name};
+name(N, #expr{type=implicit_fun}) ->
+    [{esub, FId}, {esub, _Arity}] = ?Anal:children(N),
+    name(FId, ?Anal:data(FId));
 name(C, #expr{type=infix_expr, value=':'}) ->
     [{esub, Mod}, {esub, Fun}] = ?Anal:children(C),
     case {name(Mod, ?Anal:data(Mod)), name(Fun, ?Anal:data(Fun))} of
@@ -378,10 +399,12 @@ node_funprop(Node, #expr{type=Type}, {Pure, Calls}) ->
 node_funprop(_, _, Props) -> Props.
 
 add_calls(Node, Calls) ->
+    FunLinks = [funeref, dynfuneref, ambdynfuneref,
+                funlref, dynfunlref, ambdynfunlref],
+    %% should we separate dynamic calls from the simple ones?
     ordsets:union(
       Calls,
-      lists:usort([F || {T, F} <- ?Graph:links(Node),
-                        T == funeref orelse T == funlref])).
+      lists:usort([F|| {T, F} <- ?Graph:links(Node), lists:member(T, FunLinks)])).
 
 ctx_info(Expr)->
     FunCl = get_funcl(Expr),

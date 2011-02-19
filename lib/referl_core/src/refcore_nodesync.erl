@@ -218,6 +218,7 @@ handle_clean(Drf) ->
 %% -----------------------------------------------------------------------------
 %% Module operations
 
+get_module(-1, Drf) -> get_module('/opaque', Drf);
 get_module(Name, Drf) when is_atom(Name) ->
     case ?Graph:path(?Graph:root(), [{module, {name, '==', Name}}]) of
         [Mod] -> Mod;
@@ -295,14 +296,59 @@ clean_module(Mod) ->
 %% -----------------------------------------------------------------------------
 %% Function operations
 
+%% Adds a parameter node for each parameter, used for data flow purposes.
+%% Even though these are #expr{} nodes (the required end points of flow edges),
+%% they are not part of the syntax tree.
+add_param_nodes(Node, Ary) when Ary >= 0 ->
+    Pars = [?Graph:create(#expr{type=fpar}) || _ <- lists:seq(1, Ary)],
+    [?Graph:mklink(Node, fpar, Par) || Par <- Pars];
+add_param_nodes(_, _) -> ok.
+
+%% Adds a return node to the function node, used for data flow purposes.
+add_return_node(Node) ->
+    FRet = ?Graph:create(#expr{type=fret}),
+    ?Graph:mklink(Node, fret, FRet).
+
+%% Returns the function node belonging to Mod:Name/Ary.
+%% Creates the function node (and param nodes) if they do not already
+%% exist. When Arity is a negative number, the function arity is
+%% ambiguous and the number stands for a lower limit of the function
+%% arity - in the latter case the fun is inferred by using a heuristic.
+get_func({Mod, {-1, Ary}}, Drf) when is_integer(Ary) ->
+    get_func({Mod, {'opaque', Ary}}, Drf);
 get_func({Mod, {Name, Ary}}, Drf) when is_atom(Name), is_integer(Ary) ->
     MN = get_module(Mod, Drf),
+    OP = if Ary >= 0 -> '==';
+            true     -> '>='
+         end,
     case ?Graph:path(MN, [{funimp, {{name, '==', Name}, 'and',
-                                    {arity, '==', Ary}}}]) ++
+                                    {arity, OP, abs(Ary)}}}]) ++
          ?Graph:path(MN, [{func,   {{name, '==', Name}, 'and',
-                                    {arity, '==', Ary}}}]) of
-        [Fun] -> Fun;
-        []    -> create(MN, func, #func{name=Name, arity=Ary}, Drf)
+                                    {arity, OP, abs(Ary)}}}]) of
+        [Fun] -> if Ary >= 0 -> Fun;
+                    true     -> {heuristic, Fun}
+                 end;
+        []    ->
+            Opaque = case {Mod =:= -1, Name =:= -1, Ary < 0} of
+                         {false, false, false} -> false;
+                         {true,  false, false} -> module;
+                         {false, true , false} -> name;
+                         {false, false, true } -> arity;
+                         %% TODO: should we support '/opaque':opaque/-1? etc
+                         {_, _, _} -> throw("too many unknown function attributes")
+                     end,
+            Node = create(MN, func, #func{name = case Name of
+                                                     -1 -> opaque;
+                                                     _  -> Name
+                                                 end,
+                                          arity = Ary,
+                                          opaque = Opaque}, Drf),
+            add_param_nodes(Node, Ary),
+            add_return_node(Node),
+            case Opaque of
+                false -> Node;
+                _ -> {opaque, Node}
+            end
     end;
 
 get_func(Node, _Drf) ->
@@ -317,7 +363,7 @@ get_func(Node, _Drf) ->
     end.
 
 add_funref(Ref, Spec, Drf) ->
-    Fun = get_func(Spec, Drf),
+    Fun = get_func(Spec, Drf), % {Mod, {Name, Ary}}
     ets:delete(Drf, Fun),
     case Ref of
         {exp, {Expr, ModSpec}} ->
@@ -334,38 +380,52 @@ add_funref(Ref, Spec, Drf) ->
                     ok = ?Graph:mklink(Mod, funimp, Fun);
                 [OldFun] ->
                     move_refs(funeref, fun get_func/2, OldFun, Fun, Drf),
-                    move_refs(funlref, fun get_func/2, OldFun, Fun, Drf),
-                    move_refs(fundef, fun get_func/2, OldFun, Fun, Drf),
+                    move_refs(funlref, fun get_func/2, OldFun, Fun, Drf), %% TODO: dyn and ambdyn?
+                    move_refs(fundef,  fun get_func/2, OldFun, Fun, Drf),
+                    move_refs(funcall, fun get_func/2, OldFun, Fun, Drf),
                     ets:insert(Drf, Fun),
                     ok = ?Graph:rmlink(Mod, func, OldFun),
                     ok = ?Graph:mklink(Expr, funeref, Fun),
                     ok = ?Graph:mklink(Mod, funimp, Fun)
             end;
-        {lref, Expr} ->
-            #func{name=Name, arity=Ary} = ?Graph:data(Fun),
-            #expr{type=Type} = ?Graph:data(Expr),
-            case erl_internal:bif(Name, Ary) orelse (Type =:= guard
-                 andalso erl_internal:type_test(Name, Ary) ) of
-                true ->
-                    ets:insert(Drf, {Fun}),
-                    Bif = get_func({erlang, {Name, Ary}}, Drf),
-                    case lists:member({Name, Ary}, dirty_bifs()) of
-                        false ->
-                            ?Graph:update(Bif,
-                                          (?Graph:data(Bif))#func{dirty=no});
-                        _ -> ok
-                    end,
-                    ets:delete(Drf, {Bif}),
-                    ok = ?Graph:mklink(Expr, funlref, Bif);
-                false -> ok = ?Graph:mklink(Expr, funlref, Fun)
-            end;
-        {eref, Expr} -> ok = ?Graph:mklink(Expr, funeref, Fun);
+        {lref, Expr}       -> add_funlref(Drf, Fun, Expr, funlref);
+        {dynlref, Expr}    -> add_funlref(Drf, Fun, Expr, dynfunlref);
+        {eref, Expr}       -> add_funeref(Fun, Expr, funeref);
+        {dyneref, Expr}    -> add_funeref(Fun, Expr, dynfuneref);
         {def, Form} ->
             case ?Graph:index(Form, fundef, Fun) of
                 none -> ok = ?Graph:mklink(Form, fundef, Fun);
                 _    -> ok
             end
     end.
+
+add_funlref(Drf, {opaque, Fun}, Expr, dynfunlref) ->
+    add_funlref(Drf, Fun, Expr, ambdynfunlref);
+add_funlref(Drf, {heuristic, Fun}, Expr, dynfunlref) ->
+    add_funlref(Drf, Fun, Expr, ambdynfunlref);
+add_funlref(Drf, Fun, Expr, Lnk) ->
+    #func{name=Name, arity=Ary} = ?Graph:data(Fun),
+    #expr{type=Type}            = ?Graph:data(Expr),
+    case erl_internal:bif(Name, Ary) orelse
+        (Type =:= guard andalso erl_internal:type_test(Name, Ary)) of
+        true ->
+            ets:insert(Drf, {Fun}),
+            Bif = get_func({erlang, {Name, Ary}}, Drf),
+            case lists:member({Name, Ary}, dirty_bifs()) of
+                false -> ?Graph:update(Bif, (?Graph:data(Bif))#func{dirty=no});
+                _     -> ok
+            end,
+            ets:delete(Drf, {Bif}),
+            ok = ?Graph:mklink(Expr, Lnk, Bif);
+        false -> ok = ?Graph:mklink(Expr, Lnk, Fun)
+    end.
+
+add_funeref({opaque, Fun}, Expr, dynfuneref) ->
+    add_funeref(Fun, Expr, ambdynfuneref);
+add_funeref({heuristic, Fun}, Expr, dynfuneref) ->
+    add_funeref(Fun, Expr, ambdynfuneref);
+add_funeref(Fun, Expr, Lnk) ->
+    ok = ?Graph:mklink(Expr, Lnk, Fun).
 
 del_funref(Ref, Spec, Drf) ->
     try get_func(Spec, Drf) of
@@ -377,10 +437,22 @@ del_funref(Ref, Spec, Drf) ->
                         [Mod] -> ok = ?Graph:rmlink(Mod,  funimp,  Fun);
                         _ -> ok
                     end;
-                {exp,  Mod}   -> ok = ?Graph:rmlink(Mod,  funexp,  Fun);
-                {lref, Expr}  -> ok = ?Graph:rmlink(Expr, funlref, Fun);
-                {eref, Expr}  -> ok = ?Graph:rmlink(Expr, funeref, Fun);
-                {def,  Form}  -> ok = ?Graph:rmlink(Form, fundef,  Fun)
+                {exp,  Mod} ->
+                    ok = ?Graph:rmlink(Mod,  funexp,  Fun);
+                {lref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, funlref, Fun);
+                {dynlref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, dynfunlref, Fun);
+                {ambdynlref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, ambdynfunlref, Fun);
+                {eref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, funeref, Fun);
+                {dyneref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, dynfuneref, Fun);
+                {ambdyneref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, ambdynfuneref, Fun);
+                {def,  Form} ->
+                    ok = ?Graph:rmlink(Form, fundef,  Fun)
             end
     catch
         not_found -> ok
@@ -388,7 +460,9 @@ del_funref(Ref, Spec, Drf) ->
 
 
 clean_func(Func) ->
-    clean_node(Func, [{fundef, back}, {funeref, back}, {funlref, back}])
+    clean_node(Func, [{fundef, back}, {funeref, back}, {funlref, back},
+                      {dynfuneref, back}, {dynfunlref,back},
+                      {ambdynfuneref, back}, {ambdynfunlref,back}])
         andalso
         begin
             ?FunProp:remove(Func),

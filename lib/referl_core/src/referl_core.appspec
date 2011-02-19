@@ -8,4 +8,4 @@
 {env, [{root_anal, refanal_root},
        {form_anal, [refanal_expr, refanal_var, refanal_mod,
                     refanal_fun, refanal_rec, refanal_dataflow,
-                    refanal_pp_anal]}]}.
+                    refanal_dynfun, refanal_pp_anal]}]}.

@@ -21,7 +21,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(refusr_sq_ui).
--vsn("$Rev: 5016 $ ").
+-vsn("$Rev: 5077 $ ").
 
 -export([poscalc/2, show/2, display/2]).
 
@@ -51,7 +51,7 @@
 
 
 %%% ============================================================================
-%%% Show
+%%% Position calculation
 
 %% @type linecol() = {natural(), natural()}
 
@@ -162,6 +162,7 @@ positions0(Type, Nodes, ShowPos) ->
       dict:new(),
       NodesWithTokens).
 
+%% -----------------------------------------------------------------------------
 
 file_and_tokens(function, Node) ->
    ?Query:exec(Node, ?Query:seq(?Fun:definition(),
@@ -196,7 +197,8 @@ file_and_tokens(variable, Node) ->
         [] -> []
     end.
 
-%% -----------------------------------------------------------------------------
+%%% ============================================================================
+%%% Show textually
 
 %% @doc Shows a positionally annotated query result in a more textually explicit
 %%      form.
@@ -249,31 +251,10 @@ capstr(List,Str)->
 cap(List,Lid)->
     lists:append([[Jar,Lid] || Jar <- List]).
 
-%% @doc Outputs a `show'n query result via standard output, a file or
-%% a UI message.
-%% @spec (shownres(), Display::{stdio | {iodev,Dev} | msg, postype()}) -> any()
-display(List, {stdio, LineNum}) ->
-    io:put_chars(lined(List,LineNum));
-display(List, {{iodev,Dev}, LineNum}) ->
-    io:put_chars(Dev, lined(List,LineNum));
-display(List, {msg, LineNum}) ->
-    io:put_chars(lined(List,LineNum)), % debug
-    ?UI:message(queryres, [{Pos, lists:flatten(Text)} || {Pos, Text} <- List]).
-
-lined(List,true)->
-    [case Pos of
-         X when X==nopos orelse X==1 ->
-             Text;
-         {_File,1,1} ->
-             Text;
-         {File,{Line1,_Col1},{_Line2,_Col2}} ->
-             File ++ ":" ++ io_lib:print(Line1) ++ ": " ++ Text
-     end || {Pos, Text} <- List];
-lined(List,false) ->
-    [Text || {_, Text} <- List].
-
 texts(Type, PosNodes)->
     [{Pos,text(Type, Node)} || {Pos,Node} <- PosNodes].
+
+%% -----------------------------------------------------------------------------
 
 text(file, File) ->
     case ?Graph:class(File) of
@@ -301,3 +282,29 @@ text(field, Field) ->
 text(expression, Expr) -> %@todo strip comments
     Text = string:strip(lists:flatten(?Syn:tree_text(Expr))),
     string:strip(Text, both, $\n).
+
+%%% ============================================================================
+%%% Display on a device
+
+%% @doc Outputs a `show'n query result via standard output, a file or
+%% a UI message.
+%% @spec (shownres(), Display::{display(), postype()}) -> any()
+display(List, {stdio, LineNum}) ->
+    io:put_chars(lined(List,LineNum));
+display(List, {{iodev,Dev}, LineNum}) ->
+    io:put_chars(Dev, lined(List,LineNum));
+display(List, {msg, LineNum}) ->
+    io:put_chars(lined(List,LineNum)), % debug
+    ?UI:message(queryres, [{Pos, lists:flatten(Text)} || {Pos, Text} <- List]).
+
+lined(List,true)->
+    [case Pos of
+         X when X==nopos orelse X==1 ->
+             Text;
+         {_File,1,1} ->
+             Text;
+         {File,{Line1,_Col1},{_Line2,_Col2}} ->
+             File ++ ":" ++ io_lib:print(Line1) ++ ": " ++ Text
+     end || {Pos, Text} <- List];
+lined(List,false) ->
+    [Text || {_, Text} <- List].

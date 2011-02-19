@@ -26,7 +26,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_distfun).
--vsn("$Rev: 3185 $").
+-vsn("$Rev: 5049 $").
 
 -include("cluster.hrl").
 
@@ -322,6 +322,8 @@ call_fun_cnt(Fun1, Attr1, Fun2, Attr2) ->
     lexgr_dist([min(Call12, Call21), SameRec, Call12 + Call21]). %, Similar]).
 
 %% @spec call_fun_wgt(float()) -> dist_fun()
+%% @doc Generate a distance function from the given Weight with the 
+%%      result of `pow_size_fun_gen(Weight)'
 call_fun_wgt(Weight) ->
     SizeFun = pow_size_fun_gen(Weight),
     fun (F1, Attr1, F2, Attr2) ->
@@ -417,7 +419,7 @@ count_objects_refs(Objects, RefList, AddFun) ->
         fun(Object, Count) -> AddFun(Count, get_value(Object, RefList, 0)) end,
         0, Objects).
 
-    
+%% @private    
 used_records(Attr) ->
     lists:usort([R || {R=#rec_attr{}, W} <- Attr, W>0]).
 

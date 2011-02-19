@@ -30,7 +30,7 @@
 (define-refac-operation (refactorerl-semantic-query :menu "Run query"
                                                     :key "sq"
                                                     :menu-group query
-                                                    :precondition :buffer-state)
+                                                    :precondition :server)
   ((pos :point) (query "Query"))
   "Runs a semantic query."
   (refac-transform 'refusr_sq

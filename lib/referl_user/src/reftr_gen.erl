@@ -117,7 +117,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reftr_gen).
--vsn("$Rev: 4793 $").
+-vsn("$Rev: 5239 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -198,17 +198,19 @@ prepare(Args) ->
         R = replace_expressions(Parent,VarName,Exprs, Type, UsedVarNames, Link),
         NewApps = insert_app_arg(FunAppData, Type, UsedVarNames),
         insert_rec_app_arg(RecAppData, VarName),
-        insert_old_fun(File, ClData, NewExprs,Type,UsedVarNames, Index, Export),
+        Ret = insert_old_fun(File, ClData, NewExprs,Type,
+                             UsedVarNames, Index, Export),
         insert_fun_pattern(VarName, FunCl, RecCls, ClData),
         move_macros_records(Moves, AppInd),
-        {R, NewApps}
+        {R, NewApps, Ret}
      end,
      fun(Tuple) ->
         Transform = prepare_guard(Pairs),
         transform_guard(Transform),
         Tuple
      end,
-     fun({R, NewApps}) ->
+     fun({R, NewApps, Ret}) ->
+        get_comments(Ret),
         case length(Exprs) of
             1 -> ?Syn:put_comments([R], Comments);
             _ -> [?Syn:put_comments(NewExprs, Comments) ||
@@ -216,6 +218,10 @@ prepare(Args) ->
         end
      end].
 
+get_comments({Fun, Apps}) -> 
+    ?Syn:get_comments(Fun), 
+    [?Syn:get_comments(App) || App <- Apps]; 
+get_comments(_) -> ok.
 
 %%% ===========================================================================
 %%% Checks
@@ -516,7 +522,7 @@ replace_expressions(Parent, VarName, DelExprs, Type, ArgNames, Link)->
 insert_old_fun(_, _, _, _, _, _, false)->
     ok;
 insert_old_fun(File, ClData, Exprs, Type, ArgNames, Index, true)->
-    FunCls =
+    Data =
         lists:map(
             fun({[Name], Pats, Guard, _})->
                 CGuardList = [{?Syn:copy(Expr), Expr}||Expr<-Guard],
@@ -551,18 +557,20 @@ insert_old_fun(File, ClData, Exprs, Type, ArgNames, Index, true)->
                                      [{esub, CName2}, {esub, ArgListNode}]),
                 case Type of
                     guard ->
-                        ?Syn:create(#clause{type = fundef}, [{name, CName1},
-                                                        {pattern, CPats1},
-                                                        {body,  [NewApp]}]);
+                        C = ?Syn:create(#clause{type = fundef}, [{name, CName1},
+                                        {pattern, CPats1}, {body,  [NewApp]}]);
                     _ ->
-                       ?Syn:create(#clause{type = fundef}, [{name, CName1},
-                                                        {pattern, CPats1},
-                                                        {guard, CGuard},
-                                                        {body,  [NewApp]}])
-                end
+                        C = ?Syn:create(#clause{type = fundef}, 
+                                        [{name, CName1}, {pattern, CPats1}, 
+                                         {guard, CGuard}, {body,  [NewApp]}])
+                end,
+                {C, NewApp}
             end, ClData),
+    FunCls = [Cl || {Cl, _} <- Data], 
+    Apps = [App || {_, App} <- Data], 
     OldFun = ?Syn:create(#form{type = func}, [{funcl, FunCls}]),
-    ?File:add_form(File, Index, OldFun).
+    ?File:add_form(File, Index, OldFun),
+    {OldFun, Apps}.
 
 find_copy_expr(CExprsList)->
     {_Exprs, CExprs} = lists:unzip([lists:keyfind(Expr, 1, List) || 

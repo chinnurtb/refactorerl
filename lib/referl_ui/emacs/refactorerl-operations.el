@@ -268,6 +268,18 @@ moved can be selected from a list.
 ;; -----------------------------------------------------------------------------
 ;; Functions
 
+(define-refac-operation (refactorerl-funapp-to-proc :menu "Delegate function application to new process" :key "fp"
+                                                    :menu-group func
+                                                    :precondition :buffer-state)
+  ((pos :point))
+  "Performs the Delegate function application to new process refactoring.
+
+1. Position the cursor over the name of the function application to be delegated to a separate process.
+2. Call the refactoring from the menu or with \\[refactorerl-funapp-to-proc]."
+  (refac-transform 'reftr_funapp_to_proc
+                   :file buffer-file-name
+                   :position pos))
+
 (define-refac-operation (refactorerl-expand-funexpr :menu "Expand fun expression" :key "xf"
                                                     :menu-group func
                                                     :precondition :buffer-state)

@@ -124,7 +124,7 @@
 %
 
 -module(ri).
--vsn("$Rev: 5038 $ ").
+-vsn("$Rev: 5224 $ ").
 
 -export([help/0, h/0, h/1]).
 
@@ -161,6 +161,8 @@
 
 -export([build/0]).
 
+-export([start_yaws/0, stop_yaws/0]).
+
 -export([errors/0, errors/1]).
 
 -export([error_text/2]).
@@ -169,6 +171,8 @@
 %-export([getparen/1]). %%DEBUG
 
 -export([cat_errors/0, cat_errors/1]).
+
+-export([modsave/1, modload/1]).
 
 -include("ui.hrl").
 -include_lib("referl_core/include/core_export.hrl").
@@ -630,47 +634,33 @@ q(ModFile,Pos=[A|_],Q=[B|_], Options=[O|_])
     q_(Q,Options,addqmodpos(ModFile,Pos)).
 
 addqnone()->
-    fun()->
-            []
-    end.
+    [].
 
 addqmod(ModFile)->
-    fun()->
-            [{file,mod2filec(ModFile)}]
-    end.
+    [{file,mod2filec(ModFile)}].
 
 addqmodpos(ModFile,Pos)->
-    fun()->
-            File = mod2filec(ModFile),
-            [{file,File},
-             {position,to_pos(File,Pos)}]
-    end.
+    File = mod2filec(ModFile),
+    [{file,File},
+     {position,to_pos(File,Pos)}].
 
-q_(Query=[Ch|_],Options0,Fun)
-  when is_integer(Ch), is_function(Fun,0) ->
+q_(Query=[Ch|_],Options,Start)
+  when is_integer(Ch), is_list(Start) ->
     catch_referr(
       fun()->
-              Options = proplists:unfold(Options0),
-              PosL0 =
+              DispOpt =
                   [case E of
                        {out,FileName} ->
                            {ok,IODev} = file:open(FileName, [write]),
                            % the file will be closed on process termination
-                           {false,[{display,{iodev,IODev}}]};
-                       {linenum,B}when is_boolean(B)->
-                           {true,[E]};
+                           [{output,{iodev,IODev}}];
+                       {linenum,true}->
+                           [{positions,linecol}];
                        _ ->
                            message("unknown option: "++io_lib:print(E)),
-                           {false,[]}
-                   end || E <- Options],
-              {Pos,L0} = lists:unzip(PosL0),
-              ShowPos =
-                  case lists:any(fun(B)->B end,Pos) of
-                      true  -> linecol;
-                      false -> none
-                  end,
-              L = lists:append(L0),
-              ?SQ:run(L ++ [{show_pos, ShowPos} | Fun()], Query)
+                           []
+                   end || E <- proplists:unfold(Options)],
+              ?SQ:run(lists:append(DispOpt), Start, Query)
       end).
 
 %%% ============================================================================
@@ -890,8 +880,9 @@ add(AppBase, App) ->
                         true ->
                             add_src_dir(filename:join(Base, AppS));
                         false ->
-                            case Dirs == [Dir || Dir <- Dirs, {match, _} <- [re:run(Dir, AppS ++ "[a-zA-Z]*-[0-9.]*")]] of
-                                true ->
+                            case Dirs == [Dir || Dir <- Dirs, {match, _}
+                             <- [re:run(Dir, AppS ++ "[a-zA-Z]*-[0-9.]*")]] of
+                                true -> %@todo format
                                     add_src_dir(lists:last(Dirs));
                                 false ->
                                     message(AppNotFound),
@@ -1650,7 +1641,8 @@ cat_errors(File) ->
         true ->
             MatchingForms =
                 [{{GForm, (?ESG:data(GForm))#form.hash}, {{FHash, FText}, Idx}}
-                 || {GForm, {{FHash, FText}, Idx}} <- lists:zip(GForms, ?MISC:index_list(FileHashWForms))],
+                 || {GForm, {{FHash, FText}, Idx}} <-
+                  lists:zip(GForms, ?MISC:index_list(FileHashWForms))],
             case [{Idx, GForm, FText}
                     ||  {{GForm, Hash}, {{FHash, FText}, Idx}} <- MatchingForms,
                         Hash =/= FHash] of
@@ -1691,7 +1683,8 @@ is_similar(Txt1, Txt2) ->
 
 
 tokens_to_text(Tokens, Eol) ->
-    ?FileMan:orig_text(Eol, lists:flatten([Pre ++ Text ++ Post || #token{prews=Pre, text=Text, postws=Post} <- Tokens])).
+    ?FileMan:orig_text(Eol, lists:flatten([Pre ++ Text ++ Post ||
+     #token{prews=Pre, text=Text, postws=Post} <- Tokens])).
 
 %% @todo Move to ?Syn.
 flat_text(Form) ->
@@ -1730,3 +1723,24 @@ pmap_gather(N) ->
 
 pmap_f(Parent, Fun, X) ->
     Parent ! {pmap, self(), (catch Fun(X))}.
+
+%% -----------------------------------------------------------------------------
+
+modsave(Mod) ->
+    refcore_store_graph:save(Mod).
+
+modload(Mod) ->
+    refcore_store_graph:load(Mod).
+
+%% -----------------------------------------------------------------------------
+
+%% @doc Start yaws
+start_yaws() ->
+    web_helper:init_tab(),
+    application:start(yaws).
+
+%% @doc Stop yaws 
+stop_yaws() ->
+    web_helper:close_tab(),
+    application:stop(yaws).
+

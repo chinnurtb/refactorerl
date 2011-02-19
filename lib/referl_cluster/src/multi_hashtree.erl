@@ -128,24 +128,24 @@ delete(#multi_hashTree{nodes=NodesETS, hashes=HashesETS}) ->
 %% =============================================================================
 %% General queries
 
-%%
+%% @doc Tests the argument whether is a hashtree or not.
 %%
 is_hashtree(#multi_hashTree{}) -> true;
 is_hashtree(_) -> false.
 
-%%
+%% @doc Returns the levels number of the multi_hashtree given as argument.
 %%
 get_levels(#multi_hashTree{levels=N}) -> N.
 
-%%
+%% @doc Returns the leaf size of the multi_hashtree given as argument.
 %%
 get_leaf_size(#multi_hashTree{leaf_size=LS}) -> LS.
 
-%%
+%% @doc Returns the size of the multi_hashtree given as argument.
 %%
 get_hashtable_size(#multi_hashTree{hash_size=HS}) -> HS.
-
-%%
+ 
+%% @doc Returns the hash function of the multi_hashtree given as argument.
 %%
 get_hash_fun(#multi_hashTree{hash_fun=HF}) -> HF.
 
@@ -155,7 +155,7 @@ get_hash_fun(#multi_hashTree{hash_fun=HF}) -> HF.
 %% Operations
 
 
-%%
+%% @private
 %%
 insertL(Elem, NList, HT=#multi_hashTree{hash_fun=HashFun}) ->
     insert(Elem, lists:map(HashFun, NList), HT).
@@ -227,7 +227,7 @@ insert_(_LeafSize,K, NodeId,LeafElems, Elem,[Hash|Hashes],
     insert_(innode,K, NodeId,ChildIds, Elem,[Hash|Hashes], HT).
 
 
-%%
+%% @private
 %%    
 lookupL(NList, HT=#multi_hashTree{hash_fun=HashFun}) ->
     lookup(lists:map(HashFun, NList), HT).
@@ -260,7 +260,7 @@ lookup_(_LeafSize,_K,LeafElems, Hashes, #multi_hashTree{hashes=HashesETS}) ->
                  LeafElems).
 
 
-%%
+%% @private
 %%    
 subsetL(NplusList, HT=#multi_hashTree{hash_fun=HashFun}) ->
     subset(lists:map(HashFun, NplusList), HT).
@@ -308,7 +308,7 @@ subset_(_LeafSize,_K,LeafElems, {_PL,Hashes}, #multi_hashTree{hashes=HashesETS},
         LeafElems) ++ AccElems.
 
 
-%%
+%% @private
 %%
 simple_erase(Elems, #multi_hashTree{nodes=NodesETS}) when is_list(Elems) ->
     ReplaceNodes = ets:foldl(

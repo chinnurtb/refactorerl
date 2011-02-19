@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq_lib).
--vsn("$Rev: 4994 $ ").
+-vsn("$Rev: 5088 $ ").
 
 -include("user.hrl").
 
@@ -30,7 +30,7 @@
 -record(selector, {name, type, func}).
 -record(property, {name, type, func}).
 
--export([entity/1, sel_fun/2, prop_fun/2, sel_type/2, prop_type/2]).
+-export([sel_fun/2, prop_fun/2, sel_type/2, prop_type/2]).
 -export([init_sel/2]).
 -export([error_text/2]).
 
@@ -44,7 +44,9 @@ error_text(illegal_property, Params) ->
 error_text(illegal_selector, Params) ->
     io_lib:format("illegal ~p selector: ~p  ", Params).
 
-
+%% @spec init_sel(Params::proplist(), SelectorName::atom()) ->
+%%               {Type::atom(), [entity()]}
+%% @doc Returns a list of entities and their type.
 init_sel(Params,  '@fun')      -> {function,   [?Args:function(Params)]};
 init_sel(Params,  '@var')      -> {variable,   [?Args:variable(Params)]};
 init_sel(Params,  '@macro')    -> {macro,      [?Args:macro(Params)]};
@@ -60,30 +62,25 @@ init_sel(Params,  '@def') ->
     Pos = proplists:get_value(position, Params),
 
     [Token] = ?Query:exec(?Query:seq(?File:find(FilePath),?File:token(Pos))),
-    Mac = ?Query:exec(Token, ?Query:any([{llex,back},mref],
-                                        [{{flex,back}, {type, '==', macro}}])),
-    Rec = [Form || Form <- ?Query:exec(Token, ?Token:form()),
-                   ?Form:type(Form) == record],
-    Ent = case {Mac, Rec} of
-              {[], []} ->
-                  [Expr] = ?Query:exec(Token, ?Token:expr()),
-                  ?Query:exec(
-                     Expr,
-                     ?Query:any(
-                        [ ?Expr:variables(),
-                          ?Expr:fielddef(),
-                          ?Expr:field(),
-                          ?Query:seq(?Expr:parent(), ?Expr:record()),
-                          ?Expr:module(),
-                          ?Query:seq([?Expr:nameof(),
-                                      ?Clause:form(), ?Form:func()]),
-                          ?Query:seq(?Expr:parent(), ?Expr:function()),
-                          ?Query:seq([?Expr:parent(),
-                                      ?Expr:parent(), ?Expr:function()]) ]));
-              {Mac, []} -> Mac;
-              _         -> Rec
-          end,
-    Type = case Ent of
+    Entity =
+        ?Query:exec(
+           Token,
+           ?Query:any(
+              [ [{llex,back}, mref], %macro ref
+                ?Query:seq(?Token:expr(), ?Expr:variables()), %var
+                ?Query:seq(?Token:expr(), ?Expr:field()), %field ref
+                ?Query:seq(?Token:expr(), ?Expr:record()), %recref
+                ?Query:seq(?Token:typexp(), ?Expr:fielddef()), %field def
+                ?Query:seq(?Token:expr(), ?Expr:module()), %modq
+                ?Query:seq([?Token:expr(), ?Expr:parent(), ?Expr:function()]),
+                ?Query:seq([?Token:expr(), ?Expr:parent(),
+                            ?Expr:parent(), ?Expr:function()]), %funref infix
+                ?Query:seq([?Token:expr(), ?Expr:nameof(),
+                            ?Clause:form(), ?Form:func()]), %fundef
+                [{{flex,back}, {type, '==', macro}}], %macro form
+                ?Query:seq(?Token:form(), ?Form:record()) ])), %rec form
+
+    Type = case Entity of
                []     -> none;
                [Node] -> case ?Syn:node_type(Node) of
                              form     -> macro;
@@ -94,11 +91,12 @@ init_sel(Params,  '@def') ->
                              func     -> function
                          end
            end,
-    {Type, Ent};
+    {Type, Entity};
 
 init_sel(Params,  '@function')   -> init_sel(Params,  '@fun');
 init_sel(Params,  '@variable')   -> init_sel(Params,  '@var');
 init_sel(Params,  '@record')     -> init_sel(Params,  '@rec');
+init_sel(Params,  '@field')      -> init_sel(Params,  '@recfield');
 init_sel(Params,  '@expression') -> init_sel(Params,  '@expr');
 init_sel(Params,  '@module')     -> init_sel(Params,  '@mod');
 init_sel(Params,  '@definition') -> init_sel(Params,  '@def');
@@ -938,6 +936,7 @@ dataflow_reach(Opt) ->
 
 %% @type entity().
 
+%% @private
 %% @spec entity(Type::atom()) -> entity()
 %% @doc Returns the entity record determined by `Type'.
 entity(Type) ->
@@ -967,28 +966,22 @@ prop_fun(EntityType, PropertyName) ->
         Property <- Entity#entity.properties,
         lists:member(PropertyName, Property#property.name)].
 
-%% @spec sel_type(EntityType::atom(), SelectorName::atom()) -> atom()
+%% @spec sel_type(EntityType::atom(), SelectorName::atom()) -> [atom()]
 %% @doc The result is the type of the entities you'll get after the use of the
 %%      given selector.
 sel_type(EntityType, SelectorName) ->
     Entity = entity(EntityType),
-    case [Selector#selector.type ||
-             Selector <- Entity#entity.selectors,
-             lists:member(SelectorName, Selector#selector.name)] of
-        [] -> throw(?LocalError(illegal_selector, [EntityType, SelectorName]));
-        [SelectorType] -> SelectorType
-    end.
+    [Selector#selector.type ||
+        Selector <- Entity#entity.selectors,
+        lists:member(SelectorName, Selector#selector.name)].
 
-%% @spec prop_type(EntityType::atom(), PropertyName::atom()) -> atom()
+%% @spec prop_type(EntityType::atom(), PropertyName::atom()) -> [atom()]
 %% @doc The result is the type of the property.
 prop_type(EntityType, PropertyName) ->
     Entity = entity(EntityType),
-    case [Property#property.type ||
-             Property <- Entity#entity.properties,
-             lists:member(PropertyName, Property#property.name)] of
-        [] -> throw(?LocalError(illegal_property, [EntityType, PropertyName]));
-        [PropertyType] -> PropertyType
-    end.
+    [Property#property.type ||
+        Property <- Entity#entity.properties,
+        lists:member(PropertyName, Property#property.name)].
 
 %%% ============================================================================
 
@@ -998,30 +991,49 @@ file_is_module(File) ->
         file -> ?File:type(File) == module
     end.
 
-
-file_prop(Prop, File) ->
-    case ?Syn:node_type(File) of
-        module ->
-            io_lib:write_atom(?Mod:name(File));
-        file ->
+file_prop(name, File) ->
+    case file_is_module(File) of
+        true ->
+            [ModuleNode] = mod(File),
+            io_lib:write_atom(?Mod:name(ModuleNode));
+        false ->
             Path = ?File:path(File),
+            string:substr(Path, string:rstr(Path, "/")+1)
+    end;
+file_prop(Prop, File) ->
+    case file(File) of
+        [] -> io_lib:write_atom(?Mod:name(File));
+        [FileNode] ->
+            Path = ?File:path(FileNode),
             case Prop of
                 path -> Path;
-                name -> string:substr(Path, string:rstr(Path, "/")+1);
                 dir -> string:substr(Path, 1, string:rstr(Path, "/"))
             end
     end.
+
+%% file_prop(Prop, File) ->
+%%     case ?Syn:node_type(File) of
+%%         module ->
+%%             io_lib:write_atom(?Mod:name(File));
+%%         file ->
+%%             Path = ?File:path(File),
+%%             case Prop of
+%%                 path -> Path;
+%%                 name -> string:substr(Path, string:rstr(Path, "/")+1);
+%%                 dir -> string:substr(Path, 1, string:rstr(Path, "/"))
+%%             end
+%%     end.
 
 
 mod(Node) ->
     case ?Syn:node_type(Node) of
         file -> ?Query:exec(Node, ?File:module());
-        module -> Node
+        module -> [Node]
     end.
 
 file(Node) ->
     case ?Syn:node_type(Node) of
-        file -> Node;
+        file -> [Node];
         module -> ?Query:exec(Node, ?Mod:file())
     end.
 
@@ -1062,17 +1074,16 @@ find_rec_with_name(Tuple, Atom) ->
                          
 %% @private
 %% @spec file_metrics(Name::atom(), File::entity(), Check::atom()) -> int()
-%% @doc Metrics needs a module node, and a file entity can be either a
-%% module node or a file node, so it needs to be converted.
-%% Module nodes exist without files in the database, and most of the metrics
-%% needs the files too. The `Check' parameter indicates whether the file is
-%% needed.
-%% The default value is 0 for all the metrics. 
+%% @doc Metrics needs a module node, and a file entity can be either a module
+%%      node or a file node, so it needs to be converted.
+%%      Module nodes exist without files in the database, and most of the
+%%      metrics needs the files too. The `Check' parameter indicates whether
+%%      the file is needed.
+%%      The default value is 0 for all the metrics. 
 file_metrics(Name, File, false) ->
     case mod(File) of
         []       -> 0;
-        [Module] -> ?Metrics:metric({Name, module, Module});
-        Module   -> ?Metrics:metric({Name, module, Module})
+        [Module] -> ?Metrics:metric({Name, module, Module})
     end;
 file_metrics(Name, File, true) ->
     case file(File) of

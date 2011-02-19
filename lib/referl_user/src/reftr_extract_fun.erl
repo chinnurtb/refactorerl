@@ -47,7 +47,8 @@
 %%%   expressions.</li>
 %%%   <li> Variables with possible binding occurrences in the selected
 %%%   sequence of expressions should not appear outside of the
-%%%   sequence of expressions.</li>
+%%%   sequence of expressions, except if the selected sequence is a body
+%%%   of a function.</li>
 %%%   <li> The extracted sequence of expressions cannot be part of a guard
 %%%   sequence.</li>
 %%%   <li> The extracted sequence of expressions cannot be part of a
@@ -65,6 +66,8 @@
 %%%   depends on.</li>
 %%%   <li> Collect variables from the selected variables in step 1, which has
 %%%   binding occurrence out of the selected part of the module. </li>
+%%%   <li> Collect variables from the selected variables in step 1, which is
+%%%   used outside after the selection. </li>
 %%%   <li> Add a new function definition to the current module with a single
 %%%   alternative. The name of the function is an argument to the
 %%%   refactoring. The formal parameter list consists of the variables
@@ -73,7 +76,7 @@
 %%%   expression, where the name of the function is given as an argument
 %%%   to the refactoring, and the actual parameter list consists of the
 %%%   variables selected in step 2.</li>
-%%%   <li> The order of the variables must be the same in steps 3 and 4.</li>
+%%%   <li> The order of the variables must be the same in steps 4 and 5.</li>
 %%%   <li> If the selected expression is a block-expression, eliminate the
 %%%   begin-end keywords from the expression in the body of the created new
 %%%   function.</li>
@@ -85,12 +88,14 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reftr_extract_fun).
--vsn("$Rev: 4706 $"). % for emacs"
+-vsn("$Rev: 5063 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1]).
 
 -include("user.hrl").
+
+-define(Debug(DThis), io:format("LINE: ~p, Message: ~p~n", [?LINE, DThis])).
 
 %%% ============================================================================
 %%% Callbacks
@@ -108,7 +113,9 @@ prepare(Args) ->
                         ?RefErr0r(parent_not_form)),
     [File] = ?Query:exec(Form, ?Form:file()),
     {Bound, NotBound} = vars(Exprs),
-    check_var(Bound,Exprs),
+    OutVars = check_var(Bound,Exprs),
+    ?Check(OutVars =:= [] orelse Link =:= body, 
+	   ?RefError(outside_used_vars, OutVars)),
     DelExprs = Exprs,
     PatNames = lists:usort([?Var:name(Var) || Var <- NotBound]),
     Arity = length(PatNames),
@@ -118,12 +125,14 @@ prepare(Args) ->
     {NewExprs, CommentExprs} = eliminate_begin_end(Exprs),
     Comments = ?Syn:get_comments(CommentExprs),
     [fun() ->
-         replace_with_app(Parent, NewName, PatNames, DelExprs, Link),
-         add_fun_form(File, NewName, PatNames, NewExprs, FormIndex)
-    end,
-    fun(_) ->
-            ?Syn:put_comments(NewExprs, Comments)
-    end].
+	     replace_with_app(Parent, NewName, PatNames, 
+			      DelExprs, Link, OutVars),
+	     add_fun_form(File, NewName, PatNames, 
+			  NewExprs, FormIndex, OutVars)
+     end,
+     fun(_) ->
+	     ?Syn:put_comments(NewExprs, Comments)
+     end].
 
 vars(Exprs) ->
     VarBinds = lists:usort(?Query:exec(Exprs, ?Expr:varbinds())),
@@ -228,34 +237,58 @@ check_var(BoundVars, Exprs)->
                                               ?Var:occurrences(Expr)) ||
                                   Expr <- Exprs]),
     AllVarOccurs = ?Query:exec(BoundVars, ?Var:occurrences()),
-    Clash = lists:usort([list_to_atom(?Expr:value(Var)) ||
-                         Var <- (AllVarOccurs -- Occurrences)]),
-    ?Check( Clash =:= [],
-           ?RefError(outside_used_vars, Clash)).
+    OutsideVars = AllVarOccurs -- Occurrences,
+    lists:usort([?Expr:value(Var) || Var <- OutsideVars]).
 
+%%     ?Check(Clash =:= [],
+%% 	   ?RefError(outside_used_vars, Clash)).
 
 %%% ===========================================================================
 %%% Syntactic transformations.
 
-replace_with_app(Parent, AppName, AppArgNames, DelExprs, Type)->
+replace_with_app(Parent, AppName, AppArgNames, DelExprs, Type, OutVars)->
     Name     = ?Syn:create(#expr{type = atom}, [io_lib:write(AppName)]),
     Args     = [?Syn:create(#expr{type = variable}, [AName])
                                 || AName <- AppArgNames],
     ArgList  = ?Syn:create(#expr{type = arglist}, [{esub, Args}]),
     App      = ?Syn:create(#expr{type = application}, [{esub, [Name]},
                                                        {esub, ArgList}]),
-
+    Pattern = case OutVars of
+		  [] -> App;
+		  _List -> VarPattern = make_pattern(_Role = pattern, OutVars),
+			   ?Syn:create(#expr{type=match_expr},
+				       [{esub, VarPattern}, {esub, App}])
+	      end,
     case Type of
-        esub  -> ?Syn:replace(Parent, {node, hd(DelExprs)}, [App]);
+        esub  -> ?Syn:replace(Parent, {node, hd(DelExprs)}, [Pattern]);
         body -> Dels = {range, hd(DelExprs), lists:last(DelExprs)},
-                ?Syn:replace(Parent, Dels, [App])
+                ?Syn:replace(Parent, Dels, [Pattern])
     end.
 
-add_fun_form(File, FunName, ClPatternNames, Body, FormIndex) ->
+add_fun_form(File, FunName, ClPatternNames, Body, FormIndex, OutVars) ->
     ClPatternNodes = [?Syn:create(#expr{type = variable},[Name])
                      || Name <- ClPatternNames ],
     FName   = ?Syn:create(#expr{type = atom}, [io_lib:write(FunName)]),
+    FinalBodies = case OutVars of
+		     [] -> Body;
+		     _List -> Body ++ make_pattern(_Role = expr, OutVars)
+		 end,
     ClNode  = ?Syn:create(#clause{type = fundef},[{name, FName},
-                             {pattern, ClPatternNodes},{body, Body}]),
+                             {pattern, ClPatternNodes},{body, FinalBodies}]),
     FunForm = ?Syn:create(#form{type = func}, [{funcl,ClNode}]),
     ?File:add_form(File, FormIndex + 1, FunForm).
+
+make_pattern(Role, Vars) ->
+    case Vars of
+	[Single] ->
+	    VarNode = ?Syn:create(#expr{role=Role, type=variable, 
+					value=Single}, [Single]),
+	    [VarNode];
+	Vars ->
+	    VarNodes = [ ?Syn:create(#expr{role=Role, type=variable, 
+					   value=Var}, [Var]) ||
+			   Var <- Vars ],
+	    Tuple = ?Syn:create(#expr{type=tuple},
+				[ {esub, Var} || Var <- VarNodes ]),
+	    [Tuple]
+    end.

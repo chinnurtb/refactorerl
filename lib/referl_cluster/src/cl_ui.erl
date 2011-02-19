@@ -24,7 +24,7 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(cl_ui).
--vsn("$Rev: 3816 $").
+-vsn("$Rev: 5049 $").
 -include_lib("stdlib/include/qlc.hrl").
 -export([run/1,cl_options/1]).
 -export([prepare/1,refresh/0]).
@@ -49,10 +49,12 @@
 %%% @spec run({Options::proplist(), Alg::atom(), CreateDb::atom}) ->
 %%%                                            ClResultMain::list()
 %%%
-%%% @doc This function can execute the clustering with several options
-%%% Alg: specifies the algorithm which is used
-%%% Options: contains the clustering options from the emacs interface
-%%% CreateDb: ...save result into a storage or not
+%%% @doc This function can execute the clustering with several options.
+%%% <ul>
+%%% 	<li> Alg: specifies the algorithm which is used. </li>
+%%% 	<li> Options: contains the clustering options from the emacs interface. </li>
+%%% 	<li> CreateDb: ...save result into a storage or not. </li>
+%%% </ul>
 run({Opt, Alg, CreateDb})->
     Terms       = [Def || {_, Def} <- cl_options_in(Alg)],
     Opts = correct_opt(Opt,Terms),
@@ -84,16 +86,15 @@ run({Opt, Alg, CreateDb})->
 %%% @spec cl_options_in(Alg::atom()) -> OptionList::list()
 %%%
 %%% @doc Options for the main function - this
-%%% is not interface function
+%%% is not interface function.
 %%% Alg: specifies the used algorithm.
 cl_options_in(Alg)->
    cl_interface:run_cluster_default(Alg).
 
 %%% @spec cl_options(Alg::atom()) -> OptionList::list()
 %%%
-%%% @doc To read default options of the clustering algorithm
-%%% The result of the function is a list which contains the
-%%% default values.
+%%% @doc Returns the default options of the specified clustering algorithm.
+%%% The result is a list which contains the default values.
 %%% Alg: specifies the used algorithm.
 cl_options(Alg)->
       [{Lab, Def} || {{_Name, Def},{_Name, Lab}}
@@ -156,6 +157,7 @@ store_result(Opt, Fitt, Cl_res)->
                   result = Cl_res},
     mnesia:dirty_write(?TBNAME, Record).
 
+%%% @private
 prepare(Modules)->
     if
          Modules /= []->
@@ -186,6 +188,7 @@ table_handler()->
        _ -> throw({error, cl_ui_table})
        end.
 
+%%% @doc Refreshing the mnesia tables. This means deleting the existing tables.
 refresh()->
     case exists_table(?TBNAME) of
        {?TBNAME, exists}   ->

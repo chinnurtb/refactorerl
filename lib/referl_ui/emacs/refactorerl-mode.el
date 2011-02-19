@@ -61,9 +61,16 @@
           (menu-group-children menu-group))))
 
 (setf refactorerl-mode-menu
-      `(("Start server" refactorerl-restart :enable (lambda () (not (refac-server-is-running))))
-        ("Stop server" refactorerl-quit :enable :server)
-        ("Select control buffer" refactorerl-control-buffer :enable :server)
+      `((("Server")
+         ("Start server" refactorerl-restart :enable (lambda () (not (refac-server-is-running))))
+         ("Stop server" refactorerl-quit :enable :server)
+         "--"
+         ("Reset database"  refac-server-reset-db :enable :server)
+         ("Show files" refac-server-show-files :enable :server)
+         ("Show parse errors" refac-server-show-parseerrors :enable :server)
+         "--"
+         ("Select control buffer" refactorerl-control-buffer :enable :server))
+        ("Configure" refactorerl-configure)
         "--"
         ("Add file" refactorerl-add-file :enable :buffer-file)
         ("Drop file" refactorerl-drop-file :enable :buffer-file)
@@ -87,9 +94,7 @@
         ,(menu-from-group 'introelim)
         ,(menu-from-group 'move)
         ,(menu-from-group 'rename)
-        ,(menu-from-group 'upgrade)
-        "--"
-        ("Configure" refactorerl-configure)))
+        ,(menu-from-group 'upgrade)))
 
 (defun refactorerl-expand-enabler (enabler)
   (case enabler

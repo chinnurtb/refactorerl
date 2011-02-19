@@ -23,7 +23,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_db_invalidator).
--vsn("$Rev: 3816 $").
+-vsn("$Rev: 5049 $").
 -behaviour(gen_event).
 
 -export([start/0, stop/0]).
@@ -35,14 +35,18 @@
 start() ->
     reflib_ui:add_msg_handler(?MODULE, null).
 
-%% @doc Removes the event handler.
+%% @doc Removes the event handler from the event manager of reflib_ui.
 stop() ->
     reflib_ui:del_msg_handler(?MODULE, null).
 
+%% ==================================================================
 %% Event handler callbacks
+
+%% @private
 init(State) ->
     {ok, State}.
 
+%% @private
 handle_event(Event, State) ->
     case Event of
         {E, _} when E == drop; E == add; E == reload ->
@@ -52,14 +56,18 @@ handle_event(Event, State) ->
     end,
     {ok, State}.
 
+%% @private
 handle_call(_Req, State) ->
     {ok, undefined, State}.
 
+%% @private
 handle_info(_Info, State) ->
     {ok, State}.
 
+%% @private
 terminate(_Arg, _State) ->
     ok.
 
+%% @private
 code_change(_, S, _) ->
     {ok, S}.

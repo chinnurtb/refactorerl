@@ -62,7 +62,7 @@
 %%% @author Csaba Imre Zempleni <zecoaat@inf.elte.hu>
 
 -module(reftr_list_comp).
--vsn("$Rev$").
+-vsn("$Rev: 5238 $ ").
 
 %%% Exports
 -export([prepare/1, error_text/2]).
@@ -110,7 +110,11 @@ prepare(Args) ->
                     Type = ?Expr:type(ExprFun),
                     Info = from_app_filter_info(Type, ExprFun),
                     [{_, Parent}] = ?Syn:parent(Expr),
-                    VarName       = ?Var:new_varname(Expr, "ListVar"),
+                    UsedVarNames  = 
+                        [ ?Var:name(V) || 
+                            V <- ?Query:exec(Expr, ?Expr:variables())],
+                    VarName       = 
+                        ?Var:new_varname(Expr, "ListVar", UsedVarNames),
                     ?Transform:touch(Expr),
                     fun() ->
                             ListComp = from_filter_create_listcomp(
@@ -125,7 +129,11 @@ prepare(Args) ->
                     Type          = ?Expr:type(ExprFun),
                     Info          = from_app_info_by_kind(Type, ExprFun),
                     [{_, Parent}] = ?Syn:parent(Expr),
-                    VarName       = ?Var:new_varname(Expr, "ListVar"),
+                    UsedVarNames  = 
+                        [ ?Var:name(V) || 
+                            V <- ?Query:exec(Expr, ?Expr:variables())],
+                    VarName       = 
+                        ?Var:new_varname(Expr, "ListVar", UsedVarNames),
                     ?Transform:touch(Expr),
                     fun() ->
                             ListComp = from_app_create_listcomp(

@@ -1,0 +1,54 @@
+html,body{margin:0;padding:0}
+
+body{font: 85% arial,sans-serif}
+
+p{margin:0 20px 10px}
+
+a{display:block;color:#006;padding:10px}
+
+div#header{position:relative}
+div#header h1{height:60px;line-height:60px;margin:0;
+              padding-left:5%;background:#800000;color:#ffffd2}
+div#header a{position:absolute;right:0;top:23px;color: #C6D5FD}
+div#header span{postion:absulute;right:160;top:23px}
+
+div#input{border:3px solid #800000;padding:2px 5%;background:#ffffd2;}
+
+div#result{padding:0.5%}
+
+div#result p{line-height:1.4;background:#ffffe6}
+
+div#prev{padding:0.5%;background:#ffffd2;overflow:auto;max-height:500px}
+
+.queryList{
+    margin:0px;
+    padding:2px;
+}
+.queryList li{ /* General layout query in list */
+    list-style-type:none;
+    border-bottom:0.6px solid #800000;
+    background-color:#ffffb9;
+    height:30px;
+    margin:1px;
+    padding:2px;
+    color:#333;
+    cursor:pointer;
+}
+.queryList li.queryMouseOver{ /* Mouse over query in list */
+    color:#000;
+}
+.queryList li.queryClick{ /* Active query in list */
+    border:1px solid #800000;
+    color::#ffffe6;
+    background-color:#800000;
+    color:#FFF;
+}
+
+div#footer{background: #333;color: #FFF}
+div#footer p{margin:0;padding:8px 10px}
+div#footer a{display:inline;padding:0;color: #C6D5FD}
+
+div#wrapper{float:right;width:69%}
+div#prev{float:left;width: 28.9%}
+div#input{clear:both}
+div#footer{clear:both;width:100%}

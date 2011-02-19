@@ -69,14 +69,12 @@
   (set (make-local-variable 'config-start-marker) (point-marker))
   (widget-insert "------------------------------------------------\n")
   (widget-create 'push-button
-                 :notify (lambda (&rest args)
-                           (when (yes-or-no-p "Clear database contents? ")
-                             (refac-send-command 'reset)))
+                 :notify (lambda (&rest args) (refac-server-reset-db))
                  "Reset database")
-  (widget-create 'push-button :notify (lambda (&rest args) (async-with-refac-buffer-list (refac-send-command 'status_info (list))))
+  (widget-create 'push-button :notify (lambda (&rest args) (refac-server-show-files))
                  "Show files")
   (widget-insert "\n")
-  (widget-create 'push-button :notify (lambda (&rest args) (async-with-refac-buffer-list (refac-send-command 'error_attr)))
+  (widget-create 'push-button :notify (lambda (&rest args) (refac-server-show-parseerrors))
                  "Show parse errors")
   (widget-insert "\n")
   (widget-create 'push-button

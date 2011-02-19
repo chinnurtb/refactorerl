@@ -1,0 +1,111 @@
+<html>
+  <style>
+    table{
+        border-width: 0px;
+        border-spacing: 0px;
+        border-style: none;
+        border-collapse: collapse;
+    }
+
+    table th{
+        border-width: 1px;
+        padding: 2px;
+        border-style: inset;
+        border-color: black;
+    }
+
+    table td{
+        font-size: 90%;
+        border-width: 1px;
+        padding: 2px;
+        border-style: inset;
+        border-color: black;
+    } 
+
+  </style>
+  
+  <script language="javascript">
+  function getActualHeight() {
+      docHeight=document.body.parentNode.scrollHeight;
+      return docHeight;
+  } 
+   
+  function getSelectionStartPos() {	  
+      var textArea = document.getElementById("erlSource");
+      return textArea.selectionStart; //not working in IE
+  }
+
+  function select(x,y) {
+      var input = document.getElementById ("erlSource");
+      if (input.selectionStart === undefined) {   // Internet Explorer
+          var inputRange = input.createTextRange ();
+          inputRange.moveStart ("character", x);
+          inputRange.collapse ();
+          inputRange.moveEnd ("character", y);
+          inputRange.select ();
+      }
+      else {    // Firefox, Opera, Google Chrome and Safari
+          input.selectionStart = x;
+          input.selectionEnd = y;
+          input.focus ();
+      }
+  }
+
+  function showSelection(file,startPos,endPos) {
+      loadWholePage("show_erl.yaws?" + file);     
+      select(startPos-1,endPos);
+  } 
+  
+  function getBody(content) { // searches for body, extracts and returns the content
+      test = content.toLowerCase();  // to eliminate case sensitivity
+      var x = test.indexOf("<body");
+      if(x == -1) return "";
+    
+      x = test.indexOf(">", x);
+      if(x == -1) return "";
+      
+      var y = test.lastIndexOf("</body>");
+      if(y == -1) y = test.lastIndexOf("</html>");
+      if(y == -1) y = content.length;   
+         // If no HTML then just grab everything till end
+      return content.slice(x + 1, y);   
+  }
+ 
+  function loadWholePage(url) {
+      var x = document.getElementById("erlSource");
+      var xhr = createXHR();
+      xhr.onreadystatechange=function() { 
+          if(xhr.readyState == 4) {
+              x.value = getBody(xhr.responseText);
+          } 
+      }; 
+      xhr.open("GET", url, true);
+      xhr.send(null); 
+  }
+  </script> 
+
+  <body>
+    <script src="ajax.js" type="text/javascript"></script>
+    <erl>  
+    out(Args) ->
+        L = yaws_api:parse_query(Args),
+        [_U,_Eq|QD] = Args#arg.querydata,
+        User =  User = web_helper:get_value("u",L),
+        QueryReq = lists:dropwhile(fun(X)-> X/=hd("&") end, QD),
+               %% need because parse_query lost '+' character
+        [_And,Type,_Eq|Req] = QueryReq,
+        P = hd("p"),
+        Q = hd("q"),
+        T = case Type of
+                Q -> 'query';
+                P -> prev_query
+            end,
+         {ehtml,
+          web_helper:result_to_ehtml({T,yaws_api:url_decode(Req),User})}.
+    </erl>
+    <strong>Source:</strong><br />
+    <textarea cols="80" rows="28" id="erlSource" readonly="true"
+       onclick="parent.document.getElementById('pos').value = getSelectionStartPos()">
+    </textarea>
+  </body>
+</html>

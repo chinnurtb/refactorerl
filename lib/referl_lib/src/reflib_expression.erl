@@ -21,14 +21,14 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reflib_expression).
--vsn("$Rev: 4977 $ ").
+-vsn("$Rev: 5103 $ ").
 
 -export([role/1, type/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
 -export([variables/0, varbinds/0, scope_varbinds/0, binding_vars/0, varrefs/0,
          visible_vars/0, record/0, records/0, field/0, fields/0,
          fielddef/0, module/0, macros/0, function/0, functions/0, funapps/0,
-         clauses/0, clause/1, nameof/0]).
+         clauses/0, clause/1, nameof/0, dynfunction/0]).
 -export([modq/0, add_modq/2, del_modq/1, upd_modq/2, expand_funexpr/1]).
 
 -export([top_sub/0, sub/0, top_deep_sub/0, deep_sub/0, top/0, is_top/1]).
@@ -200,6 +200,12 @@ macros() ->
 %% the expression.
 function() ->
     ?Query:all([funlref], [funeref]).
+
+%% @spec dynfunction() -> query(#expr{}, #func{})
+%% @doc The result query returns the function which is referred directly
+%% or dynamically by the expression.
+dynfunction() ->
+    ?Query:all([[funlref], [funeref], [dynfunlref], [dynfuneref]]).
 
 %% @spec functions() -> query(#expr{}, #func{})
 %% @doc The result query returns every function that is referred in the

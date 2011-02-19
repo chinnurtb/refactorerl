@@ -29,44 +29,42 @@
 
 -export([reach/2]).
 
+-export([back_nodes/1]).
+
 -include("core.hrl").
 
 %%% @private
 schema() ->
     [{expr,   [{flow, expr},  {dep, expr},
                {sel, expr},   {cons_back, expr},
-               {sel_e, expr}, {cons_e, expr}]}].
+               {sel_e, expr}, {cons_e, expr}]},
+     {func,   [{fpar, expr}, {fret, expr}]}].
     %% Note: s_i, c_i <-> sel/i, cons_back/i
 
 %%% @private
 externs(_) -> [].
+
+
+remove_app_deps(App, Name, ArgList) ->
+    Pars = [Par || {_, Par} <- ?Anal:children(ArgList)],
+    Dels =
+         case ?Anal:children(Name) of
+             []                   -> [Name];
+             [{_, Mod},{_, Fun}]  -> [Mod, Fun]
+         end,
+    safe_link(rmlink, Dels ++ Pars, dep, App),
+    {App, ?Anal:parent(App)}.
+
 
 %%% @private
 insert(Parent, Pre, {Tag, Child}, Post) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
             Apps = get_app(Child),
-            AppList = lists:flatten(
-            [begin
-                 [{_, Name}, {_, ArgList}] = ?Anal:children(App),
-                 Pars = [Par || {_, Par} <- ?Anal:children(ArgList)],
-                 case ?Anal:children(Name) of
-                     [] ->
-                         case ?Graph:path(Name, [dep]) of
-                             [] -> [];
-                             _  ->
-                                 safe_link(rmlink, [Name | Pars], dep, App),
-                                 [{App, ?Anal:parent(App)}]
-                         end;
-                     [{_, Mod},{_, Fun}]  ->
-                         case ?Graph:path(Mod, [dep]) of
-                             [] -> [];
-                             _  ->
-                                 safe_link(rmlink, [Mod, Fun | Pars], dep, App),
-                                 [{App, ?Anal:parent(App)}]
-                         end
-                 end
-             end || App <- Apps]),
+            AppList = [remove_app_deps(App, Name, ArgList)
+                            || App <- Apps,
+                               [{_, Name}, {_, ArgList}] <- [?Anal:children(App)],
+                               ?Graph:path(Name, [dep]) =/= []],
             walk(fun add_del/4, [{Child, Parent} | AppList], mklink);
         #form{type=func} when Tag == funcl ->
             Apps = get_app(Child),
@@ -98,7 +96,7 @@ insert(Parent, Pre, {Tag, Child}, Post) ->
             walk(fun add_del/4, [{Child, Parent}], mklink);
         #clause{type=Type} when Type == pattern orelse Type == guard orelse
                                 Type == timeout orelse Type == block orelse
-                                Type == funexpr -> 
+                                Type == funexpr ->
             case Post of
                 [] ->
                     Expr = ?Anal:parent(Parent),
@@ -107,7 +105,7 @@ insert(Parent, Pre, {Tag, Child}, Post) ->
                         [] -> ok;
                         _  -> {_, Last} = lists:last(Pre),
                               safe_link(rmlink, Last, flow, Expr) %%ins vs. repl
-                    end; 
+                    end;
                 _ -> ok
             end,
             walk(fun add_del/4, [{Child, Parent}], mklink);
@@ -115,7 +113,7 @@ insert(Parent, Pre, {Tag, Child}, Post) ->
             Expr = ?Anal:parent(Parent),
             case ?Anal:data(Expr) of
                 #expr{type=catch_expr} -> link(mklink, Child, flow, Expr);
-                #expr{type=case_expr} -> 
+                #expr{type=case_expr} ->
                     [_| Clauses] = ?Anal:children(Expr),
                     [begin
                       [{_, PatI} | _] = ?Anal:children(ClI),
@@ -125,25 +123,25 @@ insert(Parent, Pre, {Tag, Child}, Post) ->
                 _ -> ok
             end,
             walk(fun add_del/4, [{Child, Parent}], mklink);
-        #clause{type=hexpr} -> 
+        #clause{type=hexpr} ->
             ListComp = ?Anal:parent(Parent),
             link(mklink, Child, cons_e, ListComp),
             walk(fun add_del/4, [{Child, Parent}], mklink);
-        #clause{type=T} when T==compr orelse T==list_gen orelse T==filter-> 
+        #clause{type=T} when T==compr orelse T==list_gen orelse T==filter->
             walk(fun add_del/4, [{Child, Parent}], mklink);
         #expr{type=T, value=V} when (T == infix_expr andalso V == ':') orelse
                                      T ==  arglist ->
             App = ?Anal:parent(Parent),
             AppPar = ?Anal:parent(App),
             add_del(rmlink, ?Anal:data(App), App, AppPar),
-            add_del(mklink, ?Anal:data(App), App, AppPar),            
+            add_del(mklink, ?Anal:data(App), App, AppPar),
             walk(fun add_del/4, [{Child, Parent}], mklink);
         #expr{} ->
             %% Child es reszkifejezeseinek az elemzese, uj el a
             %% szulohoz kifejezes tipus szerint majd, most csak torol
             %% es ujraepit
             Parent2 = ?Anal:parent(Parent),
-            add_del(rmlink, ?Anal:data(Parent), Parent, Parent2), 
+            add_del(rmlink, ?Anal:data(Parent), Parent, Parent2),
             add_del(mklink, ?Anal:data(Parent), Parent, Parent2),
             walk(fun add_del/4, [{Child, Parent}], mklink)
     end.
@@ -160,7 +158,7 @@ add_del(Dir, #expr{type=variable}, Expr, _P) ->
                 [Var] ->
                     VarBs = ?Graph:path(Var, [{varbind, back}]),
                     safe_link(Dir, VarBs, flow, Expr);
-                [] -> io:format("~nError in variable analyzer!~n~n", [])
+                [] -> ok %%io:format("~nError in variable analyzer!~n~n", [])
                 %% Todo: Eliminate this branch...
             end
     end,
@@ -194,7 +192,7 @@ add_del(Dir, #expr{type=parenthesis, role=pattern}, Expr, _P) ->
     [{P, Expr}];
 add_del(Dir, #expr{type=parenthesis}, Expr, _P) ->
     [{_, E}] = ?Anal:children(Expr),
-    safe_link(Dir, Expr, flow, E),
+    safe_link(Dir, E, flow, Expr),
     [{E, Expr}];
 add_del(Dir, #expr{type=tuple, role=pattern}, Expr, _P) ->
     Children = ?Anal:children(Expr),
@@ -243,11 +241,15 @@ add_del(Dir, #expr{type=application}, Expr, _P) ->
         [Fun] ->
              _List =
                  [begin
-                     Children = ?Anal:children(Cl),
-                     Pats = [Pat || {pattern, Pat} <- Children],
-                     [safe_link(Dir, Par, flow, Pat) ||
-                          {Pat, Par} <- lists:zip(Pats, Pars)],
-                     safe_link(Dir,element(2, lists:last(Children)), flow,Expr),
+                    Children = ?Anal:children(Cl),
+
+                    FPars = ?Graph:path(Fun, [fundef, fpar]),
+                    FRet = ?Graph:path(Fun, [fundef, fret]),
+
+                    [safe_link(Dir, From, flow, To) ||
+                          {From, To} <- lists:zip(Pars, FPars)],
+
+                     safe_link(Dir, FRet, flow, Expr),
                      Children
                   end || Cl <- ?Graph:path(Fun, [funcl])],
              [{E, Expr} || E <- Pars];
@@ -262,7 +264,7 @@ add_del(Dir, #expr{type=application}, Expr, _P) ->
                 _List -> %% fun(...) -> ... end (Args)
                         %% (fun(...) -> ... end) (Args)
                     safe_link(Dir, [Name | Pars], dep, Expr),
-                    [{E, Expr} || E <- [Name | Pars]]          
+                    [{E, Expr} || E <- [Name | Pars]]
             end
     end;
 
@@ -405,8 +407,12 @@ add_del(_Dir, #expr{type=fun_expr}, Expr, _P) ->
 add_del(_Dir, #expr{}, _Expr, _P) -> [];
 
 add_del(_Dir, #form{type=func}, Func, _File) ->
-    Clauses = ?Anal:children(Func),
-    Exprs = lists:flatmap(fun ({_, Cl}) ->
+    {_, Clauses} = lists:unzip(?Anal:children(Func)),
+
+    [FRet] = ?Graph:path(Func, [fundef, fret]),
+    [?Graph:mklink(Ret, flow, FRet) || Ret <- return_points(Clauses)],
+
+    Exprs = lists:flatmap(fun (Cl) ->
                               ?Anal:children(Cl)
                           end, Clauses),
     [{Expr, Func} || {_, Expr} <- Exprs];
@@ -416,6 +422,23 @@ add_del(_Dir, #clause{}, Clause, P) ->
     [{Expr, P} || {_, Expr} <- Exprs];
 
 add_del(_Dir, _Type, _Expr, _P) -> [].
+
+
+%% Returns those nodes that deliver the return values of a function.
+return_points(Nodes) when is_list(Nodes) ->
+    lists:flatten([return_points(Node, ?Graph:data(Node)) || Node <- Nodes]);
+return_points(Node) ->
+    return_points([Node]).
+
+return_points(Node, #clause{}) ->
+    return_points(?Graph:path(Node, [{body, last}]));
+return_points(Node, #expr{}) ->
+    case ?Graph:path(Node, [exprcl]) of
+        []      -> [Node];
+        Clauses -> return_points(Clauses)
+    end.
+
+
 
 %%% @private
 remove(Parent, Pre, {Tag, Child}, Post) ->
@@ -444,7 +467,7 @@ remove(Parent, Pre, {Tag, Child}, Post) ->
             walk(fun add_del/4, [{Child, Parent}], rmlink);
         #clause{type=Type} when Type == pattern orelse Type == guard orelse
                                 Type == timeout orelse Type == block orelse
-                                Type == funexpr -> 
+                                Type == funexpr ->
             case Post of
                 [] ->
                     Expr = ?Anal:parent(Parent),
@@ -452,15 +475,15 @@ remove(Parent, Pre, {Tag, Child}, Post) ->
                     case lists:reverse(Pre) of
                         [{body, Last} | _] -> link(mklink, Last, flow, Expr);
                         _ -> ok
-                    end; 
+                    end;
                 _ -> ok
             end,
             walk(fun add_del/4, [{Child, Parent}], rmlink);
-        #clause{type=expr} -> 
+        #clause{type=expr} ->
             Expr = ?Anal:parent(Parent),
             case ?Anal:data(Expr) of
                 #expr{type=catch_expr} -> safe_link(rmlink, Child, flow, Expr);
-                #expr{type=case_expr} -> 
+                #expr{type=case_expr} ->
                     [_| Clauses] = ?Anal:children(Expr),
                     [begin
                       [{_, PatI} | _] = ?Anal:children(ClI),
@@ -470,22 +493,22 @@ remove(Parent, Pre, {Tag, Child}, Post) ->
                 _ -> ok
             end,
             walk(fun add_del/4, [{Child, Parent}], rmlink);
-        #clause{type=hexpr} -> 
+        #clause{type=hexpr} ->
             ListComp = ?Anal:parent(Parent),
             safe_link(rmlink, Child, cons_e, ListComp),
             walk(fun add_del/4, [{Child, Parent}], rmlink);
-        #clause{type=T} when T==compr orelse T==list_gen orelse T==filter-> 
+        #clause{type=T} when T==compr orelse T==list_gen orelse T==filter->
             walk(fun add_del/4, [{Child, Parent}], rmlink);
         #expr{type=T, value=V} when (T == infix_expr andalso V == ':') orelse
                                      T ==  arglist ->
             App = ?Anal:parent(Parent),
             AppPar = ?Anal:parent(App),
-            add_del(rmlink, App, ?Anal:data(App), AppPar),            
+            add_del(rmlink, App, ?Anal:data(App), AppPar),
             walk(fun add_del/4, [{Child, Parent}], rmlink);
         #expr{} ->
              walk(fun add_del/4, [{Child, Parent}], rmlink),
-             case ?Anal:data(Child) of 
-                 #expr{} -> 
+             case ?Anal:data(Child) of
+                 #expr{} ->
                      [link(rmlink, Child, Link, ?Graph:path(Child, [Link]))
                         || Link <- forw_tags() ++ back_tags()];
                  _ -> ok
@@ -507,7 +530,7 @@ clear_clause(Cl, Apps) ->
     Children = ?Anal:children(Cl),
     Pats = [Pat || {pattern, Pat} <- Children],
     Last = element(2, lists:last(Children)),
-    [begin 
+    [begin
         [{_, Name}, {_, ArgList}] = ?Anal:children(App),
         Pars = [Par || {_, Par} <- ?Anal:children(ArgList)],
         [safe_link(rmlink, Par, flow, Pat) ||
@@ -516,7 +539,7 @@ clear_clause(Cl, Apps) ->
         case ?Anal:children(Name) of
             [{_, Mod},{_, Fun}]  ->
                 link(mklink, [Mod, Fun | Pars], dep, App);
-            [] -> 
+            [] ->
                 link(mklink, [Name | Pars], dep, App)
         end
       end || App <- Apps].
@@ -525,8 +548,16 @@ forw_tags() ->
     [flow, dep, sel, {cons_back, back}, sel_e, cons_e].
 
 back_tags() ->
-    [{flow, back}, {dep, back}, {sel, back}, cons_back, 
+    [{flow, back}, {dep, back}, {sel, back}, cons_back,
      {sel_e, back}, {cons_e, back}].
+
+back_nodes(Node) ->
+    case ?Graph:data(Node) of
+        #expr{} ->
+            lists:flatten([?Graph:path(Node, [Tag]) || Tag <- back_tags()]);
+        _ ->
+            []
+    end.
 
 get_app(Node) ->
     ?Graph:path(Node,[fundef, {{funeref, back}, {type,'==', application }}]) ++
@@ -546,10 +577,10 @@ safe_link(Dir, List1, {Link, back}, List2) ->
 safe_link(mklink, List1, Link, List2) ->
     link(mklink, List1, Link, List2);
 safe_link(Dir, List1, Link, Elem2) when is_list(List1) ->
-    [?Graph:Dir(Elem1, Link, Elem2) 
+    [?Graph:Dir(Elem1, Link, Elem2)
       || Elem1 <- List1, lists:member(Elem2, ?Graph:path(Elem1, [Link]))];
 safe_link(Dir, Elem1, Link, List2) when is_list(List2) ->
-    [?Graph:Dir(Elem1, Link, Elem2) 
+    [?Graph:Dir(Elem1, Link, Elem2)
       || Elem2 <- List2, lists:member(Elem2, ?Graph:path(Elem1, [Link]))];
 safe_link(Dir, Elem1, Link, Elem2) ->
     case lists:member(Elem2, ?Graph:path(Elem1, [Link])) of
@@ -591,14 +622,20 @@ reach(From, Opts) ->
         end,
     Init = set_addl(From, set_new()),
     Reach = walk1(fun(Node) -> flow_step(Node, Dir) end, Init, Init),
-    case proplists:get_value(safe, Opts, false) of
-        false ->
-            set_lst(Reach);
-        true ->
-            Strict = set_filt(Reach, fun(N) -> is_strict(N, Reach, Dir) end),
-            Safe = set_filt(Strict, fun(N) -> is_safe(N, Strict, Dir) end),
-            walk1(fun(N) -> safe_step(N, Safe, Dir) end, Init, Init)
-    end.
+    Result = 
+        case proplists:get_value(safe, Opts, false) of
+            false ->
+                set_lst(Reach);
+            true ->
+                Strict = set_filt(Reach,fun(N) -> is_strict(N, Reach, Dir) end),
+                Safe = set_filt(Strict, fun(N) -> is_safe(N, Strict, Dir) end),
+                Safe = walk1(fun(N) -> safe_step(N, Safe, Dir) end, Init, Init)
+        end,
+    Fun = fun(Node) -> 
+              ?Syn:class(Node) == expr andalso 
+              reflib_expression:role(Node) =/= undefined 
+          end,
+    lists:filter(Fun, Result).
 
 is_strict(Node, Reach, Dir) ->
     lists:all(fun not_dep/1, edges(Node, rev(Dir)))

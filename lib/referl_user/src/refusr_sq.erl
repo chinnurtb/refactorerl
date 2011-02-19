@@ -20,33 +20,31 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq).
--vsn("$Rev: 5016 $ ").
+-vsn("$Rev: 5115 $ ").
 
--export([run/2]).
+-export([run/3]).
 -export([prepare/1, error_text/2]).
 
 -include("user.hrl").
 
 -define(Lib, refusr_sq_lib).
--define(SQUI, refusr_sq_ui).
 
 %% The record `state' stores the data of a single step in the semantic query.
 %% `action' is the type of the current action. The action can be:
-%%   initial_selection
 %%   selection
 %%   closure
 %%   iteration
 %%   property_query
 %%   statistics
-%% `type', `res', `prev_type' and `prev_res' contain data for the current and
-%% the previous result respectively.
--record(state, {action=selection, type, res, prev_type, prev_res=[]}).
+%% `type', `res' and `prev_res', `prev_res' contains the data of the current and
+%% the previous result.
+-record(state, {action=selection, type, res, prev_type=[], prev_res=[]}).
 
--record(chains, {max_length=0, complete=[], incomplete=[], recursive=[]}).
+-record(chains, {complete=[], incomplete=[], recursive=[]}).
 
 %%% ============================================================================
 %%% Errors
-%%% @private
+
 error_text(lexical_error, Error) ->
     refusr_sq_lexer:format_error(Error);
 error_text(syntax_error, Error) ->
@@ -55,191 +53,301 @@ error_text(illegal_property, Params) ->
     io_lib:format("illegal ~p property: ~p", Params);
 error_text(illegal_selector, Params) ->
     io_lib:format("illegal ~p selector: ~p  ", Params);
+%error_text(type_mismatch, Params) ->
+%    io_lib:format("the entity types ~p and ~p don't match", Params);
+%error_text(non_bool_property, Param) -> type mismatch eleg
+%    io_lib:format("the property ~p is not bool", Param);
+%error_text(non_property, Param) -> % illegal property?
+%    io_lib:format("~p is not a property", Param);
 error_text(type_mismatch, Params) ->
-    io_lib:format("the entity types ~p and ~p don't match", Params);
-error_text(non_bool_property, Param) ->
-    io_lib:format("the property ~p is not bool", Param);
-error_text(non_property, Param) ->
-    io_lib:format("~p is not a property", Param);
-error_text(prop_type_mismatch, Params) ->
     io_lib:format("the types of ~p and ~p don't match", Params).
 
 %%% ============================================================================
 %%% Callbacks
 
-%% @spec run(Params::proplist(), Query::string()) -> string()
-%% @doc Returns the result of `Query'.
-%% The proplist needs to contain `file' and `position' keys. The values of this
-%% keys determine the initial state.
-run(Params, Query) when is_list(Query) ->
+%% @spec run(DisplayOpt::proplist(), Params::proplist(), Query::string()) ->
+%%           QueryResult::term()
+%% @doc Returns the result of `Query' starting from the position given by
+%%      `Params'. The format of the result is determined by `DisplayOpt'.
+%%
+%%      `Params' optionally contains `file' and `position' keys.
+%%
+%%      `DisplayOpt' contains the keys `positions' and `output'.
+%%      The possible values for
+%%          - `positions': none|scalar|linecol
+%%          - `output': stdio|{iodev,io_device()}|msg|other|nodes
+%%
+%%      The `QueryResult' depends on the `output' key in `DisplayOpt'.
+%%          - stdio: a formatted text written to stdio
+%%          - {iodev,Dev::io_device()}: a formatted text written to Dev
+%%          - msg: a message containing a list with the following types of
+%%                 elements: {eq, Name, Value} |
+%%                           {list, [{Position, Text}]} |
+%%                           {chain, [{Posititon, Text}], PostWS} |
+%%                           {group_by, {Position, Text}}
+%%          - other: the same list that is otherwise sent by a message
+%%          - nodes: a simple list of nodes
+%%      The format of positions depends on the `positions' key in `DisplayOpt'.
+%%          - none: nopos
+%%          - scalar: {File::string(), PosFrom::integer(), PosTo::integer()}
+%%          - linecol: {File::string(), PosFrom::{integer(), integer()},
+%%                                      PosTo::{integer(), integer()}}
+run(DisplayOpt, Params, Query) when is_list(Query) ->
     case refusr_sq_lexer:string(Query) of
         {ok, Tokens, _} ->
             case refusr_sq_parser:parse(Tokens) of
                 {ok, Result} ->
                     QueryRes = process_semantic_query(Params, Result),
-                    ShowPos = proplists:get_value(show_pos, Params, scalar),
-                    PosNodes = ?SQUI:poscalc(QueryRes, ShowPos),
-                    LineNum = proplists:get_value(linenum, Params, false),
-                    PosText = ?SQUI:show(PosNodes, LineNum),
-                    Dev = proplists:get_value(display, Params, stdio),
-                    Display = {Dev, LineNum},
-                    ?SQUI:display(PosText, Display);
-                {error, {_, _, Err}} ->
-                    throw(?LocalError(syntax_error, Err))
+                    show(QueryRes, DisplayOpt);
+                {error, {_, _, Err}} -> throw(?LocalError(syntax_error, Err))
             end;
         {error, {_, _, Error}, _} ->
             throw(?LocalError(lexical_error, Error))
     end.
 
 %% @private
+%todo: alapertelmezett? meggondolni mi kellene + eclipsenek nem biztos h ez kell
 prepare(Args) ->
-    run([{display, msg} | Args], proplists:get_value(querystr, Args)),
+    run([{positions, scalar},{output, msg}],
+        Args,
+        proplists:get_value(querystr, Args)),
     fun () -> nomsg end.
 
 %%% ============================================================================
 %%% Implementation
 
 process_semantic_query(Params, SemanticQuery) ->
-    lists:foldl(fun process/2, Params, SemanticQuery).
+    {Entities, Type, QuerySeq, LastQuery} = preproc(Params, SemanticQuery),
+    {Type1, Res1} = process_query_seq({Type, Entities}, QuerySeq),
+%Res1 - deep list?
+    State = #state{action = selection, type = Type1, res = flatsort(Res1)},
+    process_query_seq(State, LastQuery).
 
 process_query_seq(State, QuerySeq) ->
-    lists:foldl(fun process/2, State, QuerySeq).
+    lists:foldr(fun process/2, State, QuerySeq).
+
 
 %%% ============================================================================
-%%% Statistics
+%%% Preprocessing of queries
 
-%% {statistics, Statistics}
-process({statistics, Statistics}, State) ->
-%TODO: any
-    PropType = ?Lib:prop_type(State#state.prev_type, State#state.type),
-    ?Check(PropType==int,
-           ?LocalError(prop_type_mismatch, [int, PropType])),
+%% @private
+%% @spec preproc(Params::proplist(), SemanticQuery::list()) ->
+%%         {InitialEntities::[entity()], InitialType::atom(),
+%%          QuerySeq::list(), LastQuery::list()}
+preproc(Params, SemanticQuery) ->
+    {InitSel, QuerySeq, LastQuery} = split_semantic_query(SemanticQuery),
+    {InitialType, InitialEntities} = ?Lib:init_sel(Params, InitSel),
 
-    {Type, Result} = collect_res(State),
-    List = lists:sort(State#state.res),
+    {Type1, QuerySeq1} = lists:foldl(fun check/2, {InitialType, []}, QuerySeq),
+    {_Type, LastQuery0} = lists:foldl(fun check_last/2, {Type1, []}, LastQuery),
 
-    #state{action    = statistics,
-           type      = Statistics,
-           res       = stat(Statistics, List),
-           prev_type = Type,
-           prev_res  = Result};
+    LastQuery1 =
+        case LastQuery0 of
+            [Prop={property,_,_}, Filt={filer,_}| QS] -> [Filt, Prop| QS];
+            LastQuery0 -> LastQuery0
+        end,
 
-%%% ============================================================================
-%%% Initial selection
+    {InitialEntities, InitialType, lists:flatten(QuerySeq1), LastQuery1}.
 
-%% {initial_selection, [{initial_selector, Selector}, {filter, Filter}]} |
-%% {initial_selection, [{initial_selector, Selector}]}
-process({initial_selection, InitialSelection}, Params) ->
-    lists:foldl(fun process/2, Params, InitialSelection);
+split_semantic_query(SemanticQuery)->
+    [{initial_selection, InitialSelection}| Rest] = SemanticQuery,
+    RevRest = lists:reverse(Rest),
+    {RevLastQuery, RevQuerySeq} = 
+        case RevRest of
+            [{closure, _}|_] ->
+                lists:splitwith(fun({closure,_})-> true; (_)-> false end,
+                                RevRest);
+            [{iteration, _}|_] ->
+                lists:splitwith(fun({iteration,_})-> true; (_)-> false end,
+                                RevRest);
+            [{statistics,_},{selection,_}|_] ->
+                lists:split(2, RevRest);
+            [] ->
+                {[], []};
+            _ ->
+                lists:split(1, RevRest)
+        end,
 
-process({initial_selector, InitialSelector}, Params) ->
-    {EntityType, Entities} = ?Lib:init_sel(Params, InitialSelector),
-    #state{type = EntityType, res=[Entities], action=initial_selection};
+    LastQuery = lists:flatten([Lst|| {_, Lst} <- lists:reverse(RevLastQuery)]),
+    QuerySeq = lists:flatten([Lst || {_, Lst} <- lists:reverse(RevQuerySeq)]),
 
-process({filter, Filter},
-        #state{action=initial_selection, type=Type, res=Res}=State) ->
-    FilteredRes = [ filter(Filter, Type, Entities) || Entities <- Res ],
-    State#state{res=FilteredRes};
+    case InitialSelection of
+        [{initial_selector, InitialSelector},Filter] ->
+            {InitialSelector, [Filter|QuerySeq], LastQuery};
+        [{initial_selector, InitialSelector}] ->
+            {InitialSelector, QuerySeq, LastQuery}
+    end.
 
-%%% ============================================================================
-%%% Selection, property query
 
-%% {selection, [{selector, Selector}, {filter, Filter}]} |
-%% {selection, [{selector, Selector}]}
-process({selection, Selection}, State) ->
-    lists:foldl(fun process/2, State, Selection);
-
-%% Properties can stand in place of the selectors. That case can not be handled
-%% at the parser, because they are both atoms.
-process({selector, Selector}, State) ->
-    {PrevType, PrevRes} = collect_res(State),
-
-    case ?Lib:sel_fun(PrevType, Selector) of
-        [] ->
-            case ?Lib:prop_fun(PrevType, Selector) of
-                [] ->
-                    throw(?LocalError(illegal_selector, [PrevType, Selector]));
-                [Fun] ->
-                    #state{action    = property_query,
-                           type      = Selector,
-                           res       = [Fun(Entity) || Entity <- PrevRes],
-                           prev_type = PrevType,
-                           prev_res  = PrevRes}
-            end;
-        [Fun] ->
-            NewRes = [lists:usort(Fun(Entity)) || Entity <- PrevRes],
-            #state{action    = selection,
-                   type      = ?Lib:sel_type(PrevType, Selector),
-                   res       = NewRes,
-                   prev_type = PrevType,
-                   prev_res  = PrevRes}
+%todo: sel/prop_fun error message
+%% selection: properties are skiped here
+check({selector, Selector}, {Type, Lst}) ->
+    case ?Lib:sel_type(Type, Selector) of
+        [SelType] -> {SelType, [{selector, Selector, SelType}| Lst]};
+        [] -> case ?Lib:prop_type(Type, Selector) of
+                  [_PropType] -> {Type, Lst};
+                  [] -> throw(?LocalError(illegal_selector, [Type, Selector]))
+              end
     end;
 
-process({filter, Filter}, #state{action=selection, type=Type, res=Res}=State) ->
-    FilteredRes = [ filter(Filter, Type, Entities) || Entities <- Res ],
-    State#state{res=FilteredRes};
+%% iteration/closure with the multiplicity of 1
+check({_Action, {query_seq, QuerySeq}, {mult, 1}}, {Type, Lst}) ->
+    QS = lists:flatten([List|| {_,List} <- QuerySeq]),
+    {QSType, QSLst} = lists:foldl(fun check/2, {Type, []}, QS),
+    ?Check(Type == QSType, ?LocalError(type_mismatch, [Type, QSType])),
+    {Type, [QSLst| Lst]};
 
-process({filter, Filter}, #state{action=property_query}=State) ->
-    {Entities, Properties} =
-        lists:unzip([ {Entity, Prop} ||
-                        {Entity, Prop} <-
-                            lists:zip(State#state.prev_res, State#state.res),
-                        filter(Filter, State#state.prev_type, [Entity]) /= []]),
+%% iteration/closure
+check({Action, {query_seq, QuerySeq}, {mult, Mult}}, {Type, Lst}) ->
+    QS = lists:flatten([List|| {_,List} <- QuerySeq]),
+    {QSType, QSLst} = lists:foldl(fun check/2, {Type, []}, QS),
+    ?Check(Type == QSType, ?LocalError(type_mismatch, [Type, QSType])),
+    {Type, [{Action, QSLst, Mult}| Lst]};
 
-    State#state{res = Properties, prev_res = Entities};
+%todo - skipped properties?
+check({filter, Filter}, {Type, Lst}) ->
+    {Type, [{filter, Filter}|Lst]};
+
+%% statistics
+check(Statistics, {_Type, Lst = [{property, _Prop, PropType}| _]}) ->
+    case PropType of
+        any -> {int, [{statistics, Statistics}| Lst]};
+        int -> {int, [{statistics, Statistics}| Lst]};
+        _ -> throw(?LocalError(prop_type_mismatch, [int, PropType]))
+    end;
+
+check(_Statistics, {_Type, [Elem| _]}) ->
+    throw(?LocalError(non_property, [element(2, Elem)])).
+
+%% the last selector: check whether it is a property or not
+check_last({selector, Selector}, {Type, Lst}) ->
+    case ?Lib:sel_type(Type, Selector) of
+        [SelType] -> {SelType, [{selector, Selector, SelType}| Lst]};
+        [] ->
+            case ?Lib:prop_type(Type, Selector) of
+                [PropType] -> {Type, [{property, Selector, PropType}| Lst]};
+                [] -> throw(?LocalError(illegal_selector, [Type, Selector]))
+            end
+    end;
+check_last({Action, {query_seq, QuerySeq}, {mult, Mult}}, {Type, Lst}) ->
+    QS = lists:flatten([List|| {_,List} <- QuerySeq]),
+    {QSType, QSLst} = lists:foldl(fun check/2, {Type, []}, QS),
+    ?Check(Type == QSType, ?LocalError(type_mismatch, [Type, QSType])),
+    {Type, [{Action, QSLst, Mult}| Lst]};
+check_last(LstElem, Acc) -> check(LstElem, Acc).
+
 
 %%% ============================================================================
-%%% Iteration, Closure
+%%% Processing of queries
 
-%% {iteration, [[{query_seq, QuerySeq}, {mult, Int}]]}
-%% {iteration, [[{query_seq, QuerySeq}, {mult, Int}], {filter, Filter}]}
-%% {closure,   [[{query_seq, QuerySeq}, {mult, infinite}]]}
-%% {closure,   [[{query_seq, QuerySeq}, {mult, infinite}], {filter, Filter}]}
-%% {closure,   [[{query_seq, QuerySeq}, {mult, Int}]]}
-%% {closure,   [[{query_seq, QuerySeq}, {mult, Int}], {filter, Filter}]}
-process({Action, [[{query_seq, QuerySeq}, {mult, Mult}]]}, State) ->
-    {PrevType, PrevRes} = collect_res(State),
-    FstNewState = process_query_seq(State, QuerySeq),
-    ?Check(PrevType == FstNewState#state.type,
-           ?LocalError(type_mismatch, [PrevType, FstNewState#state.type])),
+process(_Query, {_Type, []}) ->
+    {_Query, []};
 
+process(_Query, #state{res=[]}=State) ->
+    State;
+
+%%% ----------------------------------------------------------------------------
+%%% Selection
+
+process({selector, Selector, SelType}, {Type, Entities}) ->
+    [Fun] = ?Lib:sel_fun(Type, Selector),
+    {SelType, [Fun(Entity) || Entity <- flatsort(Entities)]};
+
+process({selector, Selector, SelType}, #state{type=Type, res=Entities}) ->
+    [Fun] = ?Lib:sel_fun(Type, Selector),
+    Result = [Fun(Entity) || Entity <- flatsort(Entities)],
+
+    #state{action    = selection,
+           type      = SelType, res      = Result,
+           prev_type = Type,    prev_res = flatsort(Entities)};
+
+%%% ----------------------------------------------------------------------------
+%%% Property query
+
+process({property, Property, _PropType}, #state{type=Type, res=Entities}) ->
+    [Fun] = ?Lib:prop_fun(Type, Property),
+    SortedEntities = flatsort(Entities),
+    Result = [Fun(Entity) || Entity <- SortedEntities],
+
+    #state{action    = property_query,
+           type      = Property, res      = Result,
+           prev_type = Type,     prev_res = SortedEntities};
+
+%%% ----------------------------------------------------------------------------
+%%% Iteration, closure
+
+process({_Action, _QSLst, 0}, Result) ->
+    Result;
+
+process({iteration, QSLst, Mult}, {Type, Entities}) ->
+    Result = process_query_seq({Type, flatsort(Entities)}, QSLst),
+    process({iteration, QSLst, Mult-1}, Result);
+
+process({closure, QSLst, Mult}, {Type, Entities}) ->
+    SortedEntities = flatsort(Entities),
+    {Type, NewEntities} = process_query_seq({Type, SortedEntities}, QSLst),
+    SortedNewEntities = flatsort(NewEntities),
+    NewMult = case Mult of infinite -> infinite; Mult -> Mult-1 end,
+    case SortedNewEntities of
+        SortedEntities -> {Type, SortedEntities};
+        _ -> process({closure, QSLst, NewMult}, {Type, SortedNewEntities})
+    end;
+
+process({Action, QSLst, Mult}, #state{type=Type, res=Res}=State) ->
     InitialChains =
         case State#state.action of
-            Action -> State#state.res;
-            _      -> #chains{incomplete=[[Entity]|| Entity<-PrevRes]}
+            selection -> #chains{incomplete=[[Entity]|| Entity<-flatsort(Res)]};
+            Action -> Res
         end,
 
-    InitialMult =
-        if
-            is_integer(Mult) -> InitialChains#chains.max_length + Mult;
-            true             -> Mult
+    #state{action = Action,
+           type = Type, res = chains(InitialChains, QSLst, Type, Mult, Action)};
+
+%%% ----------------------------------------------------------------------------
+%%% Statistics
+
+% todo: error message
+process({statistics, Statistics}, #state{res=PropValues}) ->
+    ?Check(lists:all(fun(Val) -> is_integer(Val) orelse is_float(Val) end,
+                     PropValues),
+           ?LocalError(type_mismatch, [any, int])),
+
+    Value =
+        case Statistics of
+            %sd -> ;
+            %var -> ;
+            %med -> ;
+            min -> lists:min(PropValues);
+            max -> lists:max(PropValues);
+            sum -> lists:sum(PropValues);
+            avg -> lists:sum(PropValues) / length(PropValues)
         end,
 
-    #state{type = PrevType,
-           res = chains(InitialChains, QuerySeq, InitialMult, State, Action),
-           prev_type = PrevType,
-           prev_res = PrevRes,
-           action = Action};
+    #state{action = statistics, type = Statistics, res = Value};
 
-process({iteration, [Params, {filter, Filter}]}, State) ->
-    NewState = process({iteration, [Params]}, State),
-    Chains = NewState#state.res,
+%%% ----------------------------------------------------------------------------
+%%% Filtering
 
-    NewIncomplete =
-        lists:filter(
-          fun(List) ->
-                  filter(Filter, NewState#state.type, [hd(List)]) /= []
-          end,
-          Chains#chains.incomplete),
+%todo: why a deep list?
+process({filter, Filter}, {Type, Entities}) ->
+    {Type, filter(Filter, Type, flatsort(Entities))};
 
-    NewChainsRec = Chains#chains{incomplete = NewIncomplete},
-    NewState#state{res = NewChainsRec};
+process({filter, Filter}, #state{action=selection}=State) ->
+    FilteredRes = [ filter(Filter, State#state.type, Entities) ||
+                      Entities <- State#state.res ],
+    State#state{res=FilteredRes};
 
-process({closure, [Params, {filter, Filter}]}, State) ->
-    NewState = process({closure, [Params]}, State),
-    Chains = NewState#state.res,
-    Type = NewState#state.type,
+process({filter, Filter}, #state{action=iteration, type=Type, res=Res}=State) ->
+    NewIncomplete = lists:filter(
+                      fun(Chain) -> filter(Filter, Type, [hd(Chain)]) /= [] end,
+                      Res#chains.incomplete),
 
+    NewChainsRec = Res#chains{incomplete = NewIncomplete},
+    State#state{res = NewChainsRec};
+
+process({filter, Filter}, #state{action=closure}=State) ->
+    Type = State#state.type,
+    Chains = State#state.res,
     NewComplete = filter_chain(Filter, Type, Chains#chains.complete),
     NewIncomplete = filter_chain(Filter, Type, Chains#chains.incomplete),
     NewRecursive = filter_chain(Filter, Type, Chains#chains.recursive),
@@ -248,7 +356,61 @@ process({closure, [Params, {filter, Filter}]}, State) ->
                               incomplete = NewIncomplete,
                               recursive  = NewRecursive},
 
-    NewState#state{res = NewChains}.
+    State#state{res = NewChains}.
+
+
+%%% ============================================================================
+%%% Helper functions
+
+chains(#chains{incomplete=[]}=Chains, _QSLst, _Type, _Mult, _Action)->
+    Chains;
+
+chains(Chains, _QSLst, _Type, 0, _Action)->
+    Chains;
+
+chains(Chains, QSLst, Type, Mult, Action) ->
+    NewChains =
+        lists:flatmap(
+          fun(Chain) ->
+                  {Type, Res} = process_query_seq({Type, [hd(Chain)]}, QSLst),
+                  next_chain(Action, Chain, flatsort(Res))
+          end,
+          Chains#chains.incomplete),
+
+    {CompletedAndRecursive, Incomplete} =
+        lists:partition(fun is_tuple/1, NewChains),
+
+    {CompletedTuple, RecursiveTuple} =
+        lists:partition(
+          fun({complete, _}) -> true; ({recursive, _}) -> false end,
+          lists:flatten(CompletedAndRecursive)),
+
+    Completed = [List || {_, List} <- CompletedTuple],
+    Recursive = [List || {_, List} <- RecursiveTuple],
+
+    NewChainsRec = #chains{complete   = Chains#chains.complete ++ Completed,
+                           incomplete = Incomplete,
+                           recursive  = Chains#chains.recursive ++ Recursive},
+
+    NewMult = case Mult of infinite -> infinite; Mult -> Mult-1 end,
+    chains(NewChainsRec, QSLst, Type, NewMult, Action).
+
+
+next_chain(iteration, _Chain, []) ->
+    [];
+
+next_chain(iteration, Chain, Result) ->
+    [ [Entity| Chain] || Entity <- Result ];
+
+next_chain(closure, Chain, []) ->
+    [{complete, Chain}];
+
+next_chain(closure, Chain, Result) ->
+    [ case lists:member(Entity, Chain) of
+          true -> {recursive, [Entity|Chain]};
+          _    -> [Entity| Chain]
+      end || Entity <- Result ].
+
 
 filter_chain(Filter, Type, Chain) ->
     NewChainWithEmpties = [ filter(Filter, Type, List) || List <- Chain ],
@@ -257,6 +419,7 @@ filter_chain(Filter, Type, Chain) ->
 %%% ============================================================================
 %%% Filters
 
+%% @private
 %% @spec filter(Filter::term(), EntityType::atom(), [entity()]) -> [entity()]
 filter(_, _Type, []) -> [];
 
@@ -277,44 +440,44 @@ filter({'and', Filter1, Filter2}, EntityType, Entities) ->
            EntityType,
            filter(Filter1, EntityType, Entities));
 
-%% @todo sq + list [a,s,d...] -> split
-filter({'in', Property, {query_seq, QuerySeq}}, EntityType, Entities) ->
-    FstInitialState = #state{res=[hd(Entities)], type=EntityType},
-    FstResultingState = process_query_seq(FstInitialState, QuerySeq),
-    NewProperty = FstResultingState#state.type,
-    NewEntityType = FstResultingState#state.prev_type,
+%% todo: sq + list [a,s,d...] -> split
+%% filter({'in', Property, {query_seq, QuerySeq}}, EntityType, Entities) ->
+%%     FstInitialState = #state{res=[hd(Entities)], type=EntityType},
+%%     FstResultingState = process_query_seq(FstInitialState, QuerySeq),
+%%     NewProperty = FstResultingState#state.type,
+%%     NewEntityType = FstResultingState#state.prev_type,
 
-    ?Check( FstResultingState#state.action == property_query,
-            ?LocalError(non_property, [NewProperty])),
+%%     ?Check( FstResultingState#state.action == property_query,
+%%             ?LocalError(non_property, [NewProperty])),
 
-    PropertyType = ?Lib:prop_type(EntityType, Property),
-    NewPropertyType = ?Lib:prop_type(NewEntityType, NewProperty),
-    ?Check( PropertyType == any orelse NewPropertyType == any orelse
-            PropertyType == NewPropertyType,
-            ?LocalError(prop_type_mismatch, [Property, NewProperty])),
+%%     PropertyType = ?Lib:prop_type(EntityType, Property),
+%%     NewPropertyType = ?Lib:prop_type(NewEntityType, NewProperty),
+%%     ?Check( PropertyType == any orelse NewPropertyType == any orelse
+%%             PropertyType == NewPropertyType,
+%%             ?LocalError(prop_type_mismatch, [Property, NewProperty])),
 
-    PropFun = prop_fun(EntityType, Property),
+%%     PropFun = prop_fun(EntityType, Property),
 
-    lists:filter(
-      fun(Entity) ->
-              InitialState = #state{res=[Entity], type=EntityType},
-              ResultingState = process_query_seq(InitialState, QuerySeq),
-              lists:member(PropFun(Entity), ResultingState#state.res)
-      end,
-      Entities);
+%%     lists:filter(
+%%       fun(Entity) ->
+%%               InitialState = #state{res=[Entity], type=EntityType},
+%%               ResultingState = process_query_seq(InitialState, QuerySeq),
+%%               lists:member(PropFun(Entity), ResultingState#state.res)
+%%       end,
+%%       Entities);
 
 filter({query_seq, QuerySeq}, EntityType, Entities) ->
+    QS = lists:flatten([List|| {_,List} <- QuerySeq]),
+    {_QSType, QSLst} = lists:foldl(fun check/2, {EntityType, []}, QS),
     lists:filter(
       fun(Entity) ->
-              State = #state{type=EntityType, res=[Entity]},
-              NewState = process_query_seq(State, QuerySeq),
-              {_Type, Res} = collect_res(NewState),
+              {_QSType, Res} = process_query_seq({EntityType, [Entity]}, QSLst),
               Res =/= []
       end,
       Entities);
 
-%% @doc Comparison works on atom, int and string.
-%% @todo regexp match -> if a string doesn't match
+%% Comparison works on atom, int and string.
+%% todo: regexp match -> if a string doesn't match
 filter({CompOp, Filt1, Filt2}, EntityType, Entities) ->
     Comp1 = if
                 is_tuple(Filt1) -> filter(Filt1, EntityType, Entities);
@@ -372,83 +535,254 @@ compare(CompOp, CompL, CompR) ->
     apply(erlang, CompOp, [CompL, CompR]).
 
 
-chains(#chains{incomplete=[]}=Chains, _QuerySeq, _Mult, _St, _Action)->
-    Chains;
-chains(#chains{max_length=Mult}=Chains, _QuerySeq, Mult, _State, _Action)->
-    Chains;
-
-chains(Chains, QuerySeq, Mult, State, Action)->
-    {PrevType, _PrevRes} = collect_res(State),
-    NewChains =
-        lists:flatmap(
-          fun(Chain) ->
-                  InitialState = #state{res=[hd(Chain)], type=PrevType},
-                  NewState = process_query_seq(InitialState, QuerySeq),
-                  {_Type, Result} = collect_res(NewState),
-                  next_chain(Action, Chain, Result)
-          end,
-          Chains#chains.incomplete),
-
-    {CompletedAndRecursive, Incomplete} =
-        lists:partition(fun is_tuple/1, NewChains),
-
-    {CompletedTuple, RecursiveTuple} =
-        lists:partition(
-          fun({complete, _}) -> true; ({recursive, _}) -> false end,
-          lists:flatten(CompletedAndRecursive)),
-
-    Completed = [List || {_, List} <- CompletedTuple],
-    Recursive = [List || {_, List} <- RecursiveTuple],
-
-    NewChainsRec =
-        #chains{max_length        = Chains#chains.max_length+1,
-                complete          = Chains#chains.complete ++ Completed,
-                incomplete        = Incomplete,
-                recursive         = Chains#chains.recursive ++ Recursive},
-
-    chains(NewChainsRec, QuerySeq, Mult, State, Action).
-
-next_chain(iteration, _Chain, []) ->
-    [];
-next_chain(iteration, Chain, Result) ->
-    [ [Entity| Chain] || Entity <- Result ];
-next_chain(closure, Chain, []) ->
-    [{complete, Chain}];
-next_chain(closure, Chain, Result) ->
-    [ case lists:member(Entity, Chain) of
-          true -> {recursive, [Entity|Chain]};
-          _    -> [Entity| Chain]
-      end || Entity <- Result ].
-
-stat(_Statistics, []) -> 0;
-stat(min, List) -> hd(List);
-stat(max, List) -> lists:last(List);
-stat(sum, List) -> lists:sum(List);
-stat(avg, List) -> lists:sum(List) / length(List).
-
 prop_fun(EntityType, Filter) ->
     case ?Lib:prop_fun(EntityType, Filter) of
         [] -> throw(?LocalError(illegal_property, [EntityType, Filter]));
         [Fun]   -> Fun
     end.
 
-collect_res(#state{res=Res} = State) ->
-    PrevRes =
-        case State#state.action of
-            property_query ->
-                State#state.prev_res;
-            closure ->
-                ?MISC:flatsort(Res#chains.complete ++
-                               Res#chains.incomplete ++
-                               Res#chains.recursive);
-            iteration ->
-                ?MISC:flatsort([hd(List) || List <- Res#chains.incomplete]);
-            _ ->
-                ?MISC:flatsort(Res)
-        end,
+flatsort(List) -> lists:usort(lists:flatten(List)).
 
-    PrevType = case State#state.action of
-                   property_query -> State#state.prev_type;
-                   _              -> State#state.type
-               end,
-    {PrevType, PrevRes}.
+
+%%% ============================================================================
+%%% Show
+
+%todo: links to the prev results?
+%% @private
+%% @spec state_to_disp(#state{}) ->
+%%          {EntityType::atom(), EntitiesToPosition::[entity()], Display}
+%%       Display = {eq, PropName::atom(), PropValue} |
+%%                 {list, EntityType::atom(), [entity()]} |
+%%                 {chain, EntityType::atom(), [entity()], PostWS} |
+%%                 {group_by, EntityType::atom(), entity()}
+%% @doc This gives the list of the entities where a position is needed, and
+%%      converts a `state' to an intermediate format used for displaying.
+state_to_disp(#state{action=selection, prev_res=[], type=Type, res=Res}) ->
+    {Type, flatsort(Res), [{list, Type, flatsort(Res)}]};
+
+state_to_disp(#state{action=selection} = State) ->
+    ZippedRes = lists:filter(fun({_, Ns}) -> Ns /= [] end,
+                             lists:zip(State#state.prev_res, State#state.res)),
+    Disp = lists:flatmap(
+             fun({Entity, List}) ->
+                     [{group_by, State#state.prev_type, Entity},
+                      {list, State#state.type, List}]
+             end,
+             ZippedRes ),
+    {State#state.type, flatsort(State#state.res), Disp};
+
+state_to_disp(#state{action=property_query} = State) ->
+    ZippedRes = lists:zip(State#state.prev_res, State#state.res),
+    Disp = lists:flatmap(
+             fun({Entity, PropVal}) ->
+                     [{group_by, State#state.prev_type, Entity},
+                      {eq, State#state.type, PropVal}]
+             end,
+             ZippedRes),
+    {State#state.prev_type, flatsort(State#state.prev_res), Disp};
+
+state_to_disp(#state{action=statistics} = State) ->
+    {none, [], [{eq, State#state.type, State#state.res}]};
+
+state_to_disp(#state{action=iteration, res = Chains} = State) ->
+    Disp = lists:map(
+             fun(Chain) ->
+                     {chain, State#state.type, lists:reverse(Chain), "\n"}
+             end,
+          Chains#chains.incomplete),
+    {State#state.type, flatsort(Chains#chains.incomplete), Disp};
+
+state_to_disp(#state{action=closure, res = Chains} = State) ->
+    NodesToPosition = flatsort( Chains#chains.complete ++
+                                Chains#chains.incomplete ++
+                                Chains#chains.recursive ),
+    Disp = lists:append(
+             [ [{chain, State#state.type, lists:reverse(Chain), "...\n"}||
+                   Chain <- Chains#chains.incomplete],
+               [{chain, State#state.type, lists:reverse(Chain), "\n"}||
+                   Chain <- Chains#chains.complete],
+               [{chain, State#state.type, lists:reverse(Chain), "*\n"}||
+                   Chain <- Chains#chains.recursive] ]),
+    {State#state.type, NodesToPosition, Disp}.
+
+
+positions(_Type, _Nodes, none) ->
+    dict:new();
+% todo: linecol? 1,1 -> {1,1},{1,1}?
+positions(file, Nodes, _PositionOpt) ->
+    dict:from_list(
+      [ begin
+            Pos = case ?Graph:class(File) of
+                      file ->
+                          {?File:path(File), 1, 1};
+                      module ->
+                          case ?Query:exec(File, ?Mod:file()) of
+                              [] -> nopos;
+                              [Node] -> {?File:path(Node), 1, 1}
+                          end
+                  end,
+            {File, Pos}
+        end || File <- Nodes ]);
+
+positions(Type, Nodes, PositionOpt) ->
+    NodesWithTokens = [ {Node, file_and_tokens(Type, Node)} || Node <- Nodes ],
+    CollTokens =
+        dict:to_list(
+          lists:foldl(
+            fun({_Node, []}, Dict) ->
+                    Dict;
+               ({_Node, [File, First, Last]}, Dict) ->
+                    D1 = case dict:is_key(File, Dict) of
+                             false -> dict:store(File, [First], Dict);
+                             true -> dict:append(File, First, Dict)
+                         end,
+                    dict:append(File, Last, D1)
+            end,
+            dict:new(),
+            lists:keysort(2, NodesWithTokens))),
+    TokenPos = lists:flatten([?Token:map_pos(File, Tokens, PositionOpt)||
+                                 {File, Tokens} <- CollTokens]),
+    lists:foldl(
+      fun({Node, []}, Dict) ->
+              dict:store(Node, nopos, Dict);
+         ({Node, [File, First, Last]}, Dict) ->
+              {First, {Pos1, _}} = lists:keyfind(First, 1, TokenPos),
+              {Last, {_, Pos2}} = lists:keyfind(Last, 1, TokenPos),
+              dict:store(Node, {?File:path(File), Pos1, Pos2}, Dict)
+      end,
+      dict:new(),
+      NodesWithTokens).
+
+
+show(State, DisplayOpt) ->
+    PositionsOpt = proplists:get_value(positions, DisplayOpt, none),
+    OutputOpt = proplists:get_value(output, DisplayOpt, stdio),
+
+    {NodeType, NodesToPosition, Display} = state_to_disp(State),
+    Dict = positions(NodeType, NodesToPosition, PositionsOpt),
+
+    %todo: message handling in emacs
+    display(Dict, Display, OutputOpt, PositionsOpt).
+
+
+display(Dict, Display, stdio, _) ->
+    TextPos = lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]),
+    DispText = [[Text, pos_text(Pos)] || {Pos, Text} <- TextPos],
+    io:put_chars(lists:flatten(DispText));
+
+display(Dict, Display, {iodev, Dev}, _) ->
+    TextPos = lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]),
+    DispText = [[Text, pos_text(Pos)] || {Pos, Text} <- TextPos],
+    io:put_chars(Dev, lists:flatten(DispText));
+
+display(Dict, Display, other, _) ->
+    [format(Dict, Disp, msg) || Disp <- Display];
+
+display(Dict, Display, msg, scalar) ->
+    ?UI:message(queryres,
+                lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]));
+display(Dict, Display, msg, _) ->
+    ?UI:message(queryres, [format(Dict, Disp, msg) || Disp <- Display]).
+
+fetch(Entity, Dict) ->
+    case dict:find(Entity, Dict) of
+        error -> nopos;
+        {ok, Value} -> Value
+    end.
+
+%todo: links to prev results?
+format(Dict, {group_by, Type, Entity}, stdio) ->
+    [{fetch(Entity, Dict), text(Type, Entity)}, {nopos, "\n"}];
+format(Dict, {list, Type, Entities}, stdio) ->
+    [ [{nopos, "    "},
+       {fetch(Entity, Dict), text(Type, Entity)},
+       {nopos, "\n"}]|| Entity <- Entities ];
+format(Dict, {chain, Type, Chain, PostWS}, stdio) ->
+    [[[{fetch(Entity, Dict), text(Type, Entity)}, {nopos, " "}]||
+         Entity <- Chain],
+     {nopos, PostWS}];
+format(_Dict, {eq, PropName, PropVal}, stdio) ->
+    [{nopos,
+      lists:flatten(io_lib:format("    ~p = ~p\n", [PropName, PropVal]))}];
+
+format(Dict, {group_by, Type, Entity}, msg) ->
+    {group_by, {fetch(Entity, Dict), text(Type, Entity)}};
+format(Dict, {list, Type, Entities}, msg) ->
+    {list, [{fetch(Entity, Dict), text(Type, Entity)}|| Entity <- Entities]};
+format(Dict, {chain, Type, Chain, PostWS}, msg) ->
+    {chain,
+     [{fetch(Entity, Dict), text(Type, Entity)}|| Entity <- Chain], PostWS};
+format(_Dict, {eq, PropName, PropValue}, msg) ->
+    {eq, PropName, PropValue}.
+
+
+file_and_tokens(function, Node) ->
+   ?Query:exec(Node, ?Query:seq(?Fun:definition(),
+                                ?Query:all([ ?Form:file(),
+                                             ?Syn:first_leaf(),
+                                             ?Syn:last_leaf() ])));
+
+file_and_tokens(record, Node) ->
+    ?Query:exec(Node, ?Query:seq(?Rec:form(),
+                                 ?Query:all([ ?Form:file(),
+                                              ?Syn:first_leaf(),
+                                              ?Syn:last_leaf() ])));
+
+file_and_tokens(field, Node) ->
+    Rec = ?Query:exec(Node, [{field, back}]),
+    file_and_tokens(record, Rec);
+
+file_and_tokens(macro, Node) ->
+   ?Query:exec(Node,
+               ?Query:all([?Form:file(), ?Syn:first_leaf(), ?Syn:last_leaf()]));
+
+file_and_tokens(expression, Node) ->
+    [File] = ?Syn:get_file(Node),
+    [First] = ?Query:exec(Node, ?Syn:first_leaf()),
+    [Last] = ?Query:exec(Node, ?Syn:last_leaf()),
+    [File, First, Last];
+
+file_and_tokens(variable, Node) ->
+    case ?Query:exec(Node, ?Var:bindings()) of
+        [Bind | _] -> file_and_tokens(expression, Bind);
+        [] -> []
+    end.
+
+
+text(Type, Entity) ->
+    lists:flatten(text0(Type, Entity)).
+
+text0(file, File) ->
+    case ?Graph:class(File) of
+        file ->
+            Path = ?File:path(File),
+            string:substr(Path, string:rstr(Path, "/")+1);
+        module ->
+            case ?Query:exec(File, ?Mod:file()) of
+                [] -> io_lib:write_atom(?Mod:name(File));
+                [Node] ->
+                    Path = ?File:path(Node),
+                    string:substr(Path, string:rstr(Path, "/")+1)
+            end
+    end;
+text0(function, Fun) ->
+    [Mod] = ?Query:exec(Fun, ?Fun:module()),
+    ?MISC:fun_text([?Mod:name(Mod), ?Fun:name(Fun), ?Fun:arity(Fun)]);
+text0(record, Rec) ->
+    io_lib:write_atom(?Rec:name(Rec));
+text0(macro, Mac) ->
+    ?Macro:name(Mac);
+text0(variable, Var) ->
+    ?Var:name(Var);
+text0(field, Field) ->
+    io_lib:write_atom(?RecField:name(Field));
+text0(expression, Expr) ->
+    Text = string:strip(lists:flatten(?Syn:tree_text(Expr))),
+    string:strip(Text, both, $\n).
+
+pos_text(nopos) ->
+    [];
+pos_text({File, {Pos11, Pos12}, {Pos21, Pos22}}) ->
+    ["   ", File, io_lib:format(": ~p,~p-~p,~p", [Pos11, Pos12, Pos21, Pos22])];
+pos_text({File, Pos1, Pos2}) ->
+    ["   ", File, io_lib:format(": ~p-~p", [Pos1, Pos2])].

@@ -28,7 +28,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_deps).
--vsn("$Rev: 4375 $").
+-vsn("$Rev: 5049 $").
 
 -include("cluster.hrl").
 
@@ -118,6 +118,10 @@ record_refs(Module) ->
 create_ffdg(TableID) ->
     deps_to_ets(TableID,lists:flatmap(fun fun_fun_deps/1,functions()),true).
 
+%% @spec create_ffdg_matrix() -> ok
+%% @doc  Collect the function-function dependences into a matrix.
+%%       The dependencies will placed into the matrix in the 
+%%       `{{Entity1, Entity2}, Count}' format.
 create_ffdg_matrix() ->
     deps_to_matrix(lists:flatmap(fun fun_fun_deps/1,functions()),true).
 

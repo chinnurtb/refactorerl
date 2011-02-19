@@ -27,6 +27,7 @@
 (require 'refactorerl-customization)
 (require 'refactorerl-server)
 (require 'refactorerl-mode)
+(require 'refactorerl-clustering)
 
 (provide 'refactorerl)
 
@@ -108,14 +109,6 @@ that connects to the RefactorErl server."
       (setq refac-test-mode (not refac-test-mode))
     (set (make-local-variable 'refac-test-mode) t)))
 
-(defun refactorerl-cluster-agglom ()
-  (interactive)
-  (cluster-ui-options-agglom))
-
-(defun refactorerl-cluster-genetic ()
-  (interactive)
-  (cluster-ui-options-genetic))
-
 (defun refactorerl-undo ()
   "Steps backward on the refactoring database."
   (interactive)
@@ -153,38 +146,6 @@ that connects to the RefactorErl server."
   "Adds the contents of a directory to the active refactoring set."
   (interactive "D")
   (refac-send-command 'add_dir (expand-file-name dirname)))
-
-;; Cluster Ui
-
-(defvar cluster-ui-buffer nil)
-(defun cluster-ui-options-genetic()
-  (refac-send-command 'cl_options 'genetic))
-
-(defun cluster-ui-options-agglom()
-  (refac-send-command 'cl_options 'agglom_attr))
-
-
-;Buffer of the clustering
-(defvar cluster-ui-result-buffer nil)
-(defun res-apply-aggl (&rest args)
-  (let ((value)
-        (algo alg)
-        (createdb (widget-value create))
-       )
-    (dolist (elt cl-options-list value)
-      (setq value (cons (widget-value elt) value)))
-    (setq cluster-ui-result-buffer
-          (generate-new-buffer "*Clustering*"))
-    (switch-to-buffer cluster-ui-result-buffer)
-    (refac-send-command 'run_cl (reverse value) algo createdb)))
-
-(defun cluster-ui-refresh (&rest args)
-   (refac-send-command 'cl_refresh))
-
-
-(defun cluster-ui-cleanup (&rest args)
-  (delete-window (get-buffer-window cluster-ui-buffer))
-  (kill-buffer cluster-ui-buffer))
 
 ;; Move function
 

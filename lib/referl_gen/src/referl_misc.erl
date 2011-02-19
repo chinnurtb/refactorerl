@@ -25,7 +25,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_misc).
--vsn("$Rev: 4995 $ ").
+-vsn("$Rev: 5063 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -171,7 +171,7 @@ uniq([H|T]) -> [H|uniq(T)].
 %% @doc Converts the list of atoms into a printable format, the elements are
 %% separated by a comma.
 separated_text(Atoms) ->
-    Texts = lists:map(fun atom_to_list/1, Atoms),
+    Texts = lists:map(fun to_list/1, Atoms),
     join(Texts).
 
 

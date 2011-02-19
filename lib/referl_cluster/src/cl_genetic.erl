@@ -25,7 +25,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_genetic).
--vsn("$Rev: 4812 $").
+-vsn("$Rev: 5049 $").
 
 -export([ga/0, 
          ga/2,
@@ -45,7 +45,7 @@ ga() ->
                 {max_cluster_size, 5},
                 {max_start_cluster_size, 2}]).
 
-%% @doc Runs genetic algoritm with given parameters
+%% @doc Runs genetic algoritm with given parameters.
 ga(Output, Options) ->
     cl_db:update(deps), 
     {W, C} = cl_out:open(Output), 
@@ -59,7 +59,7 @@ ga(Output, Options) ->
 	         end,
     cl_out:close(C),
     Result.
-
+%% @doc Returns back the default parameters of genetic algorithm.
 ga_default() ->
     [{population_size, 12},
      {iterations, 10},

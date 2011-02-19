@@ -1,0 +1,121 @@
+var queryListObj;
+var activeQuery = false;
+var clickedQuery = false;
+var contentObj;
+    
+function mouseoverQuery() { // Highlight query
+    if(this==clickedQuery)return;
+    if(activeQuery && activeQuery!=this){
+        if(activeQuery==clickedQuery)
+            activeQuery.className='queryClick';
+        else
+            activeQuery.className='';
+    }
+    this.className='queryMouseOver';
+    activeQuery = this; // Storing reference to this query
+}
+
+function showWaitMessage() {
+    contentObj.innerHTML = "Running the query...Please wait";
+}
+
+function resizeIframe(oIframe) {
+    var innerHeight = oIframe.contentWindow.getActualHeight();
+    oIframe.height = innerHeight;
+} 
+
+function selectQuery() {// User has clicked on a query
+    showWaitMessage();
+    if(clickedQuery && clickedQuery!=this)clickedQuery.className=
+        'queryMouseOver';
+    this.className='queryClick';
+    clickedQuery = this;
+
+    var input = document.getElementById("query");
+    query.value = this.id;
+
+    var resultHtml = 
+        "<iframe style=\"border: none\"; src='post_query.yaws?u= " + 
+        querySt("user") + "&p=" + this.id + 
+        "' width=\"100%\" id=\"myiframe \"name=\"myiframe\"" +
+        " onload=\"resizeIframe(this)\"  vspace=\"0\" hspace=\"0\"" +
+        " marginwidth=\"0\" marginheight=\"0\" >" + 
+        "</iframe>";  
+    contentObj.innerHTML =  "<h3>" + this.id + " </h3>" + resultHtml; 
+}
+
+
+function loadErl() { 
+    var fselect = document.getElementById("fileselect");
+    var file = fselect.options[fselect.selectedIndex].value; 
+}
+
+function newQuery() {
+     var query = document.getElementById('query').value;
+
+     var resultHtml =
+        "<iframe style=\"border: none\"; src='post_query.yaws?u= " + 
+        querySt("user") + "&q=" + query + 
+        "' width=\"100%\" id=\"myiframe \"name=\"myiframe\"" +
+        " onload=\"resizeIframe(this)\"  vspace=\"0\" hspace=\"0\"" +
+        " marginwidth=\"0\" marginheight=\"0\" >" + 
+        "</iframe>";  
+     contentObj.innerHTML =  "<h3>" + query + " </h3>" + resultHtml; 
+     
+  
+}
+
+function getBody(content) { // searches for body, extracts and returns the content
+    test = content.toLowerCase();
+    var x = test.indexOf("<body");
+    if(x == -1) return "";
+    
+    x = test.indexOf(">", x);
+    if(x == -1) return "";
+      
+    var y = test.lastIndexOf("</body>");
+    if(y == -1) y = test.lastIndexOf("</html>");
+    if(y == -1) y = content.length;   
+    return content.slice(x + 1, y);   
+}
+ 
+function loadWholePage(url) {
+    var x = document.getElementById("erlSource");
+    var xhr = createXHR();
+    xhr.onreadystatechange=function() { 
+        if(xhr.readyState == 4) {
+            x.value = getBody(xhr.responseText);
+        }
+    }; 
+    xhr.open("GET", url , true);
+    xhr.send(null); 
+}
+
+
+function querySt(search_for) {
+    var query = window.location.search.substring(1);
+    var parms = query.split('&');
+    for (var i=0; i<parms.length; i++) {
+        var pos = parms[i].indexOf('=');
+        if (pos > 0  && search_for == parms[i].substring(0,pos)) {
+            var s = parms[i].substring(pos+1);
+            return s;
+        }
+    }
+    return "";
+}
+
+function initAjax() {
+    queryListObj = document.getElementById('queryList');
+    var querys = queryListObj.getElementsByTagName('LI');
+    for(var no=0;no<querys.length;no++){
+        querys[no].onmouseover = mouseoverQuery;
+        querys[no].onclick = selectQuery;
+    }
+    contentObj = document.getElementById('resultP');                  
+}
+
+document.getElementById("username");
+logout.innerHTML = decodeURIComponent(querySt("user")) + " - Log out";
+initAjax();
+

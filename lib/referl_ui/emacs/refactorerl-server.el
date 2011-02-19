@@ -165,3 +165,17 @@ for available types."
                       (widget-value incdir-list)
                       (widget-value outdir-menu))
   (refac-hide-config))
+
+(defun refac-server-show-files ()
+  (interactive)
+  (async-with-refac-buffer-list (refac-send-command 'status_info (list))))
+
+(defun refac-server-show-parseerrors ()
+  (interactive)
+  (async-with-refac-buffer-list (refac-send-command 'error_attr)))
+
+(defun refac-server-reset-db ()
+  (interactive)
+  (when (yes-or-no-p "Clear database contents? ")
+    (refac-send-command 'reset)))
+

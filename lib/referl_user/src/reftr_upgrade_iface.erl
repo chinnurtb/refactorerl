@@ -33,7 +33,7 @@
 %%% ----------------------------------------------------------------------------
 
 -module(reftr_upgrade_iface).
--vsn("$Rev: 4772 $").%"
+-vsn("$Rev: 5075 $").%"
 
 %%% ----------------------------------------------------------------------------
 %%% Exports
@@ -61,10 +61,10 @@ warning(S, D) -> error_logger:warning_msg(S ++ "~n", D).
 %% Representation of the change descriptor structures
 -record(elem, {role, id, items, value, f, node,
                exceptionclass, generic = false}).
--define(List(X), #elem{role = list, X}.
--define(Tuple(X), #elem{role = tuple, X}.
--define(Simple(X), #elem{role = none, X}.
--define(SimplE(X, Y), #elem{role = none, X, Y}.
+-define(List(X), #elem{role = list, X}).
+-define(Tuple(X), #elem{role = tuple, X}).
+-define(Simple(X), #elem{role = none, X}).
+-define(SimplE(X, Y), #elem{role = none, X, Y}).
 
 %% Mapping a change descriptor to a list's elements
 -record(map, {change_desc}).

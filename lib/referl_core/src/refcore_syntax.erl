@@ -29,7 +29,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_syntax).
--vsn("$Rev: 4995 $ ").
+-vsn("$Rev: 5076 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -49,7 +49,7 @@
 %% Syntax tree manipulation
 -export([build/2]).
 %% Graph walk
--export([walk_graph/4]).
+-export([walk_graph/4, walk_graph/5]).
 %% Link filtering
 -export([filter_fun/1, reindex_links/1]).
 %% Environment nodes
@@ -1204,17 +1204,23 @@ update_attribs(Node, Data, Children, Trf, IsNew) ->
 %% For each node, `ActOnNode' is called, which in turn calls `WalkNext'.
 %% This way, `ActOnNode' can be written with more flexibility,
 %% e.g. preorder and postorder walks can be made.
-walk_graph(Node = {'$gn', FromType, _}, Filter, ActOnNode, State) ->
-    Links    = node_links(Node, FromType, Filter),
-    WalkNext =
+walk_graph(Node, Filter, ActOnNode, State) ->
+    NoAdds = fun(_) -> [] end,
+    walk_graph(Node, Filter, ActOnNode, State, NoAdds).
+
+walk_graph(Node = {'$gn', FromType, _}, Filter, ActOnNode, State, AddNodes) ->
+    Links = node_links(Node, FromType, Filter),
+    {_, Nodes} = lists:unzip(Links),
+    Adds       = AddNodes(Node),
+    WalkNext   =
         fun (NewSt, NodeIsDone) ->
             lists:foldl(
-                fun({_Tag, To}, St) ->
+                fun(To, St) ->
                     case NodeIsDone(To, St) of
                         true  -> St;
-                        false -> walk_graph(To, Filter, ActOnNode, St)
+                        false -> walk_graph(To, Filter, ActOnNode, St, AddNodes)
                     end
-                end, NewSt, Links)
+                end, NewSt, Nodes ++ Adds)
         end,
     ActOnNode(Node, State, Links, WalkNext).
 
@@ -1224,7 +1230,16 @@ node_links(Node, FromType, Filter) ->
     NodeClass = element(1, ?Graph:data(Node)),
     Links = [Link || Link = {Tag, _To} <- ?Graph:links(Node),
                      FilterFun(NodeClass, Tag)],
-    case schema_has(?SYNTAX_SCHEMA, FromType) orelse schema_has(?LEXICAL_SCHEMA, FromType) of
+    IsSynNode =
+        case ?Graph:data(Node) of
+            #expr{type=fpar} -> false;
+            #expr{type=fret} -> false;
+            #expr{role=dflow} -> false;
+            _ ->
+                schema_has(?SYNTAX_SCHEMA, FromType) orelse
+                schema_has(?LEXICAL_SCHEMA, FromType)
+        end,
+    case IsSynNode of
         false ->
             Links;
         true ->
@@ -1275,6 +1290,7 @@ filters(syn)     -> [fun is_syn_link/2];
 filters(lex)     -> [fun is_form/2, fun is_lex_link/2];
 filters(not_lex) -> [fun not_lex/2];
 filters(dataflow)-> [fun is_syn_link/2, fun is_data_flow_link/2];
+filters(semdf)   -> [fun is_semdf_link/2];
 filters(_)       -> [fun all_links/2].
 
 %%% ----------------------------------------------------------------------------
@@ -1304,11 +1320,25 @@ is_sem_link(root, Tag)   -> Tag == module;
 is_sem_link(file, Tag)   -> Tag == moddef;
 is_sem_link(form, Tag)   -> Tag == fundef;
 is_sem_link(clause, Tag) -> lists:member(Tag, [modctx, vardef, varvis]);
-is_sem_link(expr, Tag)   -> lists:member(Tag, [modref, varref, varbind, funlref, funeref]);
+is_sem_link(expr, Tag)   -> lists:member(Tag, [modref, varref, varbind, funlref, funeref,
+                                               flow, sel_e, cons_e, sel, cons]);
+%is_sem_link(expr, Tag)   -> lists:member(Tag, [modref, varref, varbind, funlref, funeref,
+%                                               flow, sel_e, cons_e, sel, cons_back]);
 is_sem_link(Class, _)    -> lists:member(Class, [module, variable, func]).
 
+is_semdf_link(root, Tag)   -> Tag == module;
+is_semdf_link(file, Tag)   -> Tag == moddef;
+is_semdf_link(form, Tag)   -> Tag == fundef;
+is_semdf_link(expr, Tag)   -> lists:member(Tag, [modref, funeref,
+                                               flow, sel_e, cons_e, sel, cons, dep]);
+%is_semdf_link(expr, Tag)   -> lists:member(Tag, [modref, funeref,
+%                                               flow, sel_e, cons_e, sel, cons_back, dep]);
+is_semdf_link(Class, _)    -> lists:member(Class, [module, func]).
+
 is_data_flow_link(expr, Tag) ->
-    lists:member(Tag, [flow, sel, sel_e, cons_e, cons_back, dep]);
+    lists:member(Tag, [flow, sel, sel_e, cons_e, cons, dep]);
+%is_data_flow_link(expr, Tag) ->
+%    lists:member(Tag, [flow, sel, sel_e, cons_e, cons_back, dep]);
 is_data_flow_link(_,_) -> false.
 
 not_lex(_,    file) -> true;

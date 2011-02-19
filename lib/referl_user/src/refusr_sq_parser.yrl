@@ -18,7 +18,7 @@ query_seq      -> query                   : ['$1'].
 query_seq      -> query ':' statistics    : ['$1', '$3'].
 query_seq      -> query '.' query_seq     : ['$1'| '$3'].
 
-statistics     -> atom                    : {statistics, element(3, '$1')}.
+statistics     -> atom                    : {statistics, [element(3, '$1')]}.
 
 query          -> selection               : {selection, '$1'}.
 query          -> iteration               : {iteration, '$1'}.
@@ -37,18 +37,20 @@ selection -> atom '[' filter ']'
              : [{selector, element(3, '$1')}, {filter, '$3'}].
 
 iteration -> '{' query_seq '}' int
-             : [[{query_seq, '$2'}, {mult, element(3, '$4')}]].
+             : [{iteration, {query_seq, '$2'}, {mult, element(3, '$4')}}].
 iteration -> '{' query_seq '}' int '[' filter ']'
-             : [[{query_seq, '$2'}, {mult, element(3, '$4')}], {filter, '$6'}].
+             : [{iteration, {query_seq, '$2'}, {mult, element(3, '$4')}},
+                {filter, '$6'}].
 
 closure   -> '(' query_seq ')' '+'
-             : [[{query_seq, '$2'}, {mult, infinite}]].
+             : [{closure, {query_seq, '$2'}, {mult, infinite}}].
 closure   -> '(' query_seq ')' '+' '[' filter ']'
-             : [[{query_seq, '$2'}, {mult, infinite}], {filter, '$6'}].
+             : [{closure, {query_seq, '$2'}, {mult, infinite}}, {filter, '$6'}].
 closure   -> '(' query_seq ')' int
-             : [[{query_seq, '$2'}, {mult, element(3, '$4')}]].
+             : [{closure, {query_seq, '$2'}, {mult, element(3, '$4')}}].
 closure   -> '(' query_seq ')' int '[' filter ']'
-             : [[{query_seq, '$2'}, {mult, element(3, '$4')}], {filter, '$6'}].
+             : [{closure , {query_seq, '$2'}, {mult, element(3, '$4')}},
+                {filter, '$6'}].
 
 
 filter   -> exp100                       : '$1'.
@@ -68,7 +70,6 @@ exp400   -> exp_max                      : '$1'.
 %%Parenthesis
 exp_max  -> '(' exp100 ')'               : '$2'.
 %%Embedded queries
-%exp_max  -> property 'in' semantic_query : {'in', '$1', '$3'}.
 exp_max  -> property 'in' '.' query_seq  : {'in', '$1', {query_seq, '$4'}}.
 exp_max  -> '.' query_seq                : {query_seq, '$2'}.
 %%Simple values
