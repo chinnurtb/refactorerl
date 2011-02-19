@@ -1,3 +1,4 @@
+;; -*- coding: utf-8 -*-
 ;; The contents of this file are subject to the Erlang Public License,
 ;; Version 1.1, (the "License"); you may not use this file except in
 ;; compliance with the License. You should have received a copy of the
@@ -63,8 +64,48 @@ used to access the server."
     (define-key menu [extract]
       '(menu-item "Extract function" refactorerl-extract-function
                   :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [mergeexpr]
+      '(menu-item "Merge expressions" refactorerl-merge-expr
+                  :enable (eq refac-buffer-state 'ok)
+                  :help "Merges all instances of an expression"))
+    (define-key menu [inline]
+      '(menu-item "Inline function" refactorerl-inline-function
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [tuplefunpar]
+      '(menu-item "Tuple function parameters" refactorerl-tuple-funpar
+                  :enable (eq refac-buffer-state 'ok)
+                  :help "Put tuple the marked parameters of the function"))
+    (define-key menu [reorder]
+      '(menu-item "Reorder function parameters" refactorerl-reorder-funpar
+                  :enable (eq refac-buffer-state 'ok)
+                  :help "Reorders a parameters of the marked function"))
+    (define-key menu [generalize]
+      '(menu-item "Generalize function definition"
+                  refactorerl-generalize-function
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [renamefun]
+      '(menu-item "Rename function" refactorerl-rename-function
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [renamevar]
+      '(menu-item "Rename variable" refactorerl-rename-variable
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [renamemod]
+      '(menu-item "Rename module" refactorerl-rename-mod
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [renamerec]
+      '(menu-item "Rename record" refactorerl-rename-record
+                  :enable (eq refac-buffer-state 'ok)))
+   (define-key menu [renamefield]
+      '(menu-item "Rename record field" refactorerl-rename-field
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [elimvar]
+      '(menu-item "Eliminate variable" refactorerl-eliminate-variable
+                  :enable (eq refac-buffer-state 'ok)))
     (define-key menu [move]
       '(menu-item "Move function" refactorerl-move-function
+                  :enable (eq refac-buffer-state 'ok)))
+    (define-key menu [moverec]
+      '(menu-item "Move record" refactorerl-move-record
                   :enable (eq refac-buffer-state 'ok)))
     (define-key menu [sepref]  '(menu-item "--"))
 
@@ -77,6 +118,14 @@ used to access the server."
     (define-key menu [add]
       '(menu-item "Add file" refactorerl-add-file
                   :enable buffer-file-name))
+    (define-key menu [sepfile]  '(menu-item "--"))
+
+    (define-key menu [Undo]
+      '(menu-item "Undo (one step only)" refactorerl-undo
+                  :enable (file-exists-p
+                              (concat
+          (file-name-as-directory refactorerl-base-path) "data/backup.1"))
+                  :help "Steps back on the database"))
     (define-key menu [sepfile]  '(menu-item "--"))
 
     (define-key menu [cluster]
@@ -113,23 +162,35 @@ used to access the server."
 (defun make-refactorerl-mode-map ()
   "Creates the local keymap for Erlang Refactoring minor mode."
   (let ((map (make-sparse-keymap)))
-    (define-key map "\C-c\C-rQ" 'refactorerl-quit)
-    (define-key map "\C-c\C-rR" 'refactorerl-restart)
-    (define-key map "\C-c\C-ra" 'refactorerl-add-file)
-    (define-key map "\C-c\C-rd" 'refactorerl-drop-file)
-    (define-key map "\C-c\C-rD" 'refactorerl-debug-shell)
-    (define-key map "\C-c\C-re" 'refactorerl-extract-function)
-    (define-key map "\C-c\C-rf" 'refactorerl-expand-funexpr)
-    (define-key map "\C-c\C-rm" 'refactorerl-move-function)
-    (define-key map "\C-c\C-rG" 'refactorerl-draw-graph)
-    (define-key map "\C-c\C-rL" 'refactorerl-load-dir)
-    (define-key map "\C-c\C-rC" 'refactorerl-list-files)
+    (define-key map "\C-c\C-rQ"    'refactorerl-quit)
+    (define-key map "\C-c\C-rR"    'refactorerl-restart)
+    (define-key map "\C-c\C-ra"    'refactorerl-add-file)
+    (define-key map "\C-c\C-rd"    'refactorerl-drop-file)
+    (define-key map "\C-c\C-rD"    'refactorerl-debug-shell)
+    (define-key map "\C-c\C-rfe"   'refactorerl-extract-function)
+    (define-key map "\C-c\C-rme"   'refactorerl-merge-expr)
+    (define-key map "\C-c\C-rfi"   'refactorerl-inline-function)
+    (define-key map "\C-c\C-rft"   'refactorerl-tuple-funpar)
+    (define-key map "\C-c\C-rfo"   'refactorerl-reorder-funpar)
+    (define-key map "\C-c\C-ref"   'refactorerl-expand-funexpr)
+    (define-key map "\C-c\C-rmf"   'refactorerl-move-function)
+    (define-key map "\C-c\C-rmr"   'refactorerl-move-record)
+    (define-key map "\C-c\C-rfg"   'refactorerl-generalize-function)
+    (define-key map "\C-c\C-rrf"   'refactorerl-rename-function)
+    (define-key map "\C-c\C-rrv"   'refactorerl-rename-variable)
+    (define-key map "\C-c\C-rrm"   'refactorerl-rename-mod)
+    (define-key map "\C-c\C-rrrd"  'refactorerl-rename-record)
+    (define-key map "\C-c\C-rrrf"  'refactorerl-rename-field)
+    (define-key map "\C-c\C-rev"   'refactorerl-eliminate-variable)
+    (define-key map "\C-c\C-rG"    'refactorerl-draw-graph)
+    (define-key map "\C-c\C-rL"    'refactorerl-load-dir)
+    (define-key map "\C-c\C-rC"    'refactorerl-list-files)
     (define-key map "\C-c\C-r\C-u" 'refactorerl-update-status)
-    (define-key map "\C-c\C-rt" 'refactorerl-cluster-agglom)
-    (define-key map "\C-c\C-rg" 'refactorerl-cluster-genetic)
-    (define-key map "\C-c\C-rS" 'refactorerl-add-checkpoint)
-    (define-key map "\C-c\C-rc" 'refactorerl-clean)
-    (define-key map "\C-c\C-rU" 'refactorerl-undo)
+    (define-key map "\C-c\C-rt"    'refactorerl-cluster-agglom)
+    (define-key map "\C-c\C-rg"    'refactorerl-cluster-genetic)
+    (define-key map "\C-c\C-rS"    'refactorerl-add-checkpoint)
+    (define-key map "\C-c\C-rc"    'refactorerl-clean)
+    (define-key map "\C-c\C-rU"    'refactorerl-undo)
     (define-key map [menu-bar refactorerl]
       (cons "Refactor" (make-refactorerl-menu-map)))
     map))
@@ -241,7 +302,11 @@ that connects to the RefactorErl server."
 
 (defun refactorerl-extract-function (beg end name)
   "Performs the Extract Function refactoring. Operates on the expression or
-expressions between the point and the mark."
+expressions between the point and the mark.
+
+1. Mark the exact part of the source you want to extract.
+2. Call the refactoring from the menu or with \\[refactorerl-extract-function].
+3. Type the new function name."
   (interactive "r\nsFunction name: ")
   (cond ((not buffer-file-name)
          (error "No visited file"))
@@ -251,19 +316,191 @@ expressions between the point and the mark."
          (refac-send-command 'extract buffer-file-name beg end name)
          (deactivate-mark))))
 
-(defun refactorerl-expand-funexpr ()
-  "Performs the Expand Fun Expression refactoring."
-  (interactive)
+(defun refactorerl-merge-expr (beg end varname)
+  "Performs the Merge Expression Duplicates refactoring. Operates
+on the expression between the point and the mark.
+
+1. Mark the expression whose duplicates are to be merged.
+2. Call the refactoring from the menu or with \\[refactorerl-merge-expr].
+3. Type the new variable name."
+  (interactive "r\nsNew variable name: ")
   (cond ((not buffer-file-name)
          (error "No visited file"))
         ((not (eq refac-buffer-state 'ok))
          (error "File is not ready for refactoring"))
         (t
-         (refac-send-command 'funexpr buffer-file-name (point)))))
+         (refac-send-command 'merge buffer-file-name beg end varname)
+         (deactivate-mark))))
+
+(defun refactorerl-inline-function (pos)
+  "Performs the Inline Function refactoring.
+
+1. Position the cursor over a function application.
+2. Call the refactoring from the menu or with \\[refactorerl-inline-function]."
+  (interactive "d")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'inline buffer-file-name pos))))
+
+
+(defun refactorerl-rename-mod (pos name)
+  "Performs the Rename Module refactoring.
+
+1. Position the cursor over the name in the module attribute.
+2. Call the refactoring from the menu or with \\[refactorerl-rename-mod].
+3. Type the new module name."
+  (interactive "d\nsNew module name:")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'renamemod buffer-file-name name pos))))
+
+(defun refactorerl-tuple-funpar (beg end)
+  "Performs the Tuple Function Parameters refactoring. Operates on the 
+parameters of function which are marked.
+
+1. Mark the arguments to be tupled in the function definition.
+2. Call the refactoring from the menu or with \\[refactorerl-tuple-funpar]."
+  (interactive "r")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'tuplefunpar buffer-file-name beg end)
+         (deactivate-mark))))
+
+(defun refactorerl-reorder-funpar (pos order)
+  "Performs the Reorder Function Parameters refactoring. 
+
+1. Position the cursor over the name of the function in any
+      clause of the function definition.
+2. Call the refactoring from the menu or with \\[refactorerl-reorder-funpar].
+3. Type the name for the new order of the function arguments."
+  (interactive "d\nsNew order (e.g. 3,1,2): ")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'reorder buffer-file-name pos order)
+         )))
+
+(defun refactorerl-generalize-function (beg end name)
+  "Performs the Generalize Function refactoring. Operates on the expression or
+expressions between the point and the mark.
+
+1. Select the expression along which the generalization should be done.
+2. Call the refactoring from the menu or with \\[refactorerl-generalize-function].
+3. Type the name for the new function argument."
+  (interactive "r\nsNew parameter name: ")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'generalize buffer-file-name beg end name)
+         (deactivate-mark))))
+
+(defun refactorerl-rename-function (name)
+  "Performs the Rename Function refactoring.
+
+1. Position the cursor over the name of the function in any
+      clause of the function definition, any application of the
+      function or the function in an export list.
+2. Call the refactoring from the menu or with \\[refactorerl-rename-function].
+3. Type the new function name."
+
+  (interactive "sNew function name: ")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'renamefun buffer-file-name name (point)))))
+
+(defun refactorerl-rename-variable (name)
+  "Performs the Rename Variable refactoring.
+
+1. Position the cursor over any instance of the variable.
+2. Call the refactoring from the menu or with \\[refactorerl-rename-variable].
+3. Type the new variable name."
+  (interactive "sNew variable name: ")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'renamevar buffer-file-name name (point)))))
+
+(defun refactorerl-rename-record (name)
+  "Performs the Rename Record refactoring.
+
+1. Position the cursor over the name in the record definition.
+2. Call the refactoring from the menu or with \\[refactorerl-rename-record].
+3. Type the new record name."
+  (interactive "sNew record name: ")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'renamerec buffer-file-name name (point)))))
+
+(defun refactorerl-rename-field (name)
+  "Performs the Rename Record Field refactoring.
+
+1. Position the cursor over the field name in the record definition.
+2. Call the refactoring from the menu or with \\[refactorerl-rename-field].
+3. Type the new field name."
+  (interactive "sNew field name: ")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'renamefield buffer-file-name name (point)))))
+
+(defun refactorerl-eliminate-variable (pos)
+  "Performs the Eliminate Variable refactoring.
+
+1. Position the cursor over any instance of the variable.
+2. Call the refactoring from the menu or with \\[refactorerl-eliminate-variable]."
+  (interactive "d")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'elimvar buffer-file-name pos))))
+
+(defun refactorerl-expand-funexpr (pos)
+  "Performs the Expand Fun Expression refactoring.
+
+1. Position the cursor over the name of the function to be expanded.
+2. Call the refactoring from the menu or with \\[refactorerl-expand-funexpr]."
+  (interactive "d")
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-send-command 'funexpr buffer-file-name pos))))
 
 (defun refactorerl-move-function ()
   "Performs the Move Function refactoring. The functions to be
-moved can be selected from a list."
+moved can be selected from a list.
+
+1. Call the refactoring from the menu or with \\[refactorerl-move-function].
+2. Fill out the form that pops up:
+    - type the name of the target module,
+    - select the records to be moved.
+3. Start the transformation with the `Move' button."
   (interactive)
   (cond ((not buffer-file-name)
          (error "No visited file"))
@@ -271,6 +508,22 @@ moved can be selected from a list."
          (error "File is not ready for refactoring"))
         (t
          (refac-move-fun-params))))
+
+(defun refactorerl-move-record ()
+  "Performs the move record refactoring. The records to be
+moved can be selected from a list.
+1. Call the refactoring from the menu or with \\[refactorerl-move-record].
+2. Fill out the form that pops up:
+    - type the name of the target module,
+    - select the records to be moved.
+3. Start the transformation with the `Move' button."
+  (interactive)
+  (cond ((not buffer-file-name)
+         (error "No visited file"))
+        ((not (eq refac-buffer-state 'ok))
+         (error "File is not ready for refactoring"))
+        (t
+         (refac-move-rec-params))))
 
 (defun refactorerl-cluster-agglom ()
   (interactive)
@@ -292,14 +545,13 @@ moved can be selected from a list."
 
 (defun refactorerl-undo ()
   "Steps backward on the refactoring database."
-  (interactive "r\nsFunction name: ")
+  (interactive)
   (cond ((not buffer-file-name)
          (error "No visited file"))
         ((not (eq refac-buffer-state 'ok))
          (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'undo buffer-file-name)
-         (deactivate-mark))))
+        ((yes-or-no-p "All changes since last refactoring will be lost. Continue? ")
+         (refac-send-command 'undo buffer-file-name))))
 
 (defun refactorerl-list-files (&optional same-win)
   "Shows the contents of the active refactoring set."
@@ -329,10 +581,10 @@ moved can be selected from a list."
 ;; Cluster Ui
 
 (defvar cluster-ui-buffer nil)
-(defun cluster-ui-options-genetic()     
+(defun cluster-ui-options-genetic()
   (refac-send-command 'cl_options 'genetic)
 )
-(defun cluster-ui-options-agglom() 
+(defun cluster-ui-options-agglom()
   (refac-send-command 'cl_options 'agglom_attr)
 )
 
@@ -342,16 +594,16 @@ moved can be selected from a list."
   (let ((value)
         (algo alg)
         (createdb (widget-value create))
-       )   
+       )
     (dolist (elt cl-options-list value)
       (setq value (cons (widget-value elt) value)))
-    (setq cluster-ui-result-buffer 
+    (setq cluster-ui-result-buffer
           (generate-new-buffer "*Clustering*"))
     (switch-to-buffer cluster-ui-result-buffer)
     (refac-send-command 'run_cl (reverse value) algo createdb)
   ))
 
-(defun cluster-ui-refresh (&rest args) 
+(defun cluster-ui-refresh (&rest args)
    (refac-send-command 'cl_refresh)
   )
 
@@ -414,6 +666,61 @@ moved can be selected from a list."
   (delete-window (get-buffer-window refac-move-fun-buffer))
   (kill-buffer refac-move-fun-buffer))
 
+;; Move record
+
+(defvar refac-move-rec-buffer nil)
+(defun refac-move-rec-params ()
+  (let ((source (buffer-file-name)))
+    (with-current-buffer
+        (setq refac-move-rec-buffer (generate-new-buffer "*Move Record*"))
+      (widget-insert
+       (propertize "Move records to another file\n"
+                   'face 'bold))
+      (widget-insert (concat "Source file: " source "\n"))
+      (set (make-local-variable 'target-entry)
+           (widget-create 'editable-field
+                          :size 30
+                          :format "Target file path: %v"
+                          ""))
+      (widget-insert "\nSelect records to be moved:\n")
+      (set (make-local-variable 'source-file) source))
+    (refac-send-command 'recordlist source)))
+
+(defun refac-handle-recordlist (record-list)
+  (switch-to-buffer-other-window refac-move-rec-buffer)
+  (set (make-local-variable 'record-checklist)
+       (apply 'widget-create 'checklist
+              (mapcar (lambda (rec)
+                        (list 'const
+                              :tag (format "%s" rec)
+                              :format "%t\n"
+                              rec))
+                      record-list)))
+  (widget-create 'push-button
+                 :notify 'refac-move-rec-apply
+                 "Move")
+  (widget-insert " ")
+  (widget-create 'push-button
+                 :notify 'refac-move-rec-cleanup
+                 "Cancel")
+  (use-local-map widget-keymap)
+  (widget-setup)
+  (goto-char (point-min)))
+
+(defun refac-move-rec-apply (&rest args)
+  (let ((recordlist (widget-value record-checklist))
+        (target  (widget-value target-entry)))
+    (when (equal target "")
+      (error "No target module specified"))
+    (when (equal recordlist nil)
+      (error "No records selected"))
+    (refac-send-command 'moverec source-file target recordlist))
+  (refac-move-rec-cleanup))
+
+(defun refac-move-rec-cleanup (&rest args)
+  (delete-window (get-buffer-window refac-move-rec-buffer))
+  (kill-buffer refac-move-rec-buffer))
+
 ;; Implementation of non-interactive functionality
 
 (defvar refac-server-process nil
@@ -437,7 +744,7 @@ moved can be selected from a list."
                             "-pa"     (concat base-path "build"))
                       lib-paths))
            (inp-args (list
-                      "-run" "refac_emacs"
+                      "-run" "referl_emacs"
                       "-noshell"))
            (default-directory (file-name-as-directory
                                (if (eq refactorerl-data-dir 'base)
@@ -501,15 +808,16 @@ moved can be selected from a list."
                    'face 'bold)
        (propertize "Options of the clustering\n\n"
                    'face 'italic)
-       )       
+       )
        (set (make-local-variable 'lista) (cdr data))
        (set (make-local-variable 'alg) (car data))
        (set (make-local-variable 'cl-options-list)
-              (mapcar (lambda (fx)    
-			(widget-create 'editable-field
+              (mapcar (lambda (fx)
+                        (widget-create 'editable-field
                               :size 20
-                              :format (concat (format "%s" (car fx)) 
-                               (make-string (- 30 (length (format "%s"(car fx)))) ? ) 
+                              :format (concat (format "%s" (car fx))
+                               (make-string
+                                 (- 30 (length (format "%s"(car fx)))) ? )
                                 ": %v\n")
                               (format "%s" (car (cdr fx)))
                               ))
@@ -531,47 +839,47 @@ moved can be selected from a list."
   (widget-insert "\n\n")
   (widget-create 'push-button
                  :notify 'cluster-ui-cleanup
-                 "Cancel")  
+                 "Cancel")
   (use-local-map widget-keymap)
   (widget-setup)
-  (goto-char (point-min))         
+  (goto-char (point-min))
 )
 
 (defun refac-handle-flist (data)
-  (widget-insert 
-         (concat "\nList of the Fitness numbers:\n----------------\n" 
+  (widget-insert
+         (concat "\nList of the Fitness numbers:\n----------------\n"
                    data "\n"))
 )
 
 (defun refac-handle-result (string)
        (set (make-local-variable 'str) (cdr string))
        (set (make-local-variable 'algo) (car string))
-   (widget-insert 
-       (propertize "Result of the clustering: \n" 
+   (widget-insert
+       (propertize "Result of the clustering: \n"
                  'face 'bold))
     (widget-insert "-------------------------\n")
     (widget-insert (format "%s" algo))
-    (widget-insert 
+    (widget-insert
      (replace-regexp-in-string
         "fn" "\n(fitness number: "
       (replace-regexp-in-string
         "\((" "\n\n("
         (replace-regexp-in-string
-         "\n)" ")" 
+         "\n)" ")"
          (replace-regexp-in-string
             "\((" "\("
           (replace-regexp-in-string
              "\(\n\(" "("
-           (replace-regexp-in-string 
+           (replace-regexp-in-string
               "\))" ")"
-            (concat (prin1-to-string str) "\n") 
-           ) 
+            (concat (prin1-to-string str) "\n")
+           )
           )
          )
         )
-       )   
+       )
       )
-   )   
+   )
 )
 
 (defun refac-handle-print (data)
@@ -586,6 +894,12 @@ moved can be selected from a list."
 
 (defun refac-handle-status (string)
   (message "%s" string))
+
+(defun refac-handle-reload (file)
+  (let ((buf (get-file-buffer file)))
+    (when buf
+      (with-current-buffer buf
+        (revert-buffer t t t)))))
 
 (defun refac-handle-backup (string)
   (message "%s" string))
@@ -603,18 +917,21 @@ moved can be selected from a list."
       (with-current-buffer buf
         (setq refac-buffer-state 'off)))))
 
+(defun refac-handle-reload (file)
+  (let ((buf (get-file-buffer file)))
+    (when buf
+      (with-current-buffer buf
+        (revert-buffer t t t)))))
+
+(defun refac-handle-setbuffer (file)
+  (set-visited-file-name file))
+
 (defun refac-handle-invalid (file)
   (refac-progress-report 'err file)
   (let ((buf (get-file-buffer file)))
     (when buf
       (with-current-buffer buf
         (setq refac-buffer-state 'err)))))
-
-(defun refac-handle-reload (file)
-  (let ((buf (get-file-buffer file)))
-    (when buf
-      (with-current-buffer buf
-        (revert-buffer t t t)))))
 
 (defun refac-handle-filelist (file)
   (with-current-buffer (refac-list-buffer)
@@ -757,7 +1074,7 @@ moved can be selected from a list."
                         "Cancel"))
     (widget-insert "\n")
     (set (make-local-variable 'config-end-marker) (point-marker))))
-  
+
 (defun refac-hide-config (&rest args)
   (widget-delete appdir-list)
   (widget-delete incdir-list)
@@ -787,7 +1104,7 @@ for available types."
                      "}.\n")))
     ;(insert msg)
     (process-send-string refac-server-process msg)))
-                       
+
 
 (defun refac-erl-format (data)
   "Turns a piece of data into Erlang string representation. Available types:
@@ -816,10 +1133,11 @@ for available types."
         ((or (< char 32)
              (> char 126)) (format "\\%03o" char))
         (t                 (string char))))
-         
-        
-        
+
+
+
 (defun refac-server-is-running ()
   "Checks if the RefactorErl server is running."
   (and refac-server-process
        (equal 'run (process-status refac-server-process))))
+

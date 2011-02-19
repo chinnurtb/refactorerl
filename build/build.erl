@@ -24,35 +24,58 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(build).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1804 $").
 
--export([start/0, cmp/0, rel/0, doc/0, build/3]).
+-export([start/0, start/1, start/2]).
+-export([cmp/0, rel/0, doc/0, build/3]).
 
--define(SYNTAX_FILE, "refac_syntax").
--define(SYNTAX_SUFFIX, ".xml").
--define(PARSER_SUFFIX, "_parser.yrl").
--define(SCANNER_SUFFIX, "_scanner.xrl").
--define(PARSER_OUTPUT, "_parser.erl").
--define(SCANNER_OUTPUT, "_scanner.erl").
+%%%%% =========================================================================
+%%%%% File defines
 
-%% @doc Stand-alone builder function. It is to be used as `erl -noshell -run
-%% build'.
+-define(SYNTAX_FILE,   "referl_syntax.xml").
+-define(SCANNER_FILE,  "referl_syntax_scanner.xrl").
+-define(PARSER_FILE,   "referl_syntax_parser.yrl").
+-define(SYNTAX_HEADER, filename:join(   [   ".."
+                                        ,   "include"
+                                        ,   "referl_syntax.hrl"]) ).
+-define(NODE_FILE,     "referl_syntax_nodes.erl").
+
+-define(SCANNER_OUT_FILE,  "referl_syntax_scanner.erl").
+-define(PARSER_OUT_FILE,   "referl_syntax_parser.erl").
+
+-define(RELEASE_FILE,      "refactorerl.rel").
+
+
+%%%%% =========================================================================
+%%%%% Interface
+
+%% @doc Stand-alone builder function.
+%%      It is to be used as `erl -noshell -run build'.
 start() ->
-    case rel() of
+    start([]).
+start(Opt) when is_list(Opt) ->
+    case rel(Opt) of
         ok    -> halt();
         error -> halt(1);
         _     -> halt(2)
-    end.
+    end;
+start(Opt) -> start([Opt]).
+start(Opt1, Opt2) -> start([Opt1, Opt2]). 
 
-%% @doc Compiles all modules that are out of date. Note that this includes the
-%% scanner and parser generation.
+%% @doc Compiles all modules that are out of date.
+%%      Note that this includes the scanner and parser generation.
 cmp() ->
-    build(compile, [load]).
+    cmp([]).
+
+cmp(Opt) ->
+    build(compile, [load|Opt]).
 
 %% @doc Creates a complete release. This includes the compilation phase
 %% besides the generation of the release descriptor and the startup script.
 rel() ->
-    build(release, []).
+    rel([]).
+rel(Opt) ->
+    build(release, Opt).
 
 %% @doc Creates the edoc documentation of the system.
 doc() ->
@@ -78,17 +101,17 @@ build(Phase, Opts) ->
 %%       BaseDir = string()
 %%       Opts = [atom()]
 build(compile, BaseDir, Opts) ->
-    file:set_cwd(filename:join(BaseDir, "lib")),
+    file:set_cwd(filename:join(BaseDir, "lib/refactorerl/src")),
     build_parser(Opts),
+    file:set_cwd(filename:join(BaseDir, "lib")),
     make(Opts);
-
 build(release, BaseDir, Opts) ->
     build(compile, BaseDir, Opts),
     build_release(BaseDir);
-
 build(docs, _, _) ->
     edoc:application(refactorerl),
-    edoc:application(clustering).
+    edoc:application(clustering),
+    edoc:application(test).
 
 get_base_dir() ->
     BaseDir = case code:lib_dir(refactorerl) of
@@ -113,13 +136,14 @@ find_base_dir(Path) ->
             [_ | Prefix] = lists:reverse(Path),
             find_base_dir(lists:reverse(Prefix))
     end.
-            
+
+
 make(Opts) ->
     case make:all(Opts) of
         error -> throw(make_error);
-        _ -> ok
+        _     -> ok
     end.
-            
+
 
 refresh_builder(BaseDir) ->
     BuildDir = filename:join(BaseDir, "build"),
@@ -127,52 +151,47 @@ refresh_builder(BaseDir) ->
     file:set_cwd(BuildDir),
     make([load]).
 
+
+%%%%% =========================================================================
+%%%%% Build scanner, parser etc.
+
 build_parser(_Opts) ->
-    {ok, Cwd} = file:get_cwd(),
-    try
-        file:set_cwd(filename:join([Cwd, "refactorerl", "src"])),
-        InTime = file_mtime(?SYNTAX_FILE ?SYNTAX_SUFFIX),
-        ParserTime = file_mtime(?SYNTAX_FILE ?PARSER_SUFFIX),
-        ScannerTime = file_mtime(?SYNTAX_FILE ?SCANNER_SUFFIX),
-        BuilderTime = module_time(build_parser),
-        if
-            InTime =:= 0 ->
-                Force = false,
-                throw(no_syntax_file);
-            InTime > ParserTime; InTime > ScannerTime;
-            BuilderTime > ParserTime; BuilderTime > ScannerTime ->
-                Force = true,
-                build_parser:build(?SYNTAX_FILE ?SYNTAX_SUFFIX,
-                                   ?SYNTAX_FILE ?SCANNER_SUFFIX,
-                                   ?SYNTAX_FILE ?PARSER_SUFFIX,
-                                   filename:join(["..",
-                                                  "include",
-                                                  ?SYNTAX_FILE ".hrl"]));
-            true ->
-                Force = false
-        end,
-        ScOutTime = file_mtime(?SYNTAX_FILE ?SCANNER_OUTPUT),
-        PrOutTime = file_mtime(?SYNTAX_FILE ?PARSER_OUTPUT),
-        if
-            Force; ScannerTime > ScOutTime ->
-                case leex:file(?SYNTAX_FILE ?SCANNER_SUFFIX) of
-                    error -> throw(leex_error);
-                    _ -> ok
-                end;
-            true ->
-                ok
-        end,
-        if
-            Force; ParserTime > PrOutTime ->
-                case yecc:file(?SYNTAX_FILE ?PARSER_SUFFIX) of
-                    error -> throw(yecc_error);
-                    _ -> ok
-                end;
-            true ->
-                ok
-        end
-    after
-        file:set_cwd(Cwd)
+    Procs   = [ ?SCANNER_FILE, ?PARSER_FILE ],
+    Creates = [ ?SYNTAX_FILE, ?SYNTAX_HEADER, ?NODE_FILE ],
+    Outs    = [ ?SCANNER_OUT_FILE, ?PARSER_OUT_FILE ],
+
+    [ STime, PTime, SynTime, SynHTime, NodeTime, ScOutTime, PrOutTime ]
+        = [ file_mtime(File) || File <- Procs ++ Creates ++ Outs ],
+    BuilderTime = module_time(build_parser),
+    Build =
+        [ build || BeLess <- [STime, PTime, SynHTime, NodeTime]
+                 , BeMore <- [SynTime, BuilderTime]
+                 , BeMore > BeLess ],
+    if
+        SynTime =:= 0 ->
+            Force = false,
+            throw(no_syntax_file);
+        Build /= [] ->
+            Force = true,
+            build_parser:build(Procs ++ Creates);
+        true ->
+            Force = false
+    end,
+
+    create_file(Force, STime, ScOutTime,
+                fun leex:file/2, ?SCANNER_FILE, leex_error),
+    create_file(Force, PTime, PrOutTime,
+                fun yecc:file/2, ?PARSER_FILE, yecc_error).
+
+create_file(Force, Time, OutTime, Process, File, Error) ->
+    if
+        Force; Time > OutTime ->
+            case Process(File, [verbose]) of
+                error -> throw(Error);
+                _     -> ok
+            end;
+        true ->
+            ok
     end.
 
 
@@ -213,4 +232,6 @@ file_mtime(File) ->
 module_time(Mod) ->
     {Y,M,D,H,N,S} = proplists:get_value(time, Mod:module_info(compile)),
     calendar:datetime_to_gregorian_seconds({{Y,M,D},{H,N,S}}).
-    
+
+
+

@@ -19,13 +19,13 @@
 
 %%% @doc Implements a genetic algorithm that determines a promising module
 %%% clustering, form the modules which are in the database.
-%%% The value of the clustering is calculated by the `cl_fitness:fitness/1'
-%%% function.
+%%% The value of the clustering is calculated by the
+%%% {@link cl_fitness:fitness/1} function.
 %%%
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_genetic).
--vsn("$Rev: 1335 $").
+-vsn("$Rev: 1358 $").
 
 -export([ga/0, 
          ga/2,
@@ -254,7 +254,7 @@ phenotype(_Global, Chromosome, Length) ->
               Module = lists:nth(Index, Modules),
               C2 = dict:update(
                      Elem, fun(Data) ->
-                                   [(?GRAPH:data(Module))#module.name | Data]
+                                   [(?ESG:data(Module))#module.name | Data]
                            end, C),
               {C2, Index + 1}
       end, {Clusters, 1}, List),
@@ -309,7 +309,7 @@ crossover(_Global, Chromosome1, Chromosome2, Length) ->
                end, Chromosome1, Chromosome2).
 
 modules() ->
-    ?GRAPH:path(?GRAPH:root(), [file, moddef]).
+    ?ESG:path(?ESG:root(), [file, moddef]).
 
 min(X, Y) ->
     if X < Y ->

@@ -24,7 +24,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(cl_matrix).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1246 $").
 
 -export([new/3, delete/1, add_col/2, add_row/2, del_col/2, del_row/2,
          cols/1, rows/1, get/3, set/4, transform/2, transform2/2,

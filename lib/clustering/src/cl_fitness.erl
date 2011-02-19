@@ -28,7 +28,7 @@
 % call: cl_fitness:fitness(Clustering,FitnessOptions)
 
 -module(cl_fitness).
--vsn("$Rev: 1335 $").
+-vsn("$Rev: 1255 $").
 
 -export([fitness/1, fitness/2]).
 

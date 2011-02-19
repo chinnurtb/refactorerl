@@ -22,11 +22,9 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_utils).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1358 $").
 
 -export([ignore/1, leave/1, transform_to_01/3, 
-         open_output/1, open_output/2, open_append/1,
-         close_output/1, close_output/2,
          get_defined_value/2, proplist_update/2,
          concat_atoms/2, integer_to_list/2]).
 
@@ -48,89 +46,6 @@ transform_to_01(_,entities,L) -> L;
 transform_to_01(default,default,_N) -> 1;
 transform_to_01(_,_,0) -> 0;
 transform_to_01(_,_,_N) -> 1.
-
-%%%%% input, output
-
-%%% @todo This section should be deleted.
-
-%%% @type io_ref() = stdout | string().
-%%% It is a reference to an IO device.
-%%% If it is 'stdout', then it refers to the standard output.
-%%% If it is a string, then it refers to the file with that name.
-
-%%% @type io_device().
-%%% See the documentation of the io module.
-
-%% @spec open_output(io_ref()) -> io_device()
-%%
-%% @doc Opens a file for writing. If the file exists, it will be overwritten.
-%%
-%% @deprecated Use the `cl_out' module instead.
-open_output(null) ->
-    null;
-open_output(stdout) ->
-    standard_io;
-open_output(Fn) when is_list(Fn) ->
-    case file:open(Fn, [write]) of
-        {ok, Dev} ->
-            Dev;
-        {error, Reason} ->
-            {open, Fn, file:format_error(Reason)}
-    end.
-
-%% @spec open_output(io_ref() | io_device(),bool()) -> io_ref() | io_device()
-%%
-%% @doc If `HandleOutput' is true, opens `Output' with 'open_output'; otherwise
-%% it does nothing.
-%%
-%% @deprecated Use the `cl_out' module instead.
-open_output(Output,HandleOutput) ->
-    case HandleOutput of
-        false -> Output;
-        true -> open_output(Output)
-    end.
-
-%% @spec open_append(io_ref()) -> io_device()
-%%
-%% @doc Opens a file for writing in 'append' mode.
-%%
-%% @deprecated Use the `cl_out' module instead.
-open_append(null) ->
-    null;
-open_append(stdout) ->
-    standard_io;
-open_append(Fn) when is_list(Fn) ->
-    case file:open(Fn, [append]) of
-        {ok, Dev} ->
-            Dev;
-        {error, Reason} ->
-            throw({open, Fn, file:format_error(Reason)})
-    end.
-
-%% @spec close_output(io_device()) -> ok
-%%
-%% @doc Closes the `Output' device. If the output is 'standard_io', it does
-%% nothing.
-%%
-%% @deprecated Use the `cl_out' module instead.
-close_output(null) ->
-    ok;
-close_output(standard_io) ->
-    ok;
-close_output(Output) ->
-    file:close(Output).
-
-%% @spec close_output(io_ref() | io_device(),bool()) -> ok
-%%
-%% @doc If `HandleOutput' is true, closes `Output' with 'close_output';
-%% otherwise it does nothing.
-%%
-%% @deprecated Use the `cl_out' module instead.
-close_output(Output,HandleOutput) ->
-    case HandleOutput of
-        false -> ok;
-        true -> close_output(Output)
-    end.
 
 %%%%% proplists
 

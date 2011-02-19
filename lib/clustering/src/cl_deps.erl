@@ -28,7 +28,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_deps).
--vsn("$Rev: 1146 $").
+-vsn("$Rev: 1358 $").
 
 -export([insert_function_calls/1, insert_record_refs/1]).
 
@@ -40,9 +40,9 @@ insert_function_calls(Table) ->
                        || Module <- modules()]),
     lists:foreach(
       fun({Module, Call}) ->
-              {module, CallerMod} = ?GRAPH:data(Module),
+              {module, CallerMod} = ?ESG:data(Module),
               {module, CalledMod} = 
-                  ?GRAPH:data(lists:nth(1,?GRAPH:path(Call, [{func, back}]))),
+                  ?ESG:data(lists:nth(1,?ESG:path(Call, [{func, back}]))),
               ets:insert(Table, {{CallerMod, CalledMod}, ok})
       end,
       L).
@@ -54,8 +54,8 @@ insert_record_refs(Table) ->
                        || Module <- modules()]),
     lists:foreach(
       fun({Module, Record}) ->
-              {module, ModName} = ?GRAPH:data(Module),
-              {record, RecName} = ?GRAPH:data(Record),
+              {module, ModName} = ?ESG:data(Module),
+              {record, RecName} = ?ESG:data(Record),
               R = ets:lookup(Table, {ModName, RecName}),
               if R == [] ->
                       ets:insert(Table, {{ModName, RecName}, 1});
@@ -67,13 +67,13 @@ insert_record_refs(Table) ->
       L).
 
 modules() ->
-    ?GRAPH:path(?GRAPH:root(), [file, moddef]).
+    ?ESG:path(?ESG:root(), [file, moddef]).
 
 function_calls(Module) ->
-    ?GRAPH:path(Module, [func, {fundef,back}, funcl, {scope, back}, visib,
+    ?ESG:path(Module, [func, {fundef,back}, funcl, {scope, back}, visib,
                          {sup, back}, funref]).  
 
 record_refs(Module) ->
-    ?GRAPH:path(Module, [func, {fundef,back}, funcl, {scope, back}, visib,
+    ?ESG:path(Module, [func, {fundef,back}, funcl, {scope, back}, visib,
                          {sup, back}, recref]).  
 

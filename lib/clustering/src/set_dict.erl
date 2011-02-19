@@ -21,11 +21,8 @@
 %% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(set_dict).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1345 $").
 -export([add/3, remove/3, to_list/1, to_sorted_list/1]).
--import(dict).
--import(sets).
--import(lists).
 
 %% @spec add(key(),value(),dict(key(),set(value))) ->
 %%           dict(key(),set(value))

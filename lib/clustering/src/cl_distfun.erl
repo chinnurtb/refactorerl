@@ -26,7 +26,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_distfun).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1895 $").
 
 -export([euclidian/4, jaccard/4, sorensen_dice/4, sorensen_dice2/4,
          ochiai/4, correlation/4, call_sum/4, call_cnt/4,
@@ -34,10 +34,17 @@
          call_fun_cnt/4,lexgr_dist/1]).
 -export([pow_size_fun_gen/1]).
 
+%% For testing.
+-export([used_records/1]).
+
 -include("cluster.hrl").
 
 %%% @type dist_fun() = (entity(), [{attr(), value()}],
-%%%                     entity(), [{attr(), value()}]) -> number()
+%%%                     entity(), [{attr(), value()}]) -> number().
+
+%%% @type size_fun() = (Size1::number(), Size2::number()) -> number().
+%%%
+%%% It is a function that can be used by the {@link weight_gen/1} function.
 
 fold2(_,   Acc, [],      _)       -> Acc;
 fold2(_,   Acc, _,       [])      -> Acc;
@@ -45,7 +52,7 @@ fold2(Fun, Acc, [H1|T1], [H2|T2]) -> fold2(Fun, Fun(H1, H2, Acc), T1, T2).
 
 %% @spec euclidian(Mod, [{Attr, Weight}], Mod, [{Attr, Weight}]) -> Distance
 %%       Attr = #fun_attr{} | #rec_attr{}
-%%       
+%%
 %% @doc Euclidian distance function.
 euclidian(_E1, Attr1, _E2, Attr2) ->
     math:sqrt(fold2(
@@ -85,7 +92,7 @@ sorensen_dice(_E1, Attr1, _E2, Attr2) ->
     #presence{both=A, first=B, second=C} = presence(Attr1, Attr2),
     if
         A+B+C == 0 -> 1;
-	true       -> 1 - 2*A / (2*A + B + C) 
+    true       -> 1 - 2*A / (2*A + B + C)
     end.
 
 %% @spec sorensen_dice2(Mod,[{Attr, Weight}],Mod,[{Attr, Weight}]) -> Distance
@@ -96,7 +103,7 @@ sorensen_dice2(_E1, Attr1, _E2, Attr2) ->
     #presence{both=A, first=B, second=C, none=D} = presence(Attr1, Attr2),
     if
         A+B+C+D == 0 -> 1;
-	true         -> 1 - 2*(A+D) / (2*A + B + C + D) 
+    true         -> 1 - 2*(A+D) / (2*A + B + C + D)
                         %%orig nincs +D alul, de akkor negativ ertekek
     end.
 
@@ -108,7 +115,7 @@ ochiai(_E1, Attr1, _E2, Attr2) ->
     #presence{both=A, first=B, second=C} = presence(Attr1, Attr2),
     if
         (A+B)*(A+C) == 0 -> 1;
-        true             -> 1 - A/math:sqrt((A+B)*(A+C)) 
+        true             -> 1 - A/math:sqrt((A+B)*(A+C))
     end.
 
 %% @spec correlation(Mod, [{Attr, Weight}], Mod, [{Attr, Weight}]) -> Distance
@@ -128,7 +135,7 @@ correlation(_E1, Attr1, _E2, Attr2) ->
             true      -> (SumV1xV2 - SumV1*SumV2/length(Attr1)) / Corr
         end,
     if
-        1-R < 0 -> 1; 
+        1-R < 0 -> 1;
         true    -> math:sqrt((1-R)/2)
     end.
 
@@ -143,7 +150,7 @@ call_sum(Ent1, Attr1, Ent2, Attr2) ->
 modcall_sum(Attr) ->
     Mods = lists:usort([M || {#fun_attr{mod=M},W} <- Attr, W>0]),
     [{Mod, lists:sum([W || {#fun_attr{mod=M},W} <- Attr, M == Mod])} ||
-        Mod <- Mods]. 
+        Mod <- Mods].
 
 %% @spec call_cnt(Mod, [{Attr, Weight}], Mod, [{Attr, Weight}]) -> Distance
 %%       Attr = #fun_attr{} | #rec_attr{}
@@ -153,15 +160,37 @@ modcall_sum(Attr) ->
 call_cnt(Ent1, Attr1, Ent2, Attr2) ->
     calls(Ent1, modcall_cnt(Attr1,1), Ent2, modcall_cnt(Attr2,1)).
 
+%% @spec modcall_cnt([{attr(), value()}], Add::(w | 1)) -> [{mod_name(), value()}]
+%%
+%% @doc Calculates that which module is called how many times by the module
+%% which has the given attributes.
+%% The result contains `{Mod, N}' pairs, where `Mod' is a module name.
+%% Each module is contained only once.
+%% If `Add' is `w', then `{Mod, N}' means that `Mod' is called `N' times. If
+%% `Add' is `1', `{Mod, N}' means that `Mod' is called from `N' different
+%% function.
+%%
+%% Examples:
+%% ```
+%% > cl_distfun:modcall_cnt([{#fun_attr{mod=a,name=f,arity=0}, 3},
+%%                           {#fun_attr{mod=a,name=g,arity=0}, 4},
+%%                           {#fun_attr{mod=b,name=f,arity=0}, 5}], w).
+%% [{a,7}, {b,5}]
+%%
+%% > cl_distfun:modcall_cnt([{#fun_attr{mod=a,name=f,arity=0}, 3},
+%%                           {#fun_attr{mod=a,name=g,arity=0}, 4},
+%%                           {#fun_attr{mod=b,name=f,arity=0}, 5}], 1).
+%% [{a,2}, {b,1}]
+%% '''
 modcall_cnt(Attr,Add) ->
     D = lists:foldl(
           fun ({#fun_attr{mod=M},W},D2) when W>0 ->
+                  Plus = case Add of w -> W; 1 -> 1 end,
                   case dict:is_key(M,D2) of
-                      true ->  
-                          Plus = case Add of w -> W; 1 -> 1 end,
+                      true ->
                           dict:store(M,dict:fetch(M,D2)+Plus,D2);
-                      false -> 
-                          dict:store(M,1,D2)
+                      false ->
+                          dict:store(M,Plus,D2)
                   end;
               (_,D2) ->
                   D2
@@ -188,13 +217,19 @@ lexgr_dist([]) -> 0;
 lexgr_dist([Head | Tail]) ->
     1 / (2 + Head - lexgr_dist(Tail)).
 
+%% @spec pow_size_fun_gen(number()) -> size_fun()
+%%
+%% @doc Returns a function that can calculate some kind of antigravity between
+%% two clusters. `S1' and `S2' are the sizes of the clusters.
+%% `PowWeight' is the strength of the antigravity. If it is 0, there is no
+%% antigravity. If it is 1, it is a strong antigravity. (A negative `PowWeight'
+%% is gravity, a `PowWeight' greater than 1 is a very strong one.)
 pow_size_fun_gen(PowWeight) ->
     fun(S1,S2) ->
-            math:pow(S1+S2,PowWeight) 
+            math:pow(S1+S2,PowWeight)
     end.
 
-%% @spec weight_gen(SizeFun) -> dist_fun()
-%%       SizeFun = (Size1::number(),Size2::number()) -> number()
+%% @spec weight_gen(size_fun()) -> dist_fun()
 %%
 %% @doc Generates a distance function.
 %% The distance function is based on function call structure and record usage,
@@ -221,7 +256,9 @@ weight_distvec(_Mod1, Attr1, _Mod2, Attr2) ->
 
 %% @doc Returns how heavily are the modules in `Modules' called by the module
 %% from which ModCall was created.
-modcall2_cnt(Modules,ModCall) -> 
+%%
+%% @todo ordsets should be changed to sets.
+modcall2_cnt(Modules,ModCall) ->
     ModuleSet = ordsets:from_list(Modules),
     lists:foldl(
       fun ({M,W},N) -> % my module calls module M
@@ -271,7 +308,7 @@ same_rec(Attr1, Attr2) ->
     dict:fold(
       fun(R,W1,{Max,Min}) ->
               case dict:is_key(R,Rec2) of
-                  true -> 
+                  true ->
                       W2 = dict:fetch(R,Rec2),
                       {Max+max(W1,W2),Min+min(W1,W2)};
                   false ->

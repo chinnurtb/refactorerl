@@ -5,3 +5,6 @@
 {'clustering/src/*', [{outdir, "clustering/ebin"},
                       {i, "clustering/include"},
                       debug_info]}.
+{'test/src/*', [{outdir, "clustering/ebin"},
+                {i, "clustering/include"},
+                 debug_info]}.

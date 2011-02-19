@@ -25,7 +25,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_core).
--vsn("$Rev: 1335 $").
+-vsn("$Rev: 1489 $").
 
 -export([attribs/2, filter/3, transform/2, transform2/2, distances/2,
          agglom_dist/2, agglom_attr/3]).
@@ -36,7 +36,7 @@
 %%% @type dist_fun() = (entity(), [{attr(), value()}],
 %%%                     entity(), [{attr(), value()}]) -> number().
 
-%%% @type merge_fun() = (NewLst,[{attr(), value()}],
+%%% @type merge_fun() = (NewLst, [{attr(), value()}],
 %%%                      {entity(), [{attr(), value()}],
 %%%                       entity(), [{attr(), value()}]}) -> 
 %%%                     [{attr(), value()}].
@@ -82,10 +82,10 @@ filter(Filter, Matrix, GetElem, DelElem, Elements) ->
       Matrix, Elements).
 
 get_row(Row, Mtr) ->
-    ?MTR:fold_row(fun (C, V, L) -> [{C,V} | L] end, [], Row, Mtr).
+    ?MTR:fold_row(fun (C, V, L) -> [{C, V} | L] end, [], Row, Mtr).
 
 get_col(Col, Mtr) ->
-    ?MTR:fold_col(fun (R, V, L) -> [{R,V} | L] end, [], Col, Mtr).
+    ?MTR:fold_col(fun (R, V, L) -> [{R, V} | L] end, [], Col, Mtr).
 
 %% @spec transform(attribs(), MapFun) -> attribs()
 %%           MapFun = (value1()) -> value2()
@@ -96,7 +96,7 @@ transform(Attribs, MapFun) ->
     ?MTR:transform(MapFun, Attribs).
 
 %% @spec transform2(attribs(), MapFun) -> attribs()
-%%           MapFun = (attrib(),entity(),value1()) -> value2()
+%%           MapFun = (attrib(), entity(), value1()) -> value2()
 %%
 %% @doc Transforms the contents of an attribute matrix to another
 %% representation using the given mapping.
@@ -115,7 +115,7 @@ distances(Attribs, DistFun) ->
 
 calc_distances([], Dists, _) ->
     Dists;
-calc_distances([{Ent,Attrs}|Tail], Dists, DistFun) ->
+calc_distances([{Ent, Attrs}|Tail], Dists, DistFun) ->
     calc_distances(
       Tail,
       calc_distances(Ent, Attrs, Tail, Dists, DistFun),
@@ -196,8 +196,8 @@ attr_new_group(#aggattr{attrs=Attribs, groups=Groups, mergefun=MergeFun}=Data,
         lists:foldl(fun({Col, Val}, Attr) -> ?MTR:set(New, Col, Val, Attr) end,
                     NewAttrs,
                     MergeFun(NewLst, [get_row(Gr, Attribs) || Gr <- NewLst], 
-                             {Gr1,get_row(Gr1,Attribs),
-                              Gr2,get_row(Gr2,Attribs)})),
+                             {Gr1, get_row(Gr1, Attribs),
+                              Gr2, get_row(Gr2, Attribs)})),
     {New, Data#aggattr{attrs=FilledAttrs, groups=NewGroups}}.
 
 attr_group_dist(New, Grp,
@@ -208,7 +208,8 @@ attr_group_dist(New, Grp,
 attr_result(#aggattr{groups=Groups}, Clusters) ->
     [ [ dict:fetch(Grp, Groups) || Grp <- Cls] || Cls <- Clusters].
 
-%%%%% Generic agglomerative algorithm
+%%% ======================================================================
+%%% Generic agglomerative algorithm
 
 agglom(Dists, GroupData, GroupFun, DistFun) ->
     Result = agglom(?MTR:rows(Dists), Dists, GroupData, GroupFun, DistFun, []),
@@ -260,7 +261,8 @@ remove_groups(Groups, Dists) ->
     lists:foldl(fun (G, D) -> ?MTR:del_row(G, ?MTR:del_col(G, D)) end,
                 Dists, Groups).
 
-%%%%% R frontend
+%%% ======================================================================
+%%% R frontend
 
 %% In R, you can use the following command to perform K-means:
 %% kmeans(read.table(file("<<filename>>"), header = TRUE, row.names = 1), <<K>>)
@@ -268,19 +270,23 @@ remove_groups(Groups, Dists) ->
 %% @spec dist_to_file(distances(), string()) -> atom()
 %%
 %% @doc Writes the distace matrix to a text file, which can be used by R.
-dist_to_file(Dists,FileName) ->
+dist_to_file(Dists, FileName) ->
     {ok, S} = file:open(FileName, write),
-    lists:foreach(fun(ColName) -> io:format(S,"\t~s",[atom_to_list(ColName)])
-                                  end,
-                                  ?MTR:cols(Dists)),
-    lists:foreach(fun(RowName) -> io:format(S,"~n~s",[RowName]),
-        lists:foreach(fun(Attrib) -> io:format(S,"\t~w",[valueofattr(Attrib)])
-        end,
-        get_row(RowName,Dists)) end,
-        ?MTR:rows(Dists)),
+    lists:foreach(fun(ColName) -> io:format(S, "\t~s", [atom_to_list(ColName)])
+                  end,
+                  ?MTR:cols(Dists)),
+    lists:foreach(fun(RowName) -> 
+                          io:format(S, "~n~s", [RowName]),
+                          lists:foreach(
+                            fun(Attrib) ->
+                                    io:format(S, "\t~w", [valueofattr(Attrib)])
+                            end,
+                            get_row(RowName, Dists)) 
+                  end,
+                  ?MTR:rows(Dists)),
     file:close(S),
     ok.
 
-valueofattr({_,[]}) -> 0;
-valueofattr({_,N}) -> N.
+valueofattr({_, []}) -> 0;
+valueofattr({_, N}) -> N.
 

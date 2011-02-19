@@ -22,7 +22,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(test_cl_cutlib).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1246 $").
 
 -export([test/0]).
 

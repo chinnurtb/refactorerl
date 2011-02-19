@@ -23,7 +23,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_interface).
--vsn("$Rev: 1335 $").
+-vsn("$Rev: 1946 $").
 
 -export([run_cluster/0, run_cluster/1, run_cluster_default/0,
          run_cluster_default/1, run_cluster_labels/0, run_cluster_labels/1,
@@ -54,8 +54,8 @@ run_cluster() ->
 %%         The default value is `undefined'.
 %%         Either modules or skip_modules or both should be undefined.
 %%         If both are undefined, all modules will be clustered.</li>
-%%     <li>`log_output::output_ref()': it specifies where the cl_out:fwrite messages about
-%%         the execution should be printed.
+%%     <li>`log_output::output_ref()': it specifies where the `cl_out:fwrite'
+%%         messages about the execution should be printed.
 %%         The default is `stdout'.</li>
 %%     <li>`print_options::proplist()':
 %%         it specifies how the clustering should be printed.
@@ -81,7 +81,7 @@ run_cluster() ->
 %%         `undefined' means that no transformation will be performed.
 %%         The default value is `undefined'.</li>
 %%     <li>`distfun': a distance function.
-%%         It can be `call_sum' and `weight'.
+%%         It can be `call_sum', `weight' or a function reference.
 %%         The default value is `weight'.</li>
 %%     <li>`anti_gravity': if the distance function works with anti_gravity
 %%         (like the `weight' distance function), then the weight of that can be
@@ -91,8 +91,9 @@ run_cluster() ->
 %%         strong.)
 %%         The default value is 0.5.</li>
 %%     <li>`mergefun': a merge function.
-%%         It can be `smart'.
-%%         The default value is `smart'.</li>
+%%         It can be `smart' or a function reference.
+%%         The default value is `smart', which is equivalent to
+%%         `fun cl_mergefun:smart/3'.</li>
 %% </ul>
 %%
 %% Options specific to the `genetic' algorithm:
@@ -267,13 +268,17 @@ run_agglom_attr(Output, Options) ->
                 AntiGravity = get_value(anti_gravity, Options),
                 cl_distfun:weight_gen(cl_distfun:pow_size_fun_gen(AntiGravity));
             call_sum ->
-                fun cl_distfun:call_sum/4
+                fun cl_distfun:call_sum/4;
+            Fun when is_function(Fun) ->
+                Fun
         end,
 
     MergeFun = 
         case get_value(mergefun, Options) of
             smart ->
-                fun cl_mergefun:smart/3
+                fun cl_mergefun:smart/3;
+            Fun2 when is_function(Fun2) ->
+                Fun2
         end,
 
     cl_out:fwrite(W, "Calculating the clusters...~n"),
@@ -359,7 +364,7 @@ cut_libs(Options) ->
     Clustering = cl_utils:get_defined_value(clustering, Opts),
     {W, C} = cl_out:open(get_value(log_output, Opts)),
 
-    cl_out:fwrite(W, "Updating and loading the attribute matricies...~n"),
+    cl_out:fwrite(W, "Updating and loading the attribute matrices...~n"),
     cl_db:update(mod_attr),
     cl_db:update(fun_attr),
 
@@ -411,7 +416,7 @@ cut_libs_labels() ->
 %%         This option is necessary, there is no default value.</li>
 %%     <li>`fitness_options::proplist()': this option speficies how to calculate
 %%         the fitness value. The value of this option will be passed to the
-%%         `cl_fitness:fitness/2' function.
+%%         {@link cl_fitness:fitness/2} function.
 %%         The default is `[]'.</li>
 %% </ul>
 fitness(Options) ->

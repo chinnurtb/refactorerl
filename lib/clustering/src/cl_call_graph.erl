@@ -26,7 +26,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_call_graph).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1246 $").
 
 -export([empty_attrib/0, attrib_data/0]).
 %% Filter functions

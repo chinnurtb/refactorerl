@@ -22,7 +22,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(test_cl_utils).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1458 $").
 
 -export([test/0]).
 

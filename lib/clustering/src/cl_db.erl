@@ -26,9 +26,9 @@
 %%% Mnesia database. The name of the tables can be specified.
 %%% Currently the matricies and ets tables are supported in the low level.
 %%%
-%%% The high level allows the user to invoke only the `update' and
-%%% `invalidate' functions, that will take care of the recalculation of the
-%%% tables. Only the tables necessary will be recalculated.
+%%% The high level allows the user to invoke only the {@link update/1} and
+%%% {@link invalidate/1} functions, that will take care of the recalculation of
+%%% the tables. Only the tables necessary will be recalculated.
 %%% Currently the attribute matricies and the dependencies are supported in the
 %%% high level.
 %%%
@@ -48,7 +48,7 @@
 %%%
 %%% Then the matrix (which contains an ets table) can be obtained:
 %%% ```
-%%% FunAttr = cl_db:load_matrix(fun_attr,fun_attr)
+%%% FunAttr = cl_db:load_matrix(fun_attr, fun_attr)
 %%% '''
 %%%
 %%% @todo Write the `load_ets' function.
@@ -58,9 +58,9 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_db).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1489 $").
 
--export([recalculate/1, update/1, invalidate/0,
+-export([recalculate/1, update/1, is_valid/1, invalidate/0,
          save_matrix/2, load_matrix/2, delete_matrix/1, matrix_exists/1,
          save_deps/0, delete_deps/0, mnesia_table_exists/1]).
 
@@ -78,7 +78,7 @@
 %%%     <li>`deps': the dependencies.</li>
 %%% </ul>
 %%%
-%%% @type mnesia_result() = {atomic,ok} | {aborted,reason()}.
+%%% @type mnesia_result() = {atomic, ok} | {aborted, reason()}.
 
 %% @type matrix() = #matrix{rows = [term()],
 %%                          cols = [term()],
@@ -87,12 +87,12 @@
 %% It represents a matrix.
 -record(matrix, {rows, cols, default, table}).
 
-%% @type matrix_label() = #matrix_label{index = {row,Row::integer()} |
-%%                                              {col,Column::integer()},
+%% @type matrix_label() = #matrix_label{index = {row, Row::integer()} |
+%%                                              {col, Column::integer()},
 %%                                      value = term()}.
 %% It represents a label of a row or a column of a matrix.
-%% If it is the label of the `N'th row, `index' will be `{row,N}'.
-%% If it is the label of the `N'th column, `index' will be `{col,N}'.
+%% If it is the label of the `N'th row, `index' will be `{row, N}'.
+%% If it is the label of the `N'th column, `index' will be `{col, N}'.
 %% `value' is the "name" or "label" of that row or column.
 -record(matrix_label, {index, value=undefined}).
 
@@ -102,10 +102,11 @@
 %% It represents a cell of a matrix.
 %% If the row of the cell is `Row', the column of the cell is `Column' and the
 %% value of the cell if `Value', the matrix_cell will be index will be
-%% `{Row,Column}' and the `value' will be `Value'.
+%% `{Row, Column}' and the `value' will be `Value'.
 -record(matrix_cell, {index, value}).
 
-%%%%%%%%%% High level functions
+%%% ======================================================================
+%%% High level functions
 
 %% @spec recalculate(table_name()) -> ok
 %%
@@ -114,14 +115,14 @@
 recalculate(mod_attr) ->
     MA = cl_attr:mod_attrib_data(), 
     ME = cl_attr:mod_empty_attrib(), 
-    M = cl_core:attribs(MA,ME), 
-    cl_db:save_matrix(M,mod_attr),
+    M = cl_core:attribs(MA, ME), 
+    cl_db:save_matrix(M, mod_attr),
     ok;
 recalculate(fun_attr) ->
     FA = cl_attr:fun_attrib_data(), 
     FE = cl_attr:fun_empty_attrib(), 
-    F = cl_core:attribs(FA,FE), 
-    cl_db:save_matrix(F,fun_attr),
+    F = cl_core:attribs(FA, FE), 
+    cl_db:save_matrix(F, fun_attr),
     ok;
 recalculate(deps) ->
     cl_db:save_deps();
@@ -152,6 +153,20 @@ update(all) ->
     update(fun_attr),
     update(deps).
 
+%% @spec is_valid(table_name() | all) -> bool()
+%%
+%% @doc Returns whether the given table is valid.
+%% If `all' is given, it will return whether all the tables are valid.
+is_valid(TableName) when TableName == mod_attr;
+                         TableName == fun_attr ->
+    cl_db:matrix_exists(TableName);
+is_valid(deps) ->
+    cl_db:mnesia_table_exists(deps);
+is_valid(all) ->
+    is_valid(mod_attr) andalso
+    is_valid(fun_attr) andalso
+    is_valid(deps).
+
 %% @spec invalidate() -> ok
 %%
 %% @doc Invalidates all the tables in the database.
@@ -168,10 +183,10 @@ save_deps() ->
     cl_deps:insert_function_calls(FunctionCalls),
     RecordRefs = ets:new(record_refs, []),
     cl_deps:insert_record_refs(RecordRefs),
-    save_ets(FunctionCalls,function_calls,function_call,
-             [relation,ok]),
-    save_ets(RecordRefs,record_refs,record_ref,
-             [relation,ok]),
+    save_ets(FunctionCalls, function_calls, function_call,
+             [relation, ok]),
+    save_ets(RecordRefs, record_refs, record_ref,
+             [relation, ok]),
     ets:delete(FunctionCalls),
     ets:delete(RecordRefs),
     ok.
@@ -184,15 +199,17 @@ save_deps() ->
 delete_deps() ->
     case {delete_mnesia_table(function_calls), 
           delete_mnesia_table(record_refs)} of
-        {ok,ok} -> ok;
+        {ok, ok} -> ok;
         Error -> Error
     end.
 
-%%%%%%%%%% Low level functions
+%%% ======================================================================
+%%% Low level functions
 
-%%%%% Saving matricies
+%%% ----------------------------------------------------------------------
+%%% Saving matricies
 
-%% @spec save_matrix(matrix(),table_name()) -> ok
+%% @spec save_matrix(matrix(), table_name()) -> ok
 %%
 %% @doc Saves the given matrix to a database table.
 %% The matrix will be saved into two Mnesia tables, whose names are
@@ -202,100 +219,100 @@ delete_deps() ->
 save_matrix(#matrix{rows=Rows, cols=Cols, default=Default, table=EtsTable},
             TableName) ->
 
-    LabelTable = cl_utils:concat_atoms(TableName,'_labels'),
-    CellTable  = cl_utils:concat_atoms(TableName,'_cells'),
+    LabelTable = cl_utils:concat_atoms(TableName, '_labels'),
+    CellTable  = cl_utils:concat_atoms(TableName, '_cells'),
 
-    LabelCreated = create_table(LabelTable,matrix_label,
-                                record_info(fields,matrix_label)),
-    CellCreated = create_table(CellTable,matrix_cell,
-                               record_info(fields,matrix_cell)),
+    LabelCreated = create_table(LabelTable, matrix_label,
+                                record_info(fields, matrix_label)),
+    CellCreated = create_table(CellTable, matrix_cell,
+                               record_info(fields, matrix_cell)),
 
     mnesia:transaction(
       fun() ->
-              case {LabelCreated,CellCreated} of
-                  {{atomic,ok},{atomic,ok}} ->
+              case {LabelCreated, CellCreated} of
+                  {{atomic, ok}, {atomic, ok}} ->
                       ok;
-                  {{aborted,_},{aborted,_}} ->
+                  {{aborted, _}, {aborted, _}} ->
                       mnesia:clear_table(LabelTable),
                       mnesia:clear_table(CellTable)
               end,
-              write_matrix(LabelTable,CellTable,Rows,Cols,Default,EtsTable) 
+              write_matrix(LabelTable, CellTable, Rows, Cols, Default, EtsTable)
       end),
     ok.
 
-%% @spec create_table(atom(),atom(),[atom()]) -> mnesia_result()
+%% @spec create_table(atom(), atom(), [atom()]) -> mnesia_result()
 %%
 %% @doc Creates an empty table with the name `MnesiaTable', and with the given
 %% record name and attributes.
-create_table(MnesiaTable,RecordName,Attribs) ->
+create_table(MnesiaTable, RecordName, Attribs) ->
     mnesia:create_table(MnesiaTable,
-                        [{attributes,Attribs},
-                         {record_name,RecordName},
-                         {disc_copies,[node()]}]).
+                        [{attributes, Attribs},
+                         {record_name, RecordName},
+                         {disc_copies, [node()]}]).
 
-%% @spec write_matrix(atom(),atom(),[term()],[term()],term(),ets()) -> ok
+%% @spec write_matrix(atom(), atom(), [term()], [term()], term(), ets()) -> ok
 %%
 %% @doc Writes the given matrix (`Rows', `Cols', `Default', `EtsTable')
 %% into the given tables (`LabelTable', `CellTable').
-write_matrix(LabelTable,CellTable,Rows,Cols,Default,EtsTable) ->
-    lists:foldl(write_label_fun(LabelTable,row), ok, Rows),
-    lists:foldl(write_label_fun(LabelTable,col), ok, Cols),
-    mnesia:write(CellTable,#matrix_cell{index=default,value=Default},write),
+write_matrix(LabelTable, CellTable, Rows, Cols, Default, EtsTable) ->
+    lists:foldl(write_label_fun(LabelTable, row), ok, Rows),
+    lists:foldl(write_label_fun(LabelTable, col), ok, Cols),
+    mnesia:write(CellTable, #matrix_cell{index=default, value=Default}, write),
 
     ets:foldl(
-      fun({{Row,Col},Value},_) ->
-              Cell = #matrix_cell{index={Row,Col},value=Value},
-              mnesia:write(CellTable,Cell,write)
+      fun({{Row, Col}, Value}, _) ->
+              Cell = #matrix_cell{index={Row, Col}, value=Value},
+              mnesia:write(CellTable, Cell, write)
       end,
       ok,
       EtsTable),
     ok.
 
-%% @spec write_label_fun(atom(),term()) -> ((Item::term(),term()) -> term())
+%% @spec write_label_fun(atom(), term()) -> ((Item::term(), term()) -> term())
 %%
-%% @doc Returns a function that writes `#matrix_label{index={Type,Item}}' into
+%% @doc Returns a function that writes `#matrix_label{index={Type, Item}}' into
 %% the `LabelTable' Mnesia table.
-write_label_fun(LabelTable,Type) ->
-    fun(Item,_) ->
-            Label = #matrix_label{index={Type,Item}},
-            mnesia:write(LabelTable,Label,write)
+write_label_fun(LabelTable, Type) ->
+    fun(Item, _) ->
+            Label = #matrix_label{index={Type, Item}},
+            mnesia:write(LabelTable, Label, write)
     end.
 
 %%%%% Other operations on matricies
 
-%% @spec load_matrix(table_name(),atom()) -> matrix()
+%% @spec load_matrix(table_name(), atom()) -> matrix()
 %%
 %% @doc Loads the matrix which has the name `Table' from the database.
 %% The result is a matrix that contains an ets table.
 %% The name of the ets table will be `EtsName'.
 load_matrix(Table, EtsName) ->
-    LabelTable = cl_utils:concat_atoms(Table,'_labels'),
-    CellTable  = cl_utils:concat_atoms(Table,'_cells'),
+    LabelTable = cl_utils:concat_atoms(Table, '_labels'),
+    CellTable  = cl_utils:concat_atoms(Table, '_cells'),
 
-    {Rows,Cols} =
+    {Rows, Cols} =
         lists:foldl(
-          fun (#matrix_label{index=Index},{Rows,Cols}) ->
+          fun (#matrix_label{index=Index}, {Rows, Cols}) ->
                   case Index of 
-                      {row,Row} -> {[Row|Rows],Cols};
-                      {col,Col} -> {Rows,[Col|Cols]}
+                      {row, Row} -> {[Row|Rows], Cols};
+                      {col, Col} -> {Rows, [Col|Cols]}
                   end
           end,
-          {[],[]},
+          {[], []},
           table_list(LabelTable)),
 
-    EtsTable = ets:new(EtsName,[]),
+    EtsTable = ets:new(EtsName, []),
     Default =
         lists:foldl(
-          fun (#matrix_cell{index=default,value=Value},_) ->
+          fun (#matrix_cell{index=default, value=Value}, _) ->
                   Value;
-              (#matrix_cell{index=RowCol,value=Value},Default) ->
-                  ets:insert(EtsTable,{RowCol,Value}),
+              (#matrix_cell{index=RowCol, value=Value}, Default) ->
+                  ets:insert(EtsTable, {RowCol, Value}),
                   Default
           end,
           undefined,
           table_list(CellTable)),
 
-    #matrix{rows=Rows,cols=Cols,default=Default,table=EtsTable}.
+    #matrix{rows=Rows, cols=Cols, default=Default, table=EtsTable}.
 
 %% @spec delete_matrix(table_name()) -> 
 %%           ok | {mnesia_result() | ok,
@@ -303,9 +320,9 @@ load_matrix(Table, EtsName) ->
 %%
 %% @doc Deletes the given matrix from the database.
 delete_matrix(Name) ->
-    case {delete_mnesia_table(cl_utils:concat_atoms(Name,'_labels')),
-          delete_mnesia_table(cl_utils:concat_atoms(Name,'_cells'))} of
-        {ok,ok} -> ok;
+    case {delete_mnesia_table(cl_utils:concat_atoms(Name, '_labels')),
+          delete_mnesia_table(cl_utils:concat_atoms(Name, '_cells'))} of
+        {ok, ok} -> ok;
         Error -> Error
     end.
 
@@ -313,15 +330,16 @@ delete_matrix(Name) ->
 %%
 %% @doc Returns whether the given matrix exists in the database.
 matrix_exists(Name) ->
-    case {mnesia_table_exists(cl_utils:concat_atoms(Name,'_labels')),
-          mnesia_table_exists(cl_utils:concat_atoms(Name,'_cells'))} of
-        {true,true} -> true;
-        {false,false} -> false
+    case {mnesia_table_exists(cl_utils:concat_atoms(Name, '_labels')),
+          mnesia_table_exists(cl_utils:concat_atoms(Name, '_cells'))} of
+        {true, true} -> true;
+        {false, false} -> false
     end.
 
-%%%%% Operations on ets tables
+%%% ----------------------------------------------------------------------
+%%% Operations on ets tables
 
-%% @spec save_ets(ets(),atom(),atom(),[atom()]) -> ok
+%% @spec save_ets(ets(), atom(), atom(), [atom()]) -> ok
 %%
 %% @doc Saves the given ets table to the database.
 %% It will be saved into the table `MnesiaTable', which will be an actual
@@ -330,18 +348,18 @@ matrix_exists(Name) ->
 %% will be overwritten.
 save_ets(EtsTable, MnesiaTable, RecordName, RecordFields) ->
 
-    TableCreated = create_table(MnesiaTable,RecordName,RecordFields),
+    TableCreated = create_table(MnesiaTable, RecordName, RecordFields),
 
     mnesia:transaction(
       fun() ->
               case TableCreated of
-                  {atomic,ok} ->
+                  {atomic, ok} ->
                       ok;
-                  {aborted,_} ->
+                  {aborted, _} ->
                       mnesia:clear_table(MnesiaTable)
               end,
               ets:foldl(
-                fun(Item,_) ->
+                fun(Item, _) ->
                         mnesia:write(
                           MnesiaTable,
                           list_to_tuple([RecordName|tuple_to_list(Item)]),
@@ -352,17 +370,18 @@ save_ets(EtsTable, MnesiaTable, RecordName, RecordFields) ->
       end),
     ok.
 
-%%%%%%%%%% Utilities
+%%% ======================================================================
+%%% Utilities
 
 %% @spec table_list(atom()) -> [term()]
 %%
 %% @doc Collects the content of the given Mnesia table into a list.
 table_list(Table) ->
     Q = qlc:q([X || X <- mnesia:table(Table)]),
-    {atomic,L} = mnesia:transaction(fun() -> qlc:e(Q) end),
+    {atomic, L} = mnesia:transaction(fun() -> qlc:e(Q) end),
     L.
 
-%% @spec delete_mnesia_table(atom()) -> ok | {aborted,reason()}
+%% @spec delete_mnesia_table(atom()) -> ok | {aborted, reason()}
 %%
 %% @doc Deletes the given Mnesia table.
 %% If the tables exists, it does not do anything.
@@ -372,7 +391,7 @@ delete_mnesia_table(Table) ->
             ok;
         true -> 
             case mnesia:delete_table(Table) of
-                {atomic,ok} -> ok;
+                {atomic, ok} -> ok;
                 Error -> Error
             end
     end.
@@ -384,7 +403,7 @@ delete_mnesia_table(Table) ->
 %% @todo Is there a better solution?
 mnesia_table_exists(Table) ->
     try
-        mnesia:table_info(Table,all),
+        mnesia:table_info(Table, all),
         true
     catch
         _:_ -> false

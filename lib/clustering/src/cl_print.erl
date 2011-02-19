@@ -24,7 +24,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_print).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1974 $").
 
 -export([print_clusterings/1, print_clusterings/2,
          print_clustering/1, print_clustering/2,
@@ -78,14 +78,14 @@ print_clusterings(Clusterings) ->
 %%     <li>`print_clusterings::[atom() | meta()]':
 %%         the elements of this option specify what should be printed when
 %%         printing a clustering.
-%%         For the items that it can contain, see the `print_clustering/2'.
+%%         For the items that it can contain, see {@link print_clustering/2}.
 %%         The default is:
 %%         <code>[new_section, clusters]</code></li>
 %%     <li>`print_cluster::[atom() | meta()]':
 %%         the elements of this option specify what should be printed when
 %%         printing a cluster.
-%%         For the items that it can contain and for the default value, see the
-%%         `print_cluster/2'.</li>
+%%         For the items that it can contain and for the default value, see
+%%         {@link print_cluster/2}.</li>
 %% </ul>
 print_clusterings(Clusterings, Options) ->
     Opts = cl_utils:proplist_update(print_clusterings_default(), Options),
@@ -143,7 +143,7 @@ print_clustering(Clustering) ->
 %%     <li>`print_cluster::[atom() | meta()]':
 %%         the elements of this option specify what should be printed when
 %%         printing a cluster.
-%%         For the items that it can contain see the {@link print_cluster/2}.
+%%         For the items that it can contain see {@link print_cluster/2}.
 %%         The default value:
 %% ```
 %% ["Interface functions:", nl, interface_funs,
@@ -290,18 +290,18 @@ print_cuts(Cuts) ->
 %%     <li>`print_cut::[moved | not_moved | meta()]':
 %%         the elements of this option specify what should be printed when
 %%         printing a cut.
-%%         For the items that it can contain and for the default value, see the
-%%         `print_cut/2'.</li>
+%%         For the items that it can contain and for the default value, see
+%%         {@link print_cut/2}.</li>
 %%     <li>`print_moved::[atom() | meta() | tuple()]':
 %%         the elements of this option specify what should be printed in a
 %%         group of moved objects.
-%%         For the items that it can contain and for the default value, see the
-%%         `print_cut/2'.</li>
+%%         For the items that it can contain and for the default value, see
+%%         {@link print_cut/2}.</li>
 %%     <li>`print_not_moved::[atom() | meta() | tuple()]':
 %%         the elements of this option specify what should be printed in a group
 %%         of not moved objects.
-%%         For the items that it can contain and for the default value, see the
-%%         `print_cut/2'.</li>
+%%         For the items that it can contain and for the default value, see
+%%         {@link print_cut/2}.</li>
 %% </ul>
 print_cuts(Cuts, Options) ->
     Opts = cl_utils:proplist_update(print_cuts_default(), Options),
@@ -384,7 +384,7 @@ print_cut(CutResult) ->
 %%                  are (e.g. because the database does not contain it any
 %%                  more), then the functions will be printed only here, they
 %%                  will not be printed either in the `exp_funs' or in the
-%%                  `int_funs' section. </li> 
+%%                  `int_funs' section. </li>
 %%              <li>`records': prints the records.</li>
 %%              <li>`macros': prints the macros.</li>
 %%              <li>`etc': prints the objects that do not fit into any
@@ -437,12 +437,12 @@ print_cut({ObjectsNotMoved, ObjectsMoved}, Options) ->
     {W, C} = cl_out:open(get_value(output, Opts)),
 
     FileName = get_value(file_name, Opts),
-    File = 
+    File =
         case FileName of
-            undefined -> 
+            undefined ->
                 undefined;
-            _ -> 
-                {file, File2} = refac_query:file(FileName),
+            _ ->
+                {file, File2} = ?SYNTAX:file(FileName),
                 File2
         end,
 
@@ -515,7 +515,7 @@ print_objects(W, Objects, PrintItems, ClusterId, Cluster, File, Opts) ->
           Objects),
 
     %% a category->[object] dictionary, where the [object] lists are sorted
-    D4 = 
+    D4 =
         dict:fold(
           fun(Category, List, D3) ->
                   dict:store(Category, lists:sort(List), D3)
@@ -537,7 +537,7 @@ print_objects(W, Objects, PrintItems, ClusterId, Cluster, File, Opts) ->
 object_category(#fun_attr{}, undefined) ->
     funs;
 object_category(#fun_attr{name=Name, arity=Arity}, File) ->
-    case refac_query:is_exported(File, Name, Arity) of
+    case ?SEMINF:is_exported(File, Name, Arity) of
         true -> exp_funs;
         false -> int_funs
     end;
@@ -591,7 +591,7 @@ print_objects_item(W, Item, D, Cluster, ClusterId, Indent) ->
                    dict:fetch(etc, D)};
               (count) ->
                   {meta, count};
-              (Meta) -> 
+              (Meta) ->
                   {meta, Meta}
           end,
           ItemLst),
@@ -679,32 +679,32 @@ print_list_gen(W, [Head | Tail], Indent, Fun) ->
 %%%%% Query functions
 
 modules() ->
-    ?GRAPH:path(?GRAPH:root(), [module]).
+    ?ESG:path(?ESG:root(), [module]).
 
 function_calls(Module) ->
-    ?GRAPH:path(Module, [func, {fundef, back}, funcl, {scope, back}, visib,
-                         {sup, back}, funref]).  
+    ?ESG:path(Module, [func, {fundef, back}, funcl, {scope, back}, visib,
+                         {sup, back}, funref]).
 
 module_module_calls() ->
-    L = lists:flatten([[{Module, Call} || Call <- function_calls(Module)] 
+    L = lists:flatten([[{Module, Call} || Call <- function_calls(Module)]
                        || Module <- modules()]),
     lists:map(
       fun({Module, Call}) ->
-              {module, CallerMod} = ?GRAPH:data(Module),
-              {module, CalledMod} = 
-                  ?GRAPH:data(hd(?GRAPH:path(Call, [{func, back}]))),
-              {func, _, Fun, Arity} = ?GRAPH:data(Call),
+              {module, CallerMod} = ?ESG:data(Module),
+              {module, CalledMod} =
+                  ?ESG:data(hd(?ESG:path(Call, [{func, back}]))),
+              {func, _, Fun, Arity} = ?ESG:data(Call),
               {CallerMod, CalledMod, Fun, Arity}
       end,
       L).
 
 %% @doc Returns the interface functions of the given cluster.
 interface_funs(Cluster) ->
-    [{CallerMod, CalledMod, _Fun, _Arity} || 
-        {CallerMod, CalledMod, _Fun, _Arity} <- module_module_calls(), 
-        not lists:member(CallerMod, Cluster), 
+    [{CallerMod, CalledMod, _Fun, _Arity} ||
+        {CallerMod, CalledMod, _Fun, _Arity} <- module_module_calls(),
+        not lists:member(CallerMod, Cluster),
         lists:member(CalledMod, Cluster)].
 
 fun_description({_CallerMod, CalledMod, Fun, Arity}) ->
-    atom_to_list(CalledMod) ++ ":" ++ atom_to_list(Fun) ++ "/"  
+    atom_to_list(CalledMod) ++ ":" ++ atom_to_list(Fun) ++ "/"
         ++ integer_to_list(Arity).

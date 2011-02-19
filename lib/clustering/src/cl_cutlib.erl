@@ -20,8 +20,8 @@
 %%% @doc This module can be used to decompose the library modules that remain
 %%% after clustering.
 %%% Probably the easiest way to use this library is to use the
-%%% `cl_interface:cut_libs/1' function to invoke the calculations, and the
-%%% `cl_print:print_cuts/2' function to print the results.
+%%% {@link cl_interface:cut_libs/1} function to invoke the calculations, and the
+%%% {@link cl_print:print_cuts/2} function to print the results.
 %%%
 %%% The structure of the module is described in the pdf documentation.
 %%% `create_graph' creates the graph, using `user_objects' and `user_clusters'.
@@ -31,7 +31,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_cutlib).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1489 $").
 
 -export([collect_files/1, collect_files_by_modnames/1,
          collect_files_by_filenames/1,
@@ -43,7 +43,6 @@
          cut_result_list_to_nice/1]).
 
 -include("cluster.hrl").
-
 
 %%% @type fun_attr() = #fun_attr{}.
 
@@ -74,8 +73,8 @@
 %%% @type cluster_id() = number().
 
 %%% @type clusters_data() =
-%%% {ModToClusterId::ordered_dictionary(mod_name(),cluster_id()),
-%%%  ClusterIdToCluster::ordered_dictionary(cluster_id(),[mod_name()])}.
+%%% {ModToClusterId::ordered_dictionary(mod_name(), cluster_id()),
+%%%  ClusterIdToCluster::ordered_dictionary(cluster_id(), [mod_name()])}.
 %%%
 %%% The representation of the clustering that can be used effectively by this
 %%% module.
@@ -94,14 +93,14 @@
 
 %%% @type callee_to_callers_dict() = dictionary(graph_node(),set(graph_node())).
 
-%%% @type cut() = dictionary(cluster_id(),set(graph_object())).
+%%% @type cut() = dictionary(cluster_id(), set(graph_object())).
 %%%
 %%% Represents a possible decomposition of the modules which are wanted to be
 %%% decomposed.
 
 %%% @type cut_result() = 
 %%% {ObjectsNotMoved::[graph_object()],
-%%%  ObjectsMoved::[{Cluster::cluster_id(),Objects::[graph_object()]}]}.
+%%%  ObjectsMoved::[{Cluster::cluster_id(), Objects::[graph_object()]}]}.
 %%%
 %%% Represents a possible decomposition of the modules which are wanted to be
 %%% decomposed.
@@ -125,11 +124,11 @@
 %%% they are represented also by their contents (i.e. the list of the modules
 %%% that they contain).
 
-%%% @type cuts_result() = [{file(),cut_result()}].
+%%% @type cuts_result() = [{file(), cut_result()}].
 %%%
 %%% Represents the decomposition of several files.
 
-%%% @type cuts_result_nice() = [{file_name(),cut_result_nice()}].
+%%% @type cuts_result_nice() = [{file_name(), cut_result_nice()}].
 %%%
 %%% Represents the decomposition of several files.
 
@@ -144,7 +143,7 @@ file_to_filename(File) ->
 %% it as an argument.
 collect_files(Filter) ->
     lists:foldl(
-      fun(File,Files) ->
+      fun(File, Files) ->
               case Filter(File) of
                   true -> [File|Files];
                   false -> Files
@@ -165,7 +164,7 @@ collect_files_by_modnames(Modules) ->
                       false;
                   [ModNode] ->
                       #module{name=ModName} = ?ESG:data(ModNode),
-                      ordsets:is_element(ModName,ModulesOrd)
+                      ordsets:is_element(ModName, ModulesOrd)
               end
       end).
 
@@ -178,7 +177,7 @@ collect_files_by_filenames(FileNames) ->
       fun(File) ->
               case ?ESG:data(File) of
                   #file{path=CurrentFileName} ->
-                      ordsets:is_element(CurrentFileName,FileNamesOrd);
+                      ordsets:is_element(CurrentFileName, FileNamesOrd);
                   _ ->
                       false
               end
@@ -192,7 +191,7 @@ collect_files_by_filenames_end(FileNameEnds) ->
       fun(File) ->
               case ?ESG:data(File) of
                   #file{path=CurrentFileName} ->
-                      lists:any(match_end(CurrentFileName),FileNameEnds);
+                      lists:any(match_end(CurrentFileName), FileNameEnds);
                   _ ->
                       false
               end
@@ -201,7 +200,7 @@ collect_files_by_filenames_end(FileNameEnds) ->
 match_end(FileName) ->
     fun(FileNameEnd) ->
             case length(FileName)-length(FileNameEnd)+1 of
-                N when N>=0 -> string:substr(FileName,N) == FileNameEnd;
+                N when N>=0 -> string:substr(FileName, N) == FileNameEnd;
                 _ -> false
             end
     end.
@@ -210,22 +209,22 @@ match_end(FileName) ->
 %%
 %% @doc Returns the objects that belong to the files.
 contents_of_files(Files) ->
-    ContentsTable = ets:new(contents_of_files,[]),
+    ContentsTable = ets:new(contents_of_files, []),
     lists:foldl(
-      fun(File,_) ->
+      fun(File, _) ->
               Links = 
                   %% TODO Is there a nicer way to do this?
                   ?ESG:path(File, [macro])++
                   ?ESG:path(File, [record])++
-                  ?ESG:path(File, [moddef,func]),
+                  ?ESG:path(File, [moddef, func]),
               lists:foldl(
-                fun(Node,_) ->
+                fun(Node, _) ->
                         NewObject =
                             case ?ESG:data(Node) of
                                 #func{} ->
                                     %% We only want the functions that have 
                                     %% definition
-                                    case ?ESG:path(Node,[{fundef,back}]) of
+                                    case ?ESG:path(Node, [{fundef, back}]) of
                                         [] -> undefined;
                                         _ -> cl_attr:fun_to_fun_attr(Node)
                                     end;
@@ -238,7 +237,7 @@ contents_of_files(Files) ->
                             end,
                         case NewObject of
                             undefined -> undefined;
-                            _ -> ets:insert(ContentsTable,{NewObject})
+                            _ -> ets:insert(ContentsTable, {NewObject})
                         end
                 end,
                 undefined,
@@ -250,36 +249,36 @@ contents_of_files(Files) ->
     ets:delete(ContentsTable),
     ContentsList.
 
-%% @spec cut_libs_all([[mod_name()]],[mod_name()],[string()]) ->
+%% @spec cut_libs_all([[mod_name()]], [mod_name()], [string()]) ->
 %%           cuts_result_nice()
 %%
 %% @doc Decomposes all the given modules and hrl files.
 %% Each files will be decomposed separately.
-cut_libs_all(Clusters,Libs,HrlNames) ->
-    cut_libs_all_general(Clusters,Libs,HrlNames,fun cut_libs/4).
+cut_libs_all(Clusters, Libs, HrlNames) ->
+    cut_libs_all_general(Clusters, Libs, HrlNames, fun cut_libs/4).
 
-%% @spec cut_libs_all_result_data([[mod_name()]],[mod_name()],[string()]) ->
-%%           {cuts_result(),clusters_data()}
+%% @spec cut_libs_all_result_data([[mod_name()]], [mod_name()], [string()]) ->
+%%           {cuts_result(), clusters_data()}
 %%
 %% @doc Decomposes all the given modules and hrl files.
 %% Each files will be decomposed separately.
-cut_libs_all_result_data(Clusters,Libs,HrlNames) ->
-    cut_libs_all_general(Clusters,Libs,HrlNames,fun cut_libs_result_data/4).
+cut_libs_all_result_data(Clusters, Libs, HrlNames) ->
+    cut_libs_all_general(Clusters, Libs, HrlNames, fun cut_libs_result_data/4).
 
-%% @spec cut_libs_all_general([[mod_name()]],[mod_name()],[string()],
-%%           (mod_attribs(),fun_attribs(),[[mod_name()]],[file()]) -> Cut) ->
+%% @spec cut_libs_all_general([[mod_name()]], [mod_name()], [string()],
+%%           (mod_attribs(), fun_attribs(), [[mod_name()]], [file()]) -> Cut) ->
 %%           Cut
 %%
 %% @doc Decomposes all the given modules and hrl files.
 %% Each files will be decomposed separately.
 %% It assumes that the `mod_attr' and `fun_attr' tables are present in the
 %% database.
-cut_libs_all_general(Clusters,Libs,HrlNames,CutFun) ->
+cut_libs_all_general(Clusters, Libs, HrlNames, CutFun) ->
 
     %% creating attributes matricies
-    ModAttribs = cl_db:load_matrix(mod_attr,mod_attr),
-    FunAttribs = cl_db:load_matrix(fun_attr,fun_attr),
-    ModAttribs2 = cl_core:filter(ModAttribs,[cl_utils:ignore(Libs)],[]),
+    ModAttribs = cl_db:load_matrix(mod_attr, mod_attr),
+    FunAttribs = cl_db:load_matrix(fun_attr, fun_attr),
+    ModAttribs2 = cl_core:filter(ModAttribs, [cl_utils:ignore(Libs)], []),
 
     %% collecting files to be clustered
     FilesToBeClustered = 
@@ -287,101 +286,102 @@ cut_libs_all_general(Clusters,Libs,HrlNames,CutFun) ->
         collect_files_by_filenames_end(HrlNames),
 
     %% actual cutting
-    Cut = CutFun(ModAttribs,FunAttribs,Clusters,FilesToBeClustered),
+    Cut = CutFun(ModAttribs, FunAttribs, Clusters, FilesToBeClustered),
 
     %% deleting tables
     cl_matrix:delete(ModAttribs2),
     cl_matrix:delete(FunAttribs),
     Cut.
 
-%% @spec cut_lib(mod_attribs(),fun_attribs(),[[mod_name()]],[file()]) ->
+%% @spec cut_lib(mod_attribs(), fun_attribs(), [[mod_name()]], [file()]) ->
 %%           cut_result_nice()
 %%
 %% @doc Returns the decomposition of the given files.
 %% The files will be decomposed together.
-cut_lib(ModAttribs,FunAttribs,Clusters,Files) ->
-    CutResultData = cut_lib_result_data(ModAttribs,FunAttribs,Clusters,Files),
+cut_lib(ModAttribs, FunAttribs, Clusters, Files) ->
+    CutResultData = cut_lib_result_data(ModAttribs, FunAttribs, Clusters,Files),
     cut_result_to_nice(CutResultData).
 
-%% @spec cut_lib_result_data(mod_attribs(),fun_attribs(),[[mod_name()]],
+%% @spec cut_lib_result_data(mod_attribs(), fun_attribs(), [[mod_name()]],
 %%           [file()]) ->
-%%           {cut_result(),clusters_data()}
+%%           {cut_result(), clusters_data()}
 %%
 %% @doc Returns the decomposition of the given files.
 %% The files will be decomposed together.
-cut_lib_result_data(ModAttribs,FunAttribs,Clusters,Files) ->
+cut_lib_result_data(ModAttribs, FunAttribs, Clusters, Files) ->
     Objects = contents_of_files(Files),
     ClustersData = clusters_to_clusters_data(Clusters),
-    Graph = create_graph(ModAttribs,FunAttribs,ClustersData,Objects),
+    Graph = create_graph(ModAttribs, FunAttribs, ClustersData, Objects),
     ClusterIds = clusters_data_to_cluster_ids(ClustersData),
-    CutResult = do_cut(Graph,ClusterIds),
-    {CutResult,ClustersData}.
+    CutResult = do_cut(Graph, ClusterIds),
+    {CutResult, ClustersData}.
 
-%% @spec cut_libs(mod_attribs(),fun_attribs(),[[mod_name()]],[file()]) ->
+%% @spec cut_libs(mod_attribs(), fun_attribs(), [[mod_name()]], [file()]) ->
 %%           cuts_result_nice()
 %%
 %% @doc Returns the decomposition of the given files.
 %% Each files will be decomposed separately.
-cut_libs(ModAttribs,FunAttribs,Clusters,Files) ->
-    CutResultData = cut_libs_result_data(ModAttribs,FunAttribs,Clusters,Files),
+cut_libs(ModAttribs, FunAttribs, Clusters, Files) ->
+    CutResultData = cut_libs_result_data(ModAttribs, FunAttribs,Clusters,Files),
     cut_result_list_to_nice(CutResultData).
 
-%% @spec cut_libs_result_data(mod_attribs(),fun_attribs(),[[mod_name()]],
+%% @spec cut_libs_result_data(mod_attribs(), fun_attribs(), [[mod_name()]],
 %%           [file()]) ->
-%%           {cuts_result(),clusters_data()}
+%%           {cuts_result(), clusters_data()}
 %%
 %% @doc Returns the decomposition of the given files.
 %% Each files will be decomposed separately.
-cut_libs_result_data(ModAttribs,FunAttribs,Clusters,Files) ->
+cut_libs_result_data(ModAttribs, FunAttribs, Clusters, Files) ->
     ClustersData = clusters_to_clusters_data(Clusters),
     ClusterIds = clusters_data_to_cluster_ids(ClustersData),
 
-    {[{File,begin Objects = contents_of_files([File]),
-                  Graph = create_graph(ModAttribs,FunAttribs,ClustersData,Objects),
-                  do_cut(Graph,ClusterIds) 
-            end} || File <- Files],ClustersData}.
+    {[{File, begin Objects = contents_of_files([File]),
+                  Graph = create_graph(ModAttribs, FunAttribs, 
+                                       ClustersData, Objects),
+                  do_cut(Graph, ClusterIds) 
+            end} || File <- Files], ClustersData}.
 
-%% @spec cut_result_list_to_nice({cuts_result(),clusters_data()}) -> 
+%% @spec cut_result_list_to_nice({cuts_result(), clusters_data()}) -> 
 %%           cuts_result_nice()
 %%
 %% @doc The result of the cut contains cluster id-s; the output of this function
 %% contains the clusters themselves as lists.
-cut_result_list_to_nice({CutResultList,ClustersData}) ->
-    [ {file_to_filename(File),cut_result_to_nice({CutResult,ClustersData})} ||
-        {File,CutResult}<- CutResultList ].
+cut_result_list_to_nice({CutResultList, ClustersData}) ->
+    [ {file_to_filename(File), cut_result_to_nice({CutResult, ClustersData})} ||
+        {File, CutResult}<- CutResultList ].
 
 %% @spec clusters_to_clusters_data([[mod_name()]]) -> clusters_data()
 %%
 %% @doc Transforms the clustering to another data structure.
 %% `NumberOfClusters' contains the number of clusters.
 clusters_to_clusters_data(Clusters) ->
-    %% Acc: {id_of_next_cluster,ClusterIdToClusterAcc}
-    {_N,ClusterIdToCluster} =
+    %% Acc: {id_of_next_cluster, ClusterIdToClusterAcc}
+    {_N, ClusterIdToCluster} =
         lists:foldl(
-          fun(Cluster,{Id,ClusterIdToClusterAcc}) ->
+          fun(Cluster, {Id, ClusterIdToClusterAcc}) ->
                   {Id+1,
-                   [{Id,Cluster} | ClusterIdToClusterAcc]}
+                   [{Id, Cluster} | ClusterIdToClusterAcc]}
           end,
-          {0,[]},
+          {0, []},
           Clusters),
     ModToClusterIdDict = 
         orddict:from_list(
-          [{Mod,Id} || {Id,Cluster} <- ClusterIdToCluster, Mod <- Cluster]),
-    {ModToClusterIdDict,orddict:from_list(ClusterIdToCluster)}.
+          [{Mod, Id} || {Id, Cluster} <- ClusterIdToCluster, Mod <- Cluster]),
+    {ModToClusterIdDict, orddict:from_list(ClusterIdToCluster)}.
 
 %% @spec clusters_data_to_cluster_ids(clusters_data()) -> [cluster_id()]
 %%
 %% @doc Returns the list of id-s of the clusters.
-clusters_data_to_cluster_ids({_,ClusterIdToCluster}) ->
+clusters_data_to_cluster_ids({_, ClusterIdToCluster}) ->
     orddict:fetch_keys(ClusterIdToCluster).
 
-%% @spec create_graph(mod_attribs(),fun_attribs(),clusters_data(),
+%% @spec create_graph(mod_attribs(), fun_attribs(), clusters_data(),
 %%                    [graph_object()]) ->
 %%           {caller_to_callees_dict(), callee_to_callers_dict()}
 %%
 %% @doc Creates the graph on which the algorithm will work.
 %% `Objects': objects that have to be assigned to clusters.
-create_graph(ModAttribs,FunAttribs,Clusters,Objects) ->
+create_graph(ModAttribs, FunAttribs, Clusters, Objects) ->
     %% RE: CallerToCalleesDict
     %% ER: CalleeToCallersDict
     ObjectsOrd = ordsets:from_list(Objects),
@@ -389,15 +389,15 @@ create_graph(ModAttribs,FunAttribs,Clusters,Objects) ->
         dict:from_list(
           [{Object,
             sets:union(
-              user_objects(FunAttribs,Object,ObjectsOrd),
-              user_clusters(ModAttribs,Object,Clusters))} || 
+              user_objects(FunAttribs, Object, ObjectsOrd),
+              user_clusters(ModAttribs, Object, Clusters))} || 
               Object <- Objects]),
     RE =
         dict:fold(
-          fun(Callee,Callers,ERAcc1) ->
+          fun(Callee, Callers, ERAcc1) ->
                   sets:fold(
-                    fun(Caller,ERAcc2) ->
-                            set_dict:add(Caller,Callee,ERAcc2)
+                    fun(Caller, ERAcc2) ->
+                            set_dict:add(Caller, Callee, ERAcc2)
                     end,
                     ERAcc1,
                     Callers)
@@ -406,7 +406,7 @@ create_graph(ModAttribs,FunAttribs,Clusters,Objects) ->
           ER),
     {RE, ER}.
 
-%% @spec user_objects(fun_attribs(),graph_object(),
+%% @spec user_objects(fun_attribs(), graph_object(),
 %%                    ordered_set(graph_object())) -> set(graph_node())
 %%
 %% @doc Returns the objects that use `Object' and are present in the
@@ -414,15 +414,15 @@ create_graph(ModAttribs,FunAttribs,Clusters,Objects) ->
 %% It will not contain the `Object' even if it uses itself.
 %%
 %% @todo add macros?
-user_objects(FunAttribs,Object,ObjectsOrd) ->
+user_objects(FunAttribs, Object, ObjectsOrd) ->
     L2 = cl_matrix:fold_col(
-           fun (#fun_attr{} = Caller,Calls,L) when Calls>0 ->
-                   case (ordsets:is_element(Caller,ObjectsOrd) andalso
+           fun (#fun_attr{} = Caller, Calls, L) when Calls>0 ->
+                   case (ordsets:is_element(Caller, ObjectsOrd) andalso
                          Caller/=Object) of
                        true -> [Caller|L];
                        false -> L
                    end;
-               (_,_,L) ->
+               (_, _, L) ->
                    L
            end,
            [],
@@ -430,55 +430,55 @@ user_objects(FunAttribs,Object,ObjectsOrd) ->
            FunAttribs),
     sets:from_list(L2).
 
-%% @spec user_clusters(mod_attribs(),graph_object(),clusters_data()) ->
+%% @spec user_clusters(mod_attribs(), graph_object(), clusters_data()) ->
 %%           set(graph_node())
 %%
 %% @doc Returns the clusters that use `Object'.
-user_clusters(ModAttribs,Object,{ModToClusterIdDict,_}) ->
+user_clusters(ModAttribs, Object, {ModToClusterIdDict, _}) ->
     cl_matrix:fold_col(
-      fun (CallerModule,Calls,S) when Calls>0 ->
-              case orddict:is_key(CallerModule,ModToClusterIdDict) of
+      fun (CallerModule, Calls, S) when Calls>0 ->
+              case orddict:is_key(CallerModule, ModToClusterIdDict) of
                   true -> 
-                      Cluster = orddict:fetch(CallerModule,ModToClusterIdDict),
-                      sets:add_element(Cluster,S);
+                      Cluster = orddict:fetch(CallerModule, ModToClusterIdDict),
+                      sets:add_element(Cluster, S);
                   false -> 
                       S
               end;
-          (_,_,S) ->
+          (_, _, S) ->
               S
       end,
       sets:new(),
       Object,
       ModAttribs).
 
-%% @spec do_cut({caller_to_callees_dict(),callee_to_callers_dict()},
+%% @spec do_cut({caller_to_callees_dict(), callee_to_callers_dict()},
 %%              [cluster_id()]) -> cut_result()
 %%
 %% @doc Returns the decomposition of the modules.
-do_cut(Graph,ClusterIds) ->
-    do_cut(Graph,dict:new(),ClusterIds).
+do_cut(Graph, ClusterIds) ->
+    do_cut(Graph, dict:new(), ClusterIds).
 
-%% @spec do_cut({caller_to_callees_dict(),callee_to_callers_dict()},cut(),
+%% @spec do_cut({caller_to_callees_dict(), callee_to_callers_dict()}, cut(),
 %%              ClusterIds::[cluster_id()]) -> cut_result()
 %%
 %% @doc Tries to sort the objects of the graph to the clusters in `ClusterIds'.
-do_cut({_RE,ER},Cut,[]) ->
-    {[Object || {Object,_} <- dict:to_list(ER)], set_dict:to_list(Cut)};
-do_cut({RE, ER},Cut,[ClusterId|ClusterIdsTail]=ClusterIds) ->
+do_cut({_RE, ER}, Cut, []) ->
+    {[Object || {Object, _} <- dict:to_list(ER)], set_dict:to_list(Cut)};
+do_cut({RE, ER}, Cut, [ClusterId|ClusterIdsTail]=ClusterIds) ->
     %% `Change': true iff changes happened
     %% `RE': CallerToCalleesDict
     %% `ER': CalleeToCallersDict
-    {Change,NewRE,NewER,NewCut} =
-        case dict:find(ClusterId,RE) of
-            {ok,Callees} ->
+    {Change, NewRE, NewER, NewCut} =
+        case dict:find(ClusterId, RE) of
+            {ok, Callees} ->
                 sets:fold(
-                  fun(Object,Acc) ->
-                          try_to_move_object_to_cluster(Object,Acc,ClusterId)
+                  fun(Object, Acc) ->
+                          try_to_move_object_to_cluster(Object, Acc, ClusterId)
                   end,
-                  {false,RE,ER,Cut},
+                  {false, RE, ER, Cut},
                   Callees);
             error ->
-                {false,RE,ER,Cut}
+                {false, RE, ER, Cut}
         end,
     %% `Change': if there were some changes in the graph (Change=true), i.e. we
     %% managed to put new modules to the cluster, we have to consider the same
@@ -489,7 +489,7 @@ do_cut({RE, ER},Cut,[ClusterId|ClusterIdsTail]=ClusterIds) ->
                         true -> ClusterIds;
                         false -> ClusterIdsTail
                     end,
-    do_cut({NewRE,NewER},NewCut,NewClusterIds).
+    do_cut({NewRE, NewER}, NewCut, NewClusterIds).
 
 %% @spec try_to_move_object_to_cluster(
 %%           fun_attr(),
@@ -501,14 +501,14 @@ do_cut({RE, ER},Cut,[ClusterId|ClusterIdsTail]=ClusterIds) ->
 %%
 %% @doc Check whether `Object' is used only by cluster `ClusterId', and if it is
 %% true, it moves `Object' to that cluster.
-try_to_move_object_to_cluster(Object,{_Change,RE,ER,Cut}=Args,ClusterId) ->
-    case dict:find(Object,ER) of
-        {ok,Callers} ->
+try_to_move_object_to_cluster(Object, {_Change, RE, ER, Cut}=Args, ClusterId) ->
+    case dict:find(Object, ER) of
+        {ok, Callers} ->
             case sets:size(Callers) == 1 of
                 true -> 
-                    {RE2,ER2,Cut2} = 
-                        move_object_to_cluster(ClusterId,Object,RE,ER,Cut),
-                    {true,RE2,ER2,Cut2};
+                    {RE2, ER2, Cut2} = 
+                        move_object_to_cluster(ClusterId, Object, RE, ER, Cut),
+                    {true, RE2, ER2, Cut2};
                 false ->
                     Args
             end;
@@ -517,48 +517,48 @@ try_to_move_object_to_cluster(Object,{_Change,RE,ER,Cut}=Args,ClusterId) ->
     end.
 
 %% @spec move_object_to_cluster(
-%%           cluster_id(),fun_attr(),
-%%           caller_to_callees_dict(),callee_to_callers_dict(),
+%%           cluster_id(), fun_attr(),
+%%           caller_to_callees_dict(), callee_to_callers_dict(),
 %%           cut()) -> 
 %%           {caller_to_callees_dict(),
 %%            callee_to_callers_dict(),
 %%            cut()}
 %%
 %% @doc Moves `Object' to `ClusterId' cluster.
-move_object_to_cluster(ClusterId,Object,RE,ER,Cut) ->
+move_object_to_cluster(ClusterId, Object, RE, ER, Cut) ->
     %% adding the object to the cluster's set
-    CutNew = set_dict:add(ClusterId,Object,Cut),
+    CutNew = set_dict:add(ClusterId, Object, Cut),
 
     %% `Object'->other edges will become `Cluster'->other edges
-    {RE3,ER3} = 
-        case dict:find(Object,RE) of
-            {ok,Callees} ->
+    {RE3, ER3} = 
+        case dict:find(Object, RE) of
+            {ok, Callees} ->
                 sets:fold(
-                  fun(Callee,{RE2,ER2}) ->
-                          {set_dict:add(ClusterId,Callee,RE2),
+                  fun(Callee, {RE2, ER2}) ->
+                          {set_dict:add(ClusterId, Callee, RE2),
                            set_dict:add(
-                             Callee,ClusterId,
-                             set_dict:remove(Callee,Object,ER2))}
+                             Callee, ClusterId,
+                             set_dict:remove(Callee, Object, ER2))}
                   end,
-                  {RE,ER},
+                  {RE, ER},
                   Callees);
             error ->
-                {RE,ER}
+                {RE, ER}
         end,
 
     %% removing `Object' from the cluster's callees and from RE
-    RE4 = set_dict:remove(ClusterId,Object,RE3),
-    RENew = dict:erase(Object,RE4),
-    ERNew = dict:erase(Object,ER3),
-    {RENew,ERNew,CutNew}.
+    RE4 = set_dict:remove(ClusterId, Object, RE3),
+    RENew = dict:erase(Object, RE4),
+    ERNew = dict:erase(Object, ER3),
+    {RENew, ERNew, CutNew}.
 
 %% @spec cut_result_to_nice({cut_result(),clusters_data()}) -> cut_result_nice()
 %%
 %% @doc The result of the cut contains cluster id-s; the output of this function
 %% contains also the clusters themselves as lists.
-cut_result_to_nice({{Objects_not_moved,Objects_moved},
-                    {_,ClusterIdToClusterDict}}) ->
+cut_result_to_nice({{Objects_not_moved, Objects_moved},
+                    {_, ClusterIdToClusterDict}}) ->
     {Objects_not_moved,
-     [ {ClusterId,orddict:fetch(ClusterId,ClusterIdToClusterDict),Objects}  ||
-         {ClusterId,Objects} <- Objects_moved]}.
+     [ {ClusterId, orddict:fetch(ClusterId, ClusterIdToClusterDict),Objects}  ||
+         {ClusterId, Objects} <- Objects_moved]}.
 

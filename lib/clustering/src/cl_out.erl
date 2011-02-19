@@ -47,7 +47,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_out).
--vsn("$Rev: 1335 $").
+-vsn("$Rev: 1458 $").
 
 -export([open/1, close/1, fwrite/2, fwrite/3, new_section/1,
          start_section_process/1, file_name_gen/2,
@@ -59,7 +59,7 @@
 
 %%% @type io_device().
 %%%
-%%% As returned by `file:open/2', a process handling IO protocols.
+%%% As returned by {@link file:open/2}, a process handling IO protocols.
 
 %%% @type output_function() = ((string() | new_section | close) -> ok).
 %%%
@@ -582,7 +582,7 @@ output_collector_loop(Strings) ->
         new_section ->
             %% @todo: it is not the best way to indicate new_section
             output_collector_loop(
-              [get_option(process, new_section, [])|Strings]);
+              [get_option(process, new_section_string, [])|Strings]);
         close ->
             output_collector_loop([Strings]);
         {get_string, Pid} ->

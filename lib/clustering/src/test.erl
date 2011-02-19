@@ -22,7 +22,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(test).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1246 $").
 
 -export([test_all/0,test/1,test_module/1,sort/2]).
 -export([test/0]).

@@ -23,7 +23,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_draw_graph).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1358 $").
 
 -export([draw_clusters/2]).
 
@@ -41,7 +41,7 @@ draw_clusters(Iterations, Dir) ->
                   {ok, Dev} ->
                       io:format(Dev, "digraph calls { overlap=scale;~n", []),
                       [module_calls(Dev, M) ||
-                          M <- ?GRAPH:path(?GRAPH:root(), [file, moddef])],
+                          M <- ?ESG:path(?ESG:root(), [file, moddef])],
                       %% TODO: lists subgraphs
                       subgraphs(Dev, Iteration),
                       io:format(Dev, "}~n", []),
@@ -55,9 +55,9 @@ draw_clusters(Iterations, Dir) ->
       Iterations).
 
 module_calls(Dev, Mod) ->
-    #module{name=Name} = ?GRAPH:data(Mod),
+    #module{name=Name} = ?ESG:data(Mod),
     io:format(Dev, "~s [label=\"~s\"];~n", [Name, Name]),
-    Calls = ?GRAPH:path(Mod, [func, {fundef,back}, funcl, {scope, back}, visib,
+    Calls = ?ESG:path(Mod, [func, {fundef,back}, funcl, {scope, back}, visib,
                               {sup, back}, funref, {func, back}]),
     %io:format("~s: ~b~n", [Name, length(Calls)]),
     print_calls(lists:sort(Calls), Name, Dev).
@@ -65,10 +65,10 @@ module_calls(Dev, Mod) ->
 print_calls([{n, Node, N}, Node | Tail], From, Dev) ->
     print_calls([{n, Node, N+1} | Tail], From, Dev);
 print_calls([{n, Node, N} | Tail], From, Dev) ->
-    case ?GRAPH:path(Node, [{moddef,back}]) of
+    case ?ESG:path(Node, [{moddef,back}]) of
         [] -> ok;
         _ ->
-            #module{name=To} = ?GRAPH:data(Node),
+            #module{name=To} = ?ESG:data(Node),
             if
                 To /= From ->
                     io:format(Dev, "~s -> ~s [label=\"~b\"];~n", [From, To, N]);

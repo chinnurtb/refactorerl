@@ -37,7 +37,7 @@
 %%% @author Krisztian Toth <ccc@inf.elte.hu>
 
 -module(cl_groupfun).
--vsn("$Rev: 1247 $").
+-vsn("$Rev: 1246 $").
 
 -export([single/6, complete/6, uwaverage/6, waverage/6, centroid/6, median/6,
          ward/6]).
