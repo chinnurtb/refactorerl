@@ -14,23 +14,23 @@
 %%% authors depending on the circumstances of publication.
 
 %%% --------------------------------------------------------------------------
-%%% ``The  contents of this  file are  subject to  the Erlang  Public License,
-%%% Version  1.1,  (the  "License"); you  may  not  use  this file  except  in
-%%% compliance with the License. You should have received a copy of the Erlang
-%%% Public License along  with this software. If not, it  can be retrieved via
-%%% the world wide web at http://www.erlang.org/.
-
-%%% Software distributed under the License is distributed on an "AS IS" basis,
-%%% WITHOUT WARRANTY OF  ANY KIND, either express or  implied. See the License
-%%% for  the specific  language  governing rights  and  limitations under  the
-%%% License.
-
-%%% The Initial  Developer of  the Original Code  is Ericsson  Utvecklings AB.
-%%% Portions created by Ericsson  are Copyright 1999, Ericsson Utvecklings AB.
-%%% All Rights Reserved.''
+%%% The contents of this file are subject to the Erlang Public License,
+%%% Version 1.1, (the "License"); you may not use this file except in
+%%% compliance with the License. You should have received a copy of the
+%%% Erlang Public License along with this software. If not, it can be
+%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%%
+%%% Software distributed under the License is distributed on an "AS IS"
+%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%%% License for the specific language governing rights and limitations under
+%%% the License.
+%%%
+%%% The Original Code is RefactorErl.
+%%%
+%%% The Initial Developer of the Original Code is Eötvös Loránd University.
+%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
+%%% Loránd University. All Rights Reserved.
 %%% --------------------------------------------------------------------------
-
-%%% The Contributors are the Authors listed below. All Rights Reserved.
 
 %%% You may not alter or remove any trademark, copyright or other notice from
 %%% copies of the content.
@@ -70,8 +70,6 @@
 
 -include("node_type.hrl").
 
--vsn('0.2').
-
 -record(surdata, 
         {macro=false, application=false, pattern=false, lbody=false,
          msend=false, mid, id}).
@@ -108,8 +106,10 @@ tuple_to_record(File, FromLine, FromCol, ToLine, ToCol, RecordName,
     RecordParams = convert_record_names(RecordParamsString),
 %%DEBUG    io:format("RecordName:~p~n", [RecordName]),
 %%DEBUG    io:format("RecordParams:~p~n", [RecordParams]),
-    refac_checks:check_if_tuple(MId, Found, ExprId, FromLine, FromCol, ToLine, ToCol),
-    refac_checks:check_param_number_equal_to_tuple_length(RecordParams, MId, ExprId),
+    refac_checks:check_if_tuple(
+      MId, Found, ExprId, FromLine, FromCol, ToLine, ToCol),
+    refac_checks:check_param_number_equal_to_tuple_length(
+      RecordParams, MId, ExprId),
     RootClause = hd(PathFromRootClause),
     refac_checks:check_if_not_embedded_tuple(MId, PathFromRootClause),
     Used = check_record_name_not_used(MId, RecordName),
@@ -127,7 +127,9 @@ tuple_to_record(File, FromLine, FromCol, ToLine, ToCol, RecordName,
     MaybeVars = get_variables_surrounding(MId, MaybeVar, RecordName),
 %%DEBUG    io:format("MaybeVars:~p~n", [MaybeVars]),
     FunId = get_function_id(MId, RootClause),
-    FunctionCalls = get_function_calls(MId, FunId, element(2,TupleData), element(3,TupleData), MaybeVars, RecordName),
+    FunctionCalls = get_function_calls(
+                      MId, FunId, element(2,TupleData), 
+                      element(3,TupleData), MaybeVars, RecordName),
 %%DEBUG    io:format("FunctionCalls:~p~n", [FunctionCalls]),
     perform_refactoring(MId, MaybeVars, TupleData, FunctionCalls,
                         RecordName, RecordParams, Used),
@@ -828,7 +830,8 @@ get_affected_module_ids([], [], Set) ->
     sets:to_list(Set);
 get_affected_module_ids([{MId, _Id, _Type} | Xs], 
                         ImplicitFunCallandTypeIds, Set) ->
-    get_affected_module_ids(Xs, ImplicitFunCallandTypeIds, sets:add_element(MId, Set));
+    get_affected_module_ids(
+      Xs, ImplicitFunCallandTypeIds, sets:add_element(MId, Set));
 get_affected_module_ids([], [{_Type, MId, _Id} | Xs], Set) ->
     get_affected_module_ids([], Xs, sets:add_element(MId, Set)).
     
@@ -899,7 +902,8 @@ perform_refactoring(MId, MaybeVars,
 %% =====================================================================
 convert_variables(nothing, _RecordName) ->
     ok;
-convert_variables({just, {VarsWithSurround, _InPattern, _LastBodyElement}}, RecordName) ->
+convert_variables(
+  {just, {VarsWithSurround, _InPattern, _LastBodyElement}}, RecordName) ->
     lists:map(
       fun(VarWithSurround) -> 
               convert_variable(VarWithSurround, RecordName) end, 

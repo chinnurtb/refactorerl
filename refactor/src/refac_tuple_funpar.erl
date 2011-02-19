@@ -14,23 +14,23 @@
 %%% authors depending on the circumstances of publication.
 
 %%% --------------------------------------------------------------------------
-%%% ``The  contents of this  file are  subject to  the Erlang  Public License,
-%%% Version  1.1,  (the  "License"); you  may  not  use  this file  except  in
-%%% compliance with the License. You should have received a copy of the Erlang
-%%% Public License along  with this software. If not, it  can be retrieved via
-%%% the world wide web at http://www.erlang.org/.
-
-%%% Software distributed under the License is distributed on an "AS IS" basis,
-%%% WITHOUT WARRANTY OF  ANY KIND, either express or  implied. See the License
-%%% for  the specific  language  governing rights  and  limitations under  the
-%%% License.
-
-%%% The Initial  Developer of  the Original Code  is Ericsson  Utvecklings AB.
-%%% Portions created by Ericsson  are Copyright 1999, Ericsson Utvecklings AB.
-%%% All Rights Reserved.''
+%%% The contents of this file are subject to the Erlang Public License,
+%%% Version 1.1, (the "License"); you may not use this file except in
+%%% compliance with the License. You should have received a copy of the
+%%% Erlang Public License along with this software. If not, it can be
+%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%%
+%%% Software distributed under the License is distributed on an "AS IS"
+%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%%% License for the specific language governing rights and limitations under
+%%% the License.
+%%%
+%%% The Original Code is RefactorErl.
+%%%
+%%% The Initial Developer of the Original Code is Eötvös Loránd University.
+%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
+%%% Loránd University. All Rights Reserved.
 %%% --------------------------------------------------------------------------
-
-%%% The Contributors are the Authors listed below. All Rights Reserved.
 
 %%% You may not alter or remove any trademark, copyright or other notice from
 %%% copies of the content.
@@ -58,8 +58,6 @@
 %% @end
 
 -module(refac_tuple_funpar).
-
--vsn('0.1').
 
 -export([untuple_or_tuple_funpar/4,preorder/3]).
 

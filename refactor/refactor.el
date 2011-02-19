@@ -14,23 +14,23 @@
 ;; authors depending on the circumstances of publication.
 
 ;; --------------------------------------------------------------------------
-;; ``The  contents of this  file are  subject to  the Erlang  Public License,
-;; Version  1.1,  (the  "License"); you  may  not  use  this file  except  in
-;; compliance with the License. You should have received a copy of the Erlang
-;; Public License along  with this software. If not, it  can be retrieved via
-;; the world wide web at http://www.erlang.org/.
-
-;; Software distributed under the License is distributed on an "AS IS" basis,
-;; WITHOUT WARRANTY OF  ANY KIND, either express or  implied. See the License
-;; for  the specific  language  governing rights  and  limitations under  the
-;; License.
-
-;; The Initial  Developer of  the Original Code  is Ericsson  Utvecklings AB.
-;; Portions created by Ericsson  are Copyright 1999, Ericsson Utvecklings AB.
-;; All Rights Reserved.''
+;; The contents of this file are subject to the Erlang Public License,
+;; Version 1.1, (the "License"); you may not use this file except in
+;; compliance with the License. You should have received a copy of the
+;; Erlang Public License along with this software. If not, it can be
+;; retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+;;
+;; Software distributed under the License is distributed on an "AS IS"
+;; basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+;; License for the specific language governing rights and limitations under
+;; the License.
+;;
+;; The Original Code is RefactorErl.
+;;
+;; The Initial Developer of the Original Code is Eötvös Loránd University.
+;; Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
+;; Loránd University. All Rights Reserved.
 ;; --------------------------------------------------------------------------
-
-;; The Contributors are the Authors listed below. All Rights Reserved.
 
 ;; You may not alter or remove any trademark, copyright or other notice from
 ;; copies of the content.
@@ -111,6 +111,7 @@
       ("Eliminate variable" erl-refactor-varelim)
       ("Merge subexpression duplicates" erl-refactor-merge)
       ("Extract function" erl-refactor-exfun)
+      ("Inline function" erl-refactor-infun)
       ("Tuple to record(BETA)" erl-refactor-record)
       nil
       ("Into_db and reload from there" erl-refactor-intodb)
@@ -131,6 +132,7 @@
       ("\C-c\C-ee" erl-refactor-varelim)
       ("\C-c\C-em" erl-refactor-merge)
       ("\C-c\C-ef" erl-refactor-exfun)
+      ("\C-c\C-el" erl-refactor-infun)
       ("\C-c\C-ed" erl-refactor-record)
    )
   "Keys to bind for refactoring.")
@@ -479,8 +481,8 @@
 	  (message "Error: There's no variable near the pointed location(line %S, col %S). File:%S" line col file))
 	 (['rex ['bad_binding [line col] file]]
 	  (message "Error: The selection can't be eliminated, because of not eliminable binding(line %S, col %S). File:%S" line col file))
-	 (['rex ['ambiguous_defining_error num file]]
-	  (message "Error: The binding of the variable is not unambiguous. File:%S" file))
+	 (['rex ['ambiguous_defining_error name file]]
+	  (message "Error: The binding of variable %S is ambiguous. File:%S" name file))
 	 (['rex ['too_big_number_error num file]]
 	  (message "Error: The entered number is too big. The function doesn't have enough parameters from the pointed parameter to create the tuple."))
 	 (['rex ['sideffect_error 0 file]]
@@ -638,6 +640,8 @@
 	  (message "Error: Body of multiple expressions is selected."))
 	 (['rex ['ambiguous_binding newname file]]
 	  (message "Error: Name already bound: %S." newname))
+	 (['rex ['ambiguous_defining_error name file]]
+	  (message "Error: The binding of variable %S is ambiguous. File:%S" name file))
 	 (['rex ['in_list_head parent file]]
 	  (message "Error: The selection is part of a list comprehension. File:%S" file))
 	 (['rex ['in_list_body parent file]]
@@ -746,5 +750,44 @@
 	  (message "Error: The given record fields number(%S) and the number of tuple's elements(%S) are not equal. File:%S" given tuples file))
 	 (['rex ['not_supported type file]]
 	  (message "Error: Embedded tuples are not yet supported. File:%S" file))
+	 (other
+	  (message "Unexpected: %S" other)))))))
+
+(defun erl-refactor-infun (node filename line col)
+"Inline function"
+  (interactive (list (erl-target-node)
+		     (buffer-file-name (current-buffer))
+		     (current-line)
+		     (current-column)))
+  (if (not (check-modification-p))
+  (erl-spawn
+    (erl-send-rpc node
+		  'd_client
+		  'inline_function
+		  (list filename line col))
+    (erl-receive ()
+	((['rex ['ok 'done file]]
+	  (save-excursion
+	      (set-buffer (get-file-buffer file))
+	      (revert-buffer t t) (set-timestamp))
+	      (message "Inline is successful in file %S" file))
+	 (['rex ['not_loaded file file2]]
+	  (message "Error: %S file doesn't exist in database" file))
+	 (['rex ['pos_error [line col] file]]
+	  (message "Error: The nearest element(line %S, col %S) is not an application. File:%S" line col file))
+	 (['rex ['local_app locals file]]
+	  (message "Error: There are local functions in the function clause(s)! Functions:%S File:%S" locals file))
+	 (['rex ['var_coll var file]]
+	  (message "Error: Variable name collisions:%S File:%S" var file))
+	 (['rex ['macro_in_funclause macro file]]
+	  (message "Error: Function is defined in other module, the function must not contain macros. File:%S" file))
+	 (['rex ['record_in_funclause records file]]
+	  (message "Error: Function is defined in other module, the function must not contain records. File:%S" file))
+	 (['rex ['bad_parent [parent] file]]
+	  (message "Error: That kind of parent type is not supported. File:%S" file))
+	 (['rex ['binding_not_found [MId Name] file]]
+	  (message "Error: Can not find binging for the varibale %S. File:%S" Name file))
+	 (['rex ['binding_ambiguous [Name] file]]
+	  (message "Error: Binging candidates ambiguous for : %S. File:%S" Name file))
 	 (other
 	  (message "Unexpected: %S" other)))))))

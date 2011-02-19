@@ -14,23 +14,23 @@
 %%% authors depending on the circumstances of publication.
 
 %%% --------------------------------------------------------------------------
-%%% ``The  contents of this  file are  subject to  the Erlang  Public License,
-%%% Version  1.1,  (the  "License"); you  may  not  use  this file  except  in
-%%% compliance with the License. You should have received a copy of the Erlang
-%%% Public License along  with this software. If not, it  can be retrieved via
-%%% the world wide web at http://www.erlang.org/.
-
-%%% Software distributed under the License is distributed on an "AS IS" basis,
-%%% WITHOUT WARRANTY OF  ANY KIND, either express or  implied. See the License
-%%% for  the specific  language  governing rights  and  limitations under  the
-%%% License.
-
-%%% The Initial  Developer of  the Original Code  is Ericsson  Utvecklings AB.
-%%% Portions created by Ericsson  are Copyright 1999, Ericsson Utvecklings AB.
-%%% All Rights Reserved.''
+%%% The contents of this file are subject to the Erlang Public License,
+%%% Version 1.1, (the "License"); you may not use this file except in
+%%% compliance with the License. You should have received a copy of the
+%%% Erlang Public License along with this software. If not, it can be
+%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%%
+%%% Software distributed under the License is distributed on an "AS IS"
+%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%%% License for the specific language governing rights and limitations under
+%%% the License.
+%%%
+%%% The Original Code is RefactorErl.
+%%%
+%%% The Initial Developer of the Original Code is Eötvös Loránd University.
+%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
+%%% Loránd University. All Rights Reserved.
 %%% --------------------------------------------------------------------------
-
-%%% The Contributors are the Authors listed below. All Rights Reserved.
 
 %%% You may not alter or remove any trademark, copyright or other notice from
 %%% copies of the content.
@@ -56,8 +56,6 @@
 %% This module implements the extract function refactoring.
 %%
 -module(refac_extract_fun).
-
--vsn('0.1').
 
 -export([extract_function/6]).
 
@@ -124,7 +122,7 @@ extract_function(File, FromLine, FromCol, ToLine, ToCol, NewName) ->
     refac_checks:check_is_legal_function_name(NewName,Arity,FunctionData,ImportFunctions),
  
     perform_refactoring(MId, NewName, IdList, BoundVarList,
-			NotBoundVarListName, Root , VarList, 
+			NotBoundVarListName, Root, Path, VarList, 
 			NotBoundVarListId),
     {ok, done}.
 
@@ -276,9 +274,46 @@ get_bound_varlist(MId, VarList) ->
 %% =====================================================================
 
 get_idlist(MId, Root, Ids) ->
+
     case Ids of
       {Id1, Id2} ->
-	  ClauseBody = erl_syntax_db:clause_body(MId, Root),
+          case erl_syntax_db:type(MId, Root) of
+             ?CLAUSE ->
+                ClauseBody = erl_syntax_db:clause_body(MId, Root);
+             ?CASE_EXPR ->
+                Clauses = erl_syntax_db:case_expr_clauses(MId, Root),
+                ClauseBody = lists:flatten(
+                              lists:map(fun(Id)->
+                                         erl_syntax_db:clause_body(MId,Id)
+                                        end,Clauses));
+             ?IF_EXPR ->
+                Clauses = erl_syntax_db:if_expr_clauses(MId, Root),
+                ClauseBody = lists:flatten(
+                              lists:map(fun(Id)->
+                                         erl_syntax_db:clause_body(MId,Id)
+                                        end,Clauses));
+             ?RECEIVE_EXPR ->
+                Clauses = erl_syntax_db:receive_expr_clauses(MId, Root),
+                ClauseBody = lists:flatten(
+                              lists:map(fun(Id)->
+                                         erl_syntax_db:clause_body(MId,Id)
+                                        end,Clauses));
+             ?TRY_EXPR ->
+                Clauses = erl_syntax_db:try_expr_clauses(MId, Root),
+                ClauseBody = lists:flatten(
+                              lists:map(fun(Id)->
+                                         erl_syntax_db:clause_body(MId,Id)
+                                        end,Clauses));
+             ?FUN_EXPR ->
+                Clauses = erl_syntax_db:fun_expr_clauses(MId, Root),
+                ClauseBody = lists:flatten(
+                              lists:map(fun(Id)->
+                                         erl_syntax_db:clause_body(MId,Id)
+                                        end,Clauses));
+	      _ ->
+                 ClauseBody = []
+          end,
+	    
 	  ReverseList = lists:reverse(lists:dropwhile(fun(Elem1) ->
 							 not (Elem1 == Id1)
 						      end,
@@ -376,7 +411,8 @@ get_unique_binding(MId, VarList)->
 %% @spec perform_refactoring( MId::integer(), NewName::string(),
 %%             IdList::[integer()], BoundVarList::[integer()],
 %%             NotBoundVarListName::[atom()],Root::integer(),
-%%             VarList::[integer()], NotBoundVarList::[integer()]) -> ok
+%%             Path::[integer()], VarList::[integer()], 
+%%             NotBoundVarList::[integer()]) -> ok
 %%
 %% @doc
 %% Performs the refactoring, and commits the changes into the
@@ -390,34 +426,55 @@ get_unique_binding(MId, VarList)->
 %% <b>NotBoundVarListName</b> : Names of the not bounded variables.
 %% <b>Root</b> : Id of the root of the subbtree which contain the
 %%                selected sequence of expression.
+%% <b>Path</b> : Path to the root.
 %% <b>VarList</b> : Ids of the used variables.
 %% <b>NotBoundVarList</b> : Ids of the not bounded variables.
 %% </pre>
 %% @end
 %% =====================================================================
 
-perform_refactoring(MId, NewName, IdList, BoundVarList,
-		    NotBoundVarListName, Root, VarList, NotBoundVarList) ->
+perform_refactoring(MId,NewName,IdList,BoundVarList,NotBoundVarListName,
+		    Root, Path, VarList, NotBoundVarList) ->
     UseVarList = VarList -- BoundVarList,
+
+    Scope = refactor:get_scope_from_id(MId, Root),
+    
     NameId = create_nodes:create_atom(MId, NewName),
-    create_nodes:init_scope(MId, Root, NameId),
+    create_nodes:init_scope(MId, Scope, NameId),
     ApplicationNameId = create_nodes:create_atom(MId, NewName),
-    create_nodes:init_scope(MId, Root, ApplicationNameId),
+    create_nodes:init_scope(MId, Scope, ApplicationNameId),
     NewVarList = var_id_from_name( MId, NotBoundVarListName),
     insert_new_variables_visib(MId, NewVarList),
+    
     Id = hd(IdList),
     case length(IdList) of
       1 ->
 	FunId = change_expr(MId, NewName,NameId, IdList, Id, NewVarList, 
-	                    UseVarList,NotBoundVarListName, Root, 
+	                    UseVarList,NotBoundVarListName, Scope, 
 			    ApplicationNameId,VarList, NotBoundVarList);
       _ ->
+        case erl_syntax_db:type(MId, Root) of
+             ?CLAUSE ->
+                 Root2 = Root;
+              ?CASE_EXPR ->
+                 Root2 = hd(tl(Path));
+              ?IF_EXPR ->
+                 Root2 = hd(tl(Path));
+              ?RECEIVE_EXPR ->
+                 Root2 = hd(tl(Path)) ;
+              ?TRY_EXPR ->
+                 Root2 = hd(tl(Path)) ;
+              ?FUN_EXPR ->
+                 Root2 = hd(tl(Path));
+	      _ ->
+                 Root2 = Root
+        end,
 	FunId = change_seq_expr(MId,NewName,NameId,IdList,Id,NewVarList,
-				UseVarList,NotBoundVarListName,Root,
+				UseVarList,NotBoundVarListName,Root2,Scope,
 				ApplicationNameId,VarList, NotBoundVarList)
     end,
     To = refactor:get_form_list_id_from_mid(MId),
-    OuterScope=get_outer_scope(MId, Root),
+    OuterScope=get_outer_scope(MId, Scope),
     [{After}] = refactor:get_fun_id_from_clause_id(MId, OuterScope),
     create_nodes:attach_subtree_to_node(MId, FunId, To, After),
     refactor:commit().
@@ -484,10 +541,10 @@ change_expr(MId, Name, NameId, _IdList, Id, NewVarList, _UseVarList,
 
 %% =====================================================================
 %% @spec change_seq_expr(MId::integer(),Name::atom(),NameId::integer(),
-%%         IdList::[integer()], Id::integer(), NewVarList::[integer()],
-%%         UseVarList::[integer()],NotBoundVarListName::[atom()],
-%%         Root::integer(),ApplicationNameId::integer(),VarList::[integer()], 
-%%         NotBoundVarList::[integer()]) -> integer()
+%%       IdList::[integer()], Id::integer(), NewVarList::[integer()],
+%%       UseVarList::[integer()],NotBoundVarListName::[atom()],
+%%       Root::integer(), Scope::integer(),ApplicationNameId::integer(),
+%%       VarList::[integer()], NotBoundVarList::[integer()]) -> integer()
 %%
 %% @doc
 %% Performs the changes in datebase.
@@ -503,6 +560,7 @@ change_expr(MId, Name, NameId, _IdList, Id, NewVarList, _UseVarList,
 %% <b>NotBoundVarListName</b> : Names of the not bounded variables.
 %% <b>Root</b> : Id of the root of the subbtree which contain the
 %%                selected sequence of expression.
+%% <b>Scope</b> : The scope of the selected expressions.
 %% <b>ApplicationNameId</b> : The new application name's id.
 %% <b>VarList</b> : Ids of the used variables.
 %% <b>NotBoundVarList</b> : Ids of the not bounded variables.
@@ -511,7 +569,7 @@ change_expr(MId, Name, NameId, _IdList, Id, NewVarList, _UseVarList,
 %% =====================================================================
 
 change_seq_expr(MId, Name,NameId, IdList, Id, NewVarList, UseVarList,
-		NotBoundVarListName, Root, ApplicationNameId, 
+		NotBoundVarListName, Root, Scope, ApplicationNameId, 
                 VarList, NotBoundVarList) ->
 
     Clauses = create_nodes:create_clause(MId, NewVarList, none, IdList),
@@ -521,22 +579,24 @@ change_seq_expr(MId, Name,NameId, IdList, Id, NewVarList, UseVarList,
 
     refactor:insert_fun_visib_data(MId, FunId, Arity, [Clauses]),
     create_nodes:init_scope(MId, Clauses, NewVarList),
-    update_varlist_scope(MId, VarList, Root, Clauses),
+    update_varlist_scope(MId, VarList, Scope, Clauses),
     connect_body_to_parameters(MId, UseVarList, NewVarList),
 
     Parameters = var_id_from_name(MId, NotBoundVarListName),
-    connect_parameters(MId, Parameters, Root, NotBoundVarList ),
+    connect_parameters(MId, Parameters, Scope, NotBoundVarList ),
     ApplicationId = create_nodes:create_application(MId,
 						    ApplicationNameId,
 						    Parameters),
-    refactor:insert_scope(MId, ApplicationId, Root),
+    refactor:insert_scope(MId, ApplicationId, Scope),
+
+
     create_nodes:attach_subtree_to_node(MId, ApplicationId, Root, Id),
     lists:foreach(fun (Elem) ->
 			  delete_nodes:detach_node(MId, Elem, Root)
 		  end,
 		  IdList),
     refactor:insert_fun_call(MId, ApplicationId, FunId),
-    update_expr_scope(MId, IdList, Root, Clauses),
+    update_expr_scope(MId, IdList, Scope, Clauses),
     refactor:insert_fun_cache(MId, Arity,Name, ApplicationId,  Clauses),
     FunId.
 

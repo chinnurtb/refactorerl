@@ -1,4 +1,4 @@
-RefactorErl 0.2
+RefactorErl 0.2.1
 Installation instructions on Windows
 
 

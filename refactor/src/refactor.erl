@@ -14,23 +14,23 @@
 %%% authors depending on the circumstances of publication.
 
 %%% --------------------------------------------------------------------------
-%%% ``The  contents of this  file are  subject to  the Erlang  Public License,
-%%% Version  1.1,  (the  "License"); you  may  not  use  this file  except  in
-%%% compliance with the License. You should have received a copy of the Erlang
-%%% Public License along  with this software. If not, it  can be retrieved via
-%%% the world wide web at http://www.erlang.org/.
-
-%%% Software distributed under the License is distributed on an "AS IS" basis,
-%%% WITHOUT WARRANTY OF  ANY KIND, either express or  implied. See the License
-%%% for  the specific  language  governing rights  and  limitations under  the
-%%% License.
-
-%%% The Initial  Developer of  the Original Code  is Ericsson  Utvecklings AB.
-%%% Portions created by Ericsson  are Copyright 1999, Ericsson Utvecklings AB.
-%%% All Rights Reserved.''
+%%% The contents of this file are subject to the Erlang Public License,
+%%% Version 1.1, (the "License"); you may not use this file except in
+%%% compliance with the License. You should have received a copy of the
+%%% Erlang Public License along with this software. If not, it can be
+%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%%
+%%% Software distributed under the License is distributed on an "AS IS"
+%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%%% License for the specific language governing rights and limitations under
+%%% the License.
+%%%
+%%% The Original Code is RefactorErl.
+%%%
+%%% The Initial Developer of the Original Code is Eötvös Loránd University.
+%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
+%%% Loránd University. All Rights Reserved.
 %%% --------------------------------------------------------------------------
-
-%%% The Contributors are the Authors listed below. All Rights Reserved.
 
 %%% You may not alter or remove any trademark, copyright or other notice from
 %%% copies of the content.
@@ -59,8 +59,6 @@
 %% @end
 
 -module(refactor).
-
--vsn('0.1').
 
 -export([get_functions/1,get_module_names/0,
 	 get_module_name_if_exists_in_module/3,get_imported_functions/2,
@@ -194,7 +192,8 @@
          get_nodes/3,
          get_record_definition_ids/1,
          get_record_name/2,
-         get_pattern_ids/2]).
+         get_pattern_ids/2,
+         replicate_subtree_with_new_mid/4]).
 
 -export([create_condition_list/1, create_condition_list/2, 
 	 create_condition_list3/2]).
@@ -5259,3 +5258,500 @@ get_pattern_ids(MId, ClauseId) ->
         "select argument from clause where mid=" ++ integer_to_list(MId) 
         ++ " and id=" ++ integer_to_list(ClauseId) ++" and qualifier=0;")).
 
+
+%% =====================================================================
+%% @spec replicator_with_new_mid(Pid::pid(), MId::integer(),
+%%       ScopeId::integer(), Id::integer(), NewMId::integer()) -> integer()
+%%
+%% @doc
+%% Replicates the root node with the new module id.
+%% It uses the existing subtree and
+%% the matcher facility to stick together the new tree.
+%% The result is the newly created node's id.
+%% Important: the target of the variables in the var_visib table will be
+%% 0. Except of the first occurance variables.
+%%
+%% Parameter description:<pre>
+%% <b>Pid</b> : The matcher factility's process id.
+%% <b>MId</b> : Id of the module.
+%% <b>Tree</b> : Root of the subtree.
+%% <b>ScopeId</b> : Scope of the subtree root.
+%% <b>Id</b> : Id of the replicated node.
+%% <b>NewMId</b> : The new modul id.
+%% </pre>
+%% @end
+%% @see matcher/2. Matcher facility
+%% @end
+%% =====================================================================
+replicator_with_new_mid(Pid, MId, ScopeId, Id, NewMId) ->
+  case erl_syntax_db:type(MId, Id) of
+    1 ->
+      OperId = erl_syntax_db:application_operator(MId, Id),
+      ArgumentsId = erl_syntax_db:application_arguments(MId, Id),
+      NewId = 
+        create_nodes:create_application(NewMId,
+                                        get_match_of(Pid, OperId),
+					get_matches_of(Pid,
+                                        ArgumentsId)),
+      set_fun_call(MId,NewMId,Id,NewId),
+      NewId;
+    2 ->
+      BodyId = erl_syntax_db:arity_qualifier_body(MId, Id),
+      ArgumentId = erl_syntax_db:arity_qualifier_argument(MId, Id),
+      NewId = 
+        create_nodes:create_arity_qualifier(NewMId,
+				       get_match_of(Pid, BodyId),
+				       get_match_of(Pid,ArgumentId));
+    3 ->
+      Name = erl_syntax_db:atom_name(MId, Id),
+      NewId = create_nodes:create_atom(NewMId, Name);
+    4 ->
+      case erl_syntax_db:attribute_arguments(MId, Id) of
+        none ->
+	  NameId = erl_syntax_db:attribute_name(MId, Id),
+	  NewId = create_nodes:create_attribute(NewMId,
+						get_match_of(Pid,
+						NameId),
+						none);
+	  ArgumentsId ->
+	    NameId = erl_syntax_db:attribute_name(MId, Id),
+	    NewId = 
+              erl_syntax_db:create_attribute(NewMId,
+				       get_match_of(Pid, NameId),
+				       get_matches_of(Pid, ArgumentsId))
+      end;
+    5 ->
+      FieldsId = erl_syntax_db:binary_fields(MId, Id),
+      NewId = create_nodes:create_binary(NewMId,
+					 get_matches_of(Pid, FieldsId));
+    6 ->
+      TypesId = erl_syntax_db:binary_field_types(MId, Id),
+      BodyId = erl_syntax_db:binary_field_body(MId, Id),
+      NewId = create_nodes:create_binary_field(NewMId,
+				       get_match_of(Pid, BodyId),
+				       get_matches_of(Pid, TypesId));
+    7 ->
+      BodyIds = erl_syntax_db:block_expr_body(MId, Id),
+      NewId = create_nodes:create_block_expr(NewMId,
+				       get_matches_of(Pid, BodyIds));
+    8 ->
+      ArgumentId = erl_syntax_db:case_expr_argument(MId, Id),
+      ClausesId = erl_syntax_db:case_expr_clauses(MId, Id),
+      NewId = create_nodes:create_case_expr(NewMId,
+				      get_match_of(Pid, ArgumentId),
+				      get_matches_of(Pid, ClausesId));
+    9 ->
+      BodyId = erl_syntax_db:catch_expr_body(MId, Id),
+      NewId = create_nodes:create_catch_expr(NewMId,
+					     get_match_of(Pid, BodyId));
+    10 ->
+      Value = erl_syntax_db:char_value(MId, Id),
+      NewId = create_nodes:create_char(NewMId, Value);
+    11 ->
+      ArgumentId = erl_syntax_db:class_qualifier_argument(MId, Id),
+      BodyId = erl_syntax_db:class_qualifier_body(MId, Id),
+      NewId = create_nodes:create_class_qualifier(NewMId,
+					 get_match_of(Pid, ArgumentId),
+					 get_match_of(Pid, BodyId));
+    12 ->
+      case erl_syntax_db:clause_guard(MId, Id) of
+        none ->
+	  PatternsId = erl_syntax_db:clause_patterns(MId, Id),
+	  BodyIds = erl_syntax_db:clause_body(MId, Id),
+	  NewId = create_nodes:create_clause(NewMId,
+				      get_matches_of(Pid, PatternsId),
+				      none,
+				      get_matches_of(Pid, BodyIds));
+	  GuardId ->
+	    PatternsId = erl_syntax_db:clause_patterns(MId, Id),
+	    BodyIds = erl_syntax_db:clause_body(MId, Id),
+	    NewId = 
+              create_nodes:create_clause(NewMId,
+				   get_matches_of(Pid, PatternsId),
+				   get_match_of(Pid, GuardId),
+				   get_matches_of(Pid, BodyIds))
+      end;
+    13 ->
+     Padding = erl_syntax_db:comment_padding(MId, Id),
+     Strings = erl_syntax_db:comment_text(MId, Id),
+     NewId = create_nodes:create_comment(NewMId, Padding, Strings);
+    14 ->
+      ClausesId = erl_syntax_db:cond_expr_clauses(MId, Id),
+      NewId = create_nodes:create_cond_expr(NewMId,
+					get_matches_of(Pid, ClausesId));
+    15 ->
+      BodyIds = erl_syntax_db:conjunction_body(MId, Id),
+      NewId = 
+        create_nodes:create_conjunction(NewMId,
+					get_matches_of(Pid, BodyIds));
+    16 ->
+      BodyIds = erl_syntax_db:disjunction_body(MId, Id),
+      NewId = 
+        create_nodes:create_disjunction(NewMId,
+				        get_matches_of(Pid, BodyIds));
+    17 -> NewId = create_nodes:create_eof_marker(NewMId);
+    18 ->
+      Value = erl_syntax_db:float_value(MId, Id),
+      NewId = create_nodes:create_float(NewMId, Value);
+    19 ->
+      ElementsId = erl_syntax_db:form_list_elements(MId, Id),
+      NewId = create_nodes:create_form_list(NewMId,
+				     get_matches_of(Pid, ElementsId));
+    20 ->
+      ClausesId = erl_syntax_db:fun_expr_clauses(MId, Id),
+      NewId = create_nodes:create_fun_expr(NewMId,
+				     get_matches_of(Pid, ClausesId));
+    21 ->
+      NameId = erl_syntax_db:function_name(MId, Id),
+      ClausesId = erl_syntax_db:function_clauses(MId, Id),
+      NewId = create_nodes:create_function(NewMId,
+				     get_match_of(Pid, NameId),
+				     get_matches_of(Pid, ClausesId));
+    22 ->
+      PatternId = erl_syntax_db:generator_pattern(MId, Id),
+      BodyId = erl_syntax_db:generator_body(MId, Id),
+      NewId = 
+        create_nodes:create_generator(NewMId,
+				      get_match_of(Pid, PatternId),
+				      get_match_of(Pid, BodyId));
+    23 ->
+      ClausesId = erl_syntax_db:if_expr_clauses(MId, Id),
+      NewId = 
+        create_nodes:create_if_expr(NewMId,
+				    get_matches_of(Pid, ClausesId));
+    24 ->
+      NameId = erl_syntax_db:implicit_fun_name(MId, Id),
+      NewId = create_nodes:create_implicit_fun(NewMId,
+					       get_match_of(Pid, NameId));
+    25 ->
+      LeftId = erl_syntax_db:infix_expr_left(MId, Id),
+      OperId = erl_syntax_db:infix_expr_operator(MId, Id),
+      RightId = erl_syntax_db:infix_expr_right(MId, Id),
+      NewId = create_nodes:create_infix_expr(NewMId,
+					     get_match_of(Pid, LeftId),
+					     get_match_of(Pid, OperId),
+					     get_match_of(Pid, RightId));
+    26 ->
+      Value = erl_syntax_db:integer_value(MId, Id),
+      NewId = create_nodes:create_integer(NewMId, Value);
+    27 ->
+      case erl_syntax_db:list_suffix(MId, Id) of
+        none ->
+	  PrefixIds = erl_syntax_db:list_prefix(MId, Id),
+	  NewId = create_nodes:create_list(NewMId,
+					   get_matches_of(Pid, PrefixIds),
+					   none);
+	SuffixId ->
+	  PrefixIds = erl_syntax_db:list_prefix(MId, Id),
+	  NewId = create_nodes:create_list(NewMId,
+					   get_matches_of(Pid, PrefixIds),
+					   get_match_of(Pid, SuffixId))
+      end;
+    28 ->
+      TemplateId = erl_syntax_db:list_comp_template(MId, Id),
+      BodyIds = erl_syntax_db:list_comp_body(MId, Id),
+      NewId = create_nodes:create_list_comp(NewMId,
+					    get_match_of(Pid, TemplateId),
+					    get_matches_of(Pid, BodyIds));
+    29 ->
+      case erl_syntax_db:macro_arguments(MId, Id) of
+        none ->
+	  NameId = erl_syntax_db:macro_name(MId, Id),
+	  NewId = create_nodes:create_macro(NewMId,
+					    get_match_of(Pid, NameId),
+						  none);
+	ArgumentsId ->
+	  NameId = erl_syntax_db:macro_name(MId, Id),
+	  NewId = create_nodes:create_macro(NewMId,
+				    get_match_of(Pid, NameId),
+				    get_matches_of(Pid, ArgumentsId))
+      end;
+    30 ->
+      PatternId = erl_syntax_db:match_expr_pattern(MId, Id),
+      BodyId = erl_syntax_db:match_expr_body(MId, Id),
+      NewId = create_nodes:create_match_expr(NewMId,
+					     get_match_of(Pid, PatternId),
+					     get_match_of(Pid, BodyId));
+    31 ->
+      ArgumentId =
+        erl_syntax_db:module_qualifier_argument(MId, Id),
+      BodyId = erl_syntax_db:module_qualifier_body(MId, Id),
+      NewId = create_nodes:create_module_qualifier(NewMId,
+					     get_match_of(Pid, ArgumentId),
+					     get_match_of(Pid, BodyId));
+    32 -> NewId = create_nodes:create_nil(NewMId);
+    33 ->
+      Name = erl_syntax_db:operator_literal(MId, Id),
+      NewId = create_nodes:create_operator(NewMId, Name);
+    34 ->
+      BodyId = erl_syntax_db:parentheses_body(MId, Id),
+      NewId = create_nodes:create_parentheses(NewMId,
+					      get_match_of(Pid, BodyId));
+    35 ->
+      OperatorId = erl_syntax_db:prefix_expr_operator(MId,
+						      Id),
+      ArgumentId = erl_syntax_db:prefix_expr_argument(MId,
+						      Id),
+      NewId = create_nodes:create_prefix_expr(NewMId,
+				     get_match_of(Pid, OperatorId),
+				     get_match_of(Pid, ArgumentId));
+    36 ->
+      SegmentsId = erl_syntax_db:qualified_name_segments(MId,
+							 Id),
+      NewId = create_nodes:create_qualified_name(NewMId,
+					 get_matches_of(Pid, SegmentsId));
+    37 ->
+      BodyId = erl_syntax_db:query_expr_body(MId, Id),
+      NewId = create_nodes:create_query_expr(NewMId,
+					     get_match_of(Pid, BodyId));
+    38 ->
+      case erl_syntax_db:receive_expr_timeout(MId, Id) of
+        none ->
+	  ClausesId = erl_syntax_db:receive_expr_clauses(MId, Id),
+	  NewId = create_nodes:create_receive_expr(NewMId,
+					    get_matches_of(Pid, ClausesId),
+					    none, []);
+	TimeoutId ->
+	  ClausesId = erl_syntax_db:receive_expr_clauses(MId, Id),
+	  ActionIds = erl_syntax_db:receive_expr_action(MId, Id),
+	  NewId = create_nodes:create_receive_expr(NewMId,
+					     get_matches_of(Pid, ClausesId),
+					     get_match_of(Pid, TimeoutId),
+					     get_matches_of(Pid, ActionIds))
+      end;
+    39 ->
+      case erl_syntax_db:record_access_type(MId, Id) of
+        none ->
+	  ArgumentId = erl_syntax_db:record_access_argument(MId,
+							    Id),
+	  FieldId = erl_syntax_db:record_access_field(MId, Id),
+	  NewId = create_nodes:create_record_access(NewMId,
+					      get_match_of(Pid, ArgumentId),
+					      none,
+					      get_match_of(Pid, FieldId));
+	TypeId ->
+	  ArgumentId = erl_syntax_db:record_access_argument(MId,
+							    Id),
+	  FieldId = erl_syntax_db:record_access_field(MId, Id),
+	  NewId = create_nodes:create_record_access(NewMId,
+					      get_match_of(Pid, ArgumentId),
+					      get_match_of(Pid, TypeId),
+					      get_match_of(Pid, FieldId))
+      end;
+    40 ->
+      case erl_syntax_db:record_expr_argument(MId, Id) of
+        none ->
+	  TypeId = erl_syntax_db:record_expr_type(MId, Id),
+	  FieldsId = erl_syntax_db:record_expr_fields(MId, Id),
+	  NewId = create_nodes:create_record_expr(NewMId, none,
+					       get_match_of(Pid,TypeId),
+					       get_matches_of(Pid, FieldsId));
+	ArgumentId ->
+	  TypeId = erl_syntax_db:record_expr_type(MId, Id),
+	  FieldsId = erl_syntax_db:record_expr_fields(MId, Id),
+	  NewId = create_nodes:create_record_expr(NewMId,
+					       get_match_of(Pid, ArgumentId),
+					       get_match_of(Pid, TypeId),
+					       get_matches_of(Pid, FieldsId))
+      end;
+    41 ->
+      case erl_syntax_db:record_field_value(MId, Id) of
+        none ->
+	  NameId = erl_syntax_db:record_field_name(MId, Id),
+	  NewId = create_nodes:create_record_field(NewMId,
+						   get_match_of(Pid, NameId),
+						   none);
+	ValueId ->
+	  NameId = erl_syntax_db:record_field_name(MId, Id),
+	  NewId = create_nodes:create_record_field(NewMId,
+						   get_match_of(Pid, NameId),
+						   get_match_of(Pid, ValueId))
+      end;
+    42 ->
+      TypeId = erl_syntax_db:record_index_expr_type(MId, Id),
+      FieldId = erl_syntax_db:record_index_expr_field(MId,
+						      Id),
+      NewId = create_nodes:create_record_index_expr(NewMId,
+						get_match_of(Pid, TypeId),
+						get_match_of(Pid, FieldId));
+    43 ->
+      NameId = erl_syntax_db:rule_name(MId, Id),
+      ClausesId = erl_syntax_db:rule_clauses(MId, Id),
+      NewId = create_nodes:create_rule(NewMId,
+				       get_match_of(Pid, NameId),
+				       get_matches_of(Pid, ClausesId));
+    44 ->
+      BodyId = erl_syntax_db:size_qualifier_body(MId, Id),
+      ArgumentId = erl_syntax_db:size_qualifier_argument(MId,
+							 Id),
+      NewId = create_nodes:create_size_qualifier(NewMId,
+					  get_match_of(Pid, BodyId),
+					  get_match_of(Pid, ArgumentId));
+    45 ->
+      String = erl_syntax_db:string_value(MId, Id),
+      NewId = create_nodes:create_string(NewMId,
+					 io_lib:write_string(String));
+    46 ->
+      String = erl_syntax_db:text_string(MId, Id),
+      NewId = create_nodes:create_text(NewMId,
+				       io_lib:write_string(String));
+    47 ->
+      BodyIds = erl_syntax_db:try_expr_body(MId, Id),
+      ClausesId = erl_syntax_db:try_expr_clauses(MId, Id),
+      HandlersId = erl_syntax_db:try_expr_handlers(MId, Id),
+      AfterIds = erl_syntax_db:try_expr_after(MId, Id),
+      NewId = create_nodes:create_try_expr(NewMId,
+					get_matches_of(Pid, BodyIds),
+					get_matches_of(Pid, ClausesId),
+					get_matches_of(Pid, HandlersId),
+					get_matches_of(Pid, AfterIds));
+    48 ->
+      ElementsId = erl_syntax_db:tuple_elements(MId, Id),
+      NewId = create_nodes:create_tuple(NewMId,
+					get_matches_of(Pid, ElementsId));
+    49 -> NewId = create_nodes:create_underscore(NewMId);
+    50 ->
+      Name = erl_syntax_db:variable_literal(MId, Id),
+      NewId = create_nodes:create_variable(NewMId, Name),
+      set_temporary_binding(NewMId, MId, Id,
+					   NewId)
+  end,
+  create_nodes:init_scope(NewMId,ScopeId, NewId),
+  add_match(Pid, Id, NewId),
+  NewId.
+
+%% =====================================================================
+%% @spec set_temporary_binding(NewMId::integer(),
+%%       MId::integer(), Id::integer(), NewId::integer()) -> ok
+%%
+%% @doc
+%% Connect the variable to the first occurence. If the variable is not a first
+%% occurence, than the binding will be 0.
+%%
+%% Parameter description:<pre>
+%% <b>NewMId</b> : Id of the new module.
+%% <b>MId</b> : Id of the current module.
+%% <b>Id</b> : Id of the variable.
+%% <b>NewId</b> : The id of the new variable.
+%% </pre>
+%% @end
+%% =====================================================================
+set_temporary_binding(NewMId, MId, Id, NewId) ->
+  [{FirstOccurrenceId}] =
+    refactor_db:select("select target from var_visib where mid="
+			   ++
+			     (integer_to_list(MId) ++
+				(" and id=" ++ (integer_to_list(Id) ++ " ;")))),
+  case FirstOccurrenceId == Id of
+    true ->
+      create_nodes:connect_variables(NewMId, [NewId], [NewId]);
+    false ->
+      create_nodes:connect_variables(NewMId, [0], [NewId])
+  end.
+
+%% =====================================================================
+%% @spec insert_fun_call(MId::integer(),NewMId::integer(),
+%%                   Id::integer(),NewId::integer()) -> ok
+%% @doc
+%% Inserts function call for the replicated application.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>NewMId</b> : The id of the new module.
+%% <b>Id</b> : The id if the application.
+%% <b>NewId</b> : The id of the replicated application.
+%% </pre>
+%% @end
+%% =====================================================================
+set_fun_call(MId,NewMId,Id,NewId)->
+  Temp =
+    refactor_db:select("select tmid,target from fun_call where "
+			 "mid = "
+			   ++
+			     (integer_to_list(MId) ++
+				(" and id = " ++
+				   (integer_to_list(Id) ++
+				      ";")))),
+  if Temp == [] ->
+      ok;
+    true ->
+      {TMId,Target} = hd(Temp),
+      insert_fun_call(NewMId, NewId, TMId, Target)
+  end.
+%% =====================================================================
+%% @spec insert_fun_call(MId::integer(),CallId::integer(),
+%%                   FunId::integer(),TMId::integer()) -> ok
+%% @doc
+%% Insert function call.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>CallId</b> : The id of the application.
+%% <b>FunId</b> : The function.
+%% <b>TMId</b> : The id of the tagret module.
+%% </pre>
+%% @end
+%% =====================================================================
+
+insert_fun_call(MId, CallId, TMId, FunId)->
+    refactor_db:insert(
+      "insert into fun_call (mid,id,tmid, target) values (" 
+      ++ integer_to_list(MId) ++ "," 
+      ++ integer_to_list(CallId) ++ "," ++ integer_to_list(TMId)
+      ++ "," ++ integer_to_list(FunId) ++ ");").
+
+%% =====================================================================
+%% @spec replicate_subtree_with_new_mid(MId::integer(), BodyId::integer(),
+%%        ScopeId::integer(), NewMId::integer()) -> integer()
+%%
+%% @doc
+%% Replicates a subtree with root BodyId, and scope ScopeId.
+%% The return value is the replicated subtrees root id with the given
+%% new module id.
+%%
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>BodyId</b> : Root of the subtree.
+%% <b>ScopeId</b> : Scope of the subtree root. 
+%% <b>NewMId</b> : Id of the new module id.
+%% </pre>
+%% @end
+%% =====================================================================
+replicate_subtree_with_new_mid(MId, BodyId, ScopeId, NewMId) ->
+  Pid = spawn(fun () -> matcher([], 0) end),
+  NewId =
+    postorder_with_new_mid(fun replicator_with_new_mid/5,
+			   Pid, MId, BodyId, ScopeId, NewMId),
+  stop(Pid),
+  NewId.
+
+%% =====================================================================
+%% @spec postorder_with_new_mid(F::function(), Pid::pid(), MId::integer(),
+%%        Tree::integer(), ScopeId::integer(),NewMId::integer()) -> integer()
+%%
+%% @doc
+%% Traverses a subtree with root Tree, scope ScopeId,
+%% and applies function F to every node.
+%%
+%% Parameter description:<pre>
+%% <b>F</b> : Function used for the other nodes.
+%% <b>Pid</b> : The matcher factility's process id.
+%% <b>MId</b> : Id of the module.
+%% <b>Tree</b> : Root of the subtree.
+%% <b>ScopeId</b> : Scope of the subtree root.
+%% <b>NewMId</b> : The id of the new module id.
+%%</pre>
+%% @end
+%% @see matcher/2. Matcher facility
+%% @end
+%% =====================================================================
+postorder_with_new_mid(F, Pid, MId, Tree, ScopeId, NewMId) ->
+  F(Pid, MId, ScopeId,
+  case erl_syntax_db:subtrees(MId, Tree) of
+    [] -> Tree;
+    List ->
+      [[postorder_with_new_mid(F, Pid, MId, Subtree, ScopeId, NewMId)
+      || Subtree <- Group]
+      || Group <- List],
+      Tree
+  end, NewMId).

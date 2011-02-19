@@ -1,7 +1,7 @@
 % This is an -*- erlang -*- file.
 {application, refactorer,
  [{description, "Erlang Refactorer Prototype"},
-  {vsn, "0.2"},
+  {vsn, "0.2.1"},
   {mod, {refac_superv, []}},
   {env, [{db_backend, mysql},
          {db_host, "localhost"},
@@ -15,5 +15,6 @@
              out_from_db, refac_checks, refac_common, refac_merge_subexpr,
              refac_ren_fun, refac_ren_var, refac_reorder_funpar,
              refac_superv, refactor_db, refactor, refac_tuple_funpar,
-             refac_tuple_to_record, refac_var_elim, refac_extract_fun]}
+             refac_tuple_to_record, refac_var_elim, refac_extract_fun,
+             refac_inline_fun]}
  ]}.

@@ -4,9 +4,9 @@
 ### Configuration section
 
 # Base directory of RefactorErl source code
-BASE=/opt/RefactorErl-0.2
+BASE=/opt/RefactorErl-0.2.1
 
-# Base directory of Erang/OTP
+# Base directory of Erlang/OTP
 ERLANG=/usr/local/lib/erlang
 
 ### No changes are needed below this line -----------------------------------
