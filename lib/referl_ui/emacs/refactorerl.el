@@ -134,7 +134,7 @@ that connects to the RefactorErl server."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (set (make-local-variable 'last-file-dir) "")))
-    (refac-send-command 'filelist)    
+    (refac-send-command 'filelist)
     (pop-to-buffer buf (not same-win))))
 
 ;; TODO: unify this with list-files and other popup commands
@@ -152,12 +152,7 @@ that connects to the RefactorErl server."
 (defun refactorerl-load-dir (dirname)
   "Adds the contents of a directory to the active refactoring set."
   (interactive "D")
-  (let ((files (directory-files dirname t ".*\\.erl$")))
-    (when (equal 0 (length files))
-      (error (concat "No Erlang files in " dirname)))
-    (setf refac-progress (list files 0 dirname))
-    (dolist (file files)
-      (refac-send-command 'add file))))
+  (refac-send-command 'add_dir (expand-file-name dirname)))
 
 ;; Cluster Ui
 

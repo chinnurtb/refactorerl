@@ -18,20 +18,17 @@
 %%% Portions created  by Eötvös  Loránd University are  Copyright 2010,
 %%% Eötvös Loránd University. All Rights Reserved.
 
-%%% @doc todo
+%%% @author Jimmy <>
 %%%
-%%% @todo author
-
-%%%-------------------------------------------------------------------
-%%% File    : referl_gs_config.erl
-%%% Author  : Jimmy <>
-%%% Description :
+%%% @doc Erlang GS user interface configuration functions
 %%%
-%%% Created : 13 Nov 2009 by Jimmy <>
+%%% Created : 13 Nov 2009 by Jimmy &lt;&gt;
+%%%
+%%% @todo doc
 %%%-------------------------------------------------------------------
 -module(referl_gs_config).
 
--svn("$Rev$").
+-svn("$Rev$ ").
 
 -behaviour(gen_server).
 
@@ -57,17 +54,24 @@
 %% API
 %%====================================================================
 %%--------------------------------------------------------------------
-%% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
-%% Description: Starts the server
-%%--------------------------------------------------------------------
+%% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
+%% @doc Starts the server
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+%% @doc Stops the server
 stop() ->
     gen_server:call(?SERVER, stop).
+
+%% @doc Gets the color associated with a GUI widget
 color(Attr, Value) ->
     gen_server:call(?SERVER, {color, Attr, Value}).
+
+%% @doc Gets the size of a column
 size(Attr) ->
     gen_server:call(?SERVER, {size, Attr}).
+
+%% @doc Gets the column ordering
 order(Attr) ->
     gen_server:call(?SERVER, {order, Attr}).
 
@@ -76,12 +80,11 @@ order(Attr) ->
 %%====================================================================
 
 %%--------------------------------------------------------------------
-%% Function: init(Args) -> {ok, State} |
+%% @spec init(Args) -> {ok, State} |
 %%                         {ok, State, Timeout} |
 %%                         ignore               |
 %%                         {stop, Reason}
-%% Description: Initiates the server
-%%--------------------------------------------------------------------
+%% @doc Initiates the server
 init([]) ->
     ColorsTable = ets:new(?Colors, []),
     SizesTable = ets:new(?Sizes, []),
@@ -121,25 +124,29 @@ init([]) ->
 		orders=OrderTable}}.
 
 %%--------------------------------------------------------------------
-%% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
+%% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
 %%                                      {reply, Reply, State, Timeout} |
 %%                                      {noreply, State} |
 %%                                      {noreply, State, Timeout} |
 %%                                      {stop, Reason, Reply, State} |
 %%                                      {stop, Reason, State}
-%% Description: Handling call messages
-%%--------------------------------------------------------------------
+%% @doc Handling call messages
 handle_call(stop, _From, State) ->
     {stop, normal, stopped, State};
+
 handle_call({color, Attr, Value}, _From, State = #state{colors=ColorsTable}) ->
     case ets:lookup(ColorsTable, {Attr, Value}) of
-	[] -> [{_, Reply}] = ets:lookup(ColorsTable, {default, default});
-	[{_, Reply}] -> void
+	[] ->
+            [{_, Reply}] = ets:lookup(ColorsTable, {default, default});
+	[{_, Reply}] ->
+            void
     end,
     {reply, Reply, State};
+
 handle_call({size, Attr}, _From, State = #state{sizes=SizesTable}) ->
     [{_, Reply}] = ets:lookup(SizesTable, Attr),
     {reply, Reply, State};
+
 handle_call({order, Attr}, _From, State = #state{orders=OrderTable}) ->
     case ets:lookup(OrderTable, Attr) of
 	[] -> [{_, Reply}] = ets:lookup(OrderTable, default);
@@ -147,31 +154,30 @@ handle_call({order, Attr}, _From, State = #state{orders=OrderTable}) ->
     end,
     {reply, Reply, State}.
 
+%% @private
 %%--------------------------------------------------------------------
-%% Function: handle_cast(Msg, State) -> {noreply, State} |
+%% @spec handle_cast(Msg, State) -> {noreply, State} |
 %%                                      {noreply, State, Timeout} |
 %%                                      {stop, Reason, State}
-%% Description: Handling cast messages
-%%--------------------------------------------------------------------
+%% @doc Handling cast messages
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%% @private
 %%--------------------------------------------------------------------
-%% Function: handle_info(Info, State) -> {noreply, State} |
+%% @spec handle_info(Info, State) -> {noreply, State} |
 %%                                       {noreply, State, Timeout} |
 %%                                       {stop, Reason, State}
-%% Description: Handling all non call/cast messages
-%%--------------------------------------------------------------------
+%% @doc Handling all non call/cast messages
 handle_info(_Info, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% Function: terminate(Reason, State) -> void()
-%% Description: This function is called by a gen_server when it is about to
+%% @spec terminate(Reason, State) -> void()
+%% @doc This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any necessary
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
-%%--------------------------------------------------------------------
 terminate(_Reason, State) ->
     ColorsTable = State#state.colors,
     SizesTable = State#state.sizes,
@@ -180,10 +186,10 @@ terminate(_Reason, State) ->
     ets:delete(SizesTable),
     ets:delete(OrderTable).
 
+%% @private
 %%--------------------------------------------------------------------
-%% Func: code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% Description: Convert process state when code is changed
-%%--------------------------------------------------------------------
+%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
+%% @doc Convert process state when code is changed
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 

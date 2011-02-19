@@ -913,7 +913,9 @@ get_token_idx(Token, DefaultIdx, TokensETS) ->
     case ets:select(TokensETS, [{{'$1','$2','_'}, [{'==','$2',{const,Token}}],
             ['$1']}]) of
         [Idx] -> Idx;
-        []    -> DefaultIdx
+        []    -> DefaultIdx;
+        % todo What if several indices are found?
+        _     -> DefaultIdx
     end.
 
 

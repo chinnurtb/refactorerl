@@ -23,7 +23,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_graph).
--vsn("$Rev: 4827 $").
+-vsn("$Rev: 4979 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
@@ -509,13 +509,17 @@ delete_backward_links(Class, Id) ->
 %%% ----------------------------------------------------------------------------
 %%% Link queries
 
+%% Note: the links need reordering, as Mnesia does not keep the order.
+%% Since the links are unique, lists:usort is applicable.
 handle_links({?NODETAG, Class, Id}, S) ->
     T = [{{Id, Tag}, TCl} || {Tag, TCl} <- link_targets(Class, fwd)],
     Q = qlc:q([ {Tag, {?NODETAG, TCl, To}} ||
                   {ST={_,Tag}, TCl} <- T,
                   {_, FL, _Ind, To} <- mnesia:table(linktab(Class)),
                   ST =:= FL]),
-    {reply, {ok, ?Exec(qlc:e(Q))}, S}.
+    Run = ?Exec(qlc:e(Q)),
+    Reordered = lists:usort(Run),
+    {reply, {ok, Reordered}, S}.
 
 handle_index({?NODETAG, FCl, FId}, Tag, {?NODETAG, TCl, TId}, S) ->
     case link_target(FCl, Tag, fwd) of
@@ -705,14 +709,19 @@ compile_path([S={intersect, {?NODETAG, SCl, SId}, Step} | Rest],
     Result =
         case Dir of
             fwd ->
-                qlc:q([Id || {_, From, _, To} <- mnesia:table(linktab(SCl)),
-                             From =:= {SId, Tag},
-                             Id <- Query, Id =:= To]);
+                R =
+                    qlc:q([{Ind, Id}
+                            || {_, From, Ind, To} <- mnesia:table(linktab(SCl)),
+                               From =:= {SId, Tag},
+                               Id <- Query,
+                               Id =:= To]),
+                run_and_reindex(R);
             back ->
                 qlc:q(
                   [Id || {_, From, _,To} <- mnesia:table(linktab(Class)),
                          SId =:= To,
-                         Id <- Query, From =:= {Id, Tag}])
+                         Id <- Query,
+                         From =:= {Id, Tag}])
         end,
     compile_path(Rest, Class, Result);
 
@@ -766,9 +775,11 @@ compile_path([Elem | Rest], Class, Query) ->
                 %% This query gives a result that enables QLC to recognise the
                 %% lookup join in the next query
                 Keys = qlc:q([{{Id, Tag}} || Id <- Query]),
-                qlc:q([To || {K1} <- Keys,
-                             {_, K2, Ind, To} <- mnesia:table(linktab(Class)),
-                             K1 =:= K2, Cond(element(1,K1), Ind, To)]);
+                R =
+                    qlc:q([{Ind, To} || {K1} <- Keys,
+                                 {_, K2, Ind, To} <- mnesia:table(linktab(Class)),
+                                 K1 =:= K2, Cond(element(1,K1), Ind, To)]),
+                run_and_reindex(R);
             back ->
                 Keys = qlc:q([{Id} || Id <- Query]),
                 qlc:q([From || {_, {From, T}, _, To}
@@ -777,6 +788,17 @@ compile_path([Elem | Rest], Class, Query) ->
                                Cond(Id, -1, From)])
         end,
     compile_path(Rest, NextClass, Result).
+
+%% Runs the query and reorders the acquired table part by the indices.
+%% This is needed because Mnesia does not maintain the table as sorted.
+run_and_reindex(Query) ->
+    Result = ?Exec(qlc:e(Query)),
+    {_Idxs, Query2} = lists:unzip(lists:usort(Result)),
+%    case length(_Idxs) /= length(Result) of
+%        true -> throw(index_error);
+%        false -> ok
+%    end,
+    Query2.
 
 compile_filter(AttrInfo, Attrs, {'not', Filter}) ->
     F = compile_filter(AttrInfo, Attrs, Filter),

@@ -24,7 +24,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(reflib_function).
--vsn("$Rev: 4517 $"). % for emacs"
+-vsn("$Rev: 5013 $"). % for emacs"
 
 %% =============================================================================
 %% Exports
@@ -36,7 +36,7 @@
 
 %% Queries
 -export([find/2, definition/0, module/0, applications/0, applications/1,
-         implicits/0, implicits/1,
+         implicits/0, implicits/1, return_points/1,
          exports/0, imports/0, imported/0, impexps/0]).
 
 %% Transformations
@@ -182,6 +182,31 @@ filtered_query(Query, Filter) ->
     fun(FunObj) ->
             [E || E <- ?Query:exec(FunObj, Query), Filter(E)]
     end.
+
+
+%% @spec return_points(node()) -> query(#func{}, #expr{})
+%% @doc The result query returns every return points of the function `Fun'.
+return_points(Fun) ->
+   fun(_)->
+    FunClauses = ?Query:exec(Fun, ?Query:seq(
+				      ?Fun:definition(), ?Form:clauses())),
+    LastTopExprs = [lists:last(
+            ?Query:exec(Cl, ?Clause:exprs())) || Cl <- FunClauses],
+    lists:flatten([rtn_points(LTP, ?Expr:type(LTP)) || LTP <- LastTopExprs])
+   end.
+
+%%% @private
+rtn_points(Expr, Kind) when  Kind == case_expr;
+                                Kind == try_expr;
+                                Kind == if_expr->
+    Clauses = ?Query:exec(Expr, ?Expr:clauses()),
+    HeadClauses = ?Query:exec(Expr, [headcl]),
+    Exprs = [lists:last(?Query:exec(Cl, ?Clause:exprs()))
+                                            || Cl <- Clauses -- HeadClauses],
+    [rtn_points(ExprL,?Expr:type(ExprL)) || ExprL <- Exprs];
+rtn_points(Expr, _Other)->
+    Expr.
+
 
 
 %% =============================================================================

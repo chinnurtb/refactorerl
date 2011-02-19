@@ -29,10 +29,12 @@
 
 -include("core.hrl").
 
+%%% @private
 schema() ->
     {ok, Mods} = application:get_env(form_anal),
     lists:flatmap(fun(M) -> M:schema() end, Mods).
 
+%%% @private
 externs(Node) ->
     {ok, Mods} = application:get_env(form_anal),
     case ?Graph:class(Node) of
@@ -41,6 +43,7 @@ externs(Node) ->
         _    -> [{parent_form(Node), Mods}]
     end.
 
+
 parent_form(Node) ->
     P = ?Anal:parent(Node),
     case ?Graph:class(P) of
@@ -48,11 +51,14 @@ parent_form(Node) ->
         _    -> parent_form(P)
     end.
 
+%%% @private
 insert(_Parent, _, {_Tag, _Child}, _) ->
     ok. %io:format("ROOT: ~p +++~s+++ ~p~n", [Parent, Tag, Child]).
 
+%%% @private
 remove(_Parent,_,{_Tag, _Child},_) ->
     ok. %io:format("ROOT: ~p ---~s--- ~p~n", [Parent, Tag, Child]).
 
+%%% @private
 update(_Node, _Data) ->
     ok. %io:format("ROOT: ~p = ~p~n", [Node, Data]).

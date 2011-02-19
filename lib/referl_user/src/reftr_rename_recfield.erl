@@ -53,7 +53,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_rename_recfield).
--vsn("$Rev: 4859 $"). % for emacs"
+-vsn("$Rev: 4956 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -87,9 +87,10 @@ prepare(Args) ->
     %% Collecting references
 
     Refs   = ?Query:exec(Field, ?RecField:references()),
-    ?Macro:check_macros(Refs, {elex, 1}),
+ %   ?Macro:check_macros(Refs, {elex, 1}),
     [TypExp] = ?Query:exec(Field, [{fielddef, back}]),
-    ?Macro:check_macros([TypExp], {tlex, 1}),
+%    ?Macro:check_macros([TypExp], {tlex, 1}),
+    ?Macro:check_macros([{[TypExp], {tlex, 1}}, {Refs, {elex, 1}}]),
     %%Data   = ?ESG:data(TypExp),
     fun() ->
   %%      [?Syn:replace(Expr, {elex,1}, [io_lib:write_atom(NewName)]) ||

@@ -5,52 +5,52 @@
 @doc
 
 <dl>
-  <dt>{@link referl_query. `?Query'}</dt>
+  <dt>{@link reflib_query. `?Query'}</dt>
   <dd>High-level graph query interface</dd>
 
-  <dt>{@link referl_transform. `?Transform'}</dt>
+  <dt>{@link reflib_transform. `?Transform'}</dt>
   <dd>Refactoring manager framework</dd>
 
-  <dt>{@link referl_ui. `?UI'}</dt>
+  <dt>{@link reflib_ui. `?UI'}</dt>
   <dd>User interface gateway</dd>
 
-  <dt>{@link referl_args. `?Args'}</dt>
+  <dt>{@link reflib_args. `?Args'}</dt>
   <dd>Generic refactoring parameter handler</dd>
 
-  <dt>{@link referl_error. `?Error'}</dt>
+  <dt>{@link reflib_error. `?Error'}</dt>
   <dd>Error message formatter</dd>
 
-  <dt>{@link referl_file. `?File'}</dt>
+  <dt>{@link reflib_file. `?File'}</dt>
   <dd>File-related queries</dd>
 
-  <dt>{@link referl_form. `?Form'}</dt>
+  <dt>{@link reflib_form. `?Form'}</dt>
   <dd>Form-related queries</dd>
 
-  <dt>{@link referl_clause. `?Clause'}</dt>
+  <dt>{@link reflib_clause. `?Clause'}</dt>
   <dd>Clause-related queries</dd>
 
-  <dt>{@link referl_expression. `?Expr'}</dt>
+  <dt>{@link reflib_expression. `?Expr'}</dt>
   <dd>Expression-related queries</dd>
 
-  <dt>{@link referl_module. `?Mod'}</dt>
+  <dt>{@link reflib_module. `?Mod'}</dt>
   <dd>Module-related queries</dd>
 
-  <dt>{@link referl_function. `?Fun'}</dt>
+  <dt>{@link reflib_function. `?Fun'}</dt>
   <dd>Function-related queries</dd>
 
-  <dt>{@link referl_variable. `?Var'}</dt>
+  <dt>{@link reflib_variable. `?Var'}</dt>
   <dd>Variable-related queries</dd>
 
-  <dt>{@link referl_record. `?Rec'}</dt>
+  <dt>{@link reflib_record. `?Rec'}</dt>
   <dd>Record-related queries</dd>
 
-  <dt>{@link referl_macro. `?Macro'}</dt>
+  <dt>{@link reflib_macro. `?Macro'}</dt>
   <dd>Macro-related queries</dd>
 
-  <dt>{@link referl_token. `?Token'}</dt>
+  <dt>{@link reflib_token. `?Token'}</dt>
   <dd>Token-related queries</dd>
 
-  <dt>{@link referl_draw_graph. `?DrawGraph'}</dt>
+  <dt>{@link reflib_draw_graph. `?DrawGraph'}</dt>
   <dd>Produces a drawing of the graph contents</dd>
 
 </dl>

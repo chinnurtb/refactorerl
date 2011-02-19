@@ -116,7 +116,7 @@
 
 %%% Database control
 -export([stop/0, reset/0, add/1, drop/1, undo/1, saveconfig/3]).
--export([load_beam/3]).
+-export([load_beam/3, add_dir/1, drop_dir/1]).
 
 %%% Status queries
 -export([status/1, showconfig/0, filelist/0, status_info/1, error_attr/0]).
@@ -188,13 +188,21 @@ status_info(Files) -> cast({status_info, Files}).
 %% @doc Adds `File' to the database.
 add(File) -> cast({add, File}).
 
-%% @spec load_beam(path(), path(), boolean()) -> ok
-%% @doc Loads a BEAM file compiled with `debug_info' and saves the result
-load_beam(File,TargetDir,ToSave) -> cast({load_beam, File, TargetDir, ToSave}).
-
 %% @spec drop(path()) -> ok
 %% @doc Drops `File' from the database.
 drop(File) -> cast({drop, File}).
+
+%% @spec add_dir(path()) -> ok
+%% @doc Adds recursively to the database starting from `File'.
+add_dir(File) -> cast({add_dir, File}).
+
+%% @spec drop_dir(path()) -> ok
+%% @doc Drops recursively to the database starting from `File'.
+drop_dir(File) -> cast({drop_dir, File}).
+
+%% @spec load_beam(path(), path(), boolean()) -> ok
+%% @doc Loads a BEAM file compiled with `debug_info' and saves the result
+load_beam(File,TargetDir,ToSave) -> cast({load_beam, File, TargetDir, ToSave}).
 
 %% @spec draw(path(), integer()) -> ok
 %% @doc Creates a `.dot' drawing of the graph in the database, and saves it in
@@ -374,36 +382,20 @@ handle({status, FileName}) when is_list(FileName) ->
 
 %% todo: maybe introduce a `reload' or `update' message
 handle({add, FileName}) when is_list(FileName) ->
-    case ?FileMan:add_file(FileName, [update, {progress, progress(add)}]) of
-        {error, Reason} ->
-            message(invalid, "~s", [FileName]),
-            message(status, "~s", [error_message(Reason)]);
-        {file, File} ->
-            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
-            message(add, Add)
-    end;
+    do_add_file(FileName);
+
+handle({drop, FileName}) when is_list(FileName) ->
+    do_drop_file(FileName);
+
+handle({add_dir, FileName}) when is_list(FileName) ->
+    recurse_erl(FileName, fun add_filedir/1);
+
+handle({drop_dir, FileName}) when is_list(FileName) ->
+    recurse_erl(FileName, fun drop_filedir/1);
 
 handle({load_beam, FileName, TargetDir, ToSave})
   when is_list(FileName), is_list(TargetDir), is_boolean(ToSave) ->
-    case refcore_loadbeam:start(FileName,TargetDir,ToSave) of
-        {error, Reason} ->
-            message(invalid, "~s", [FileName]),
-            message(status, "~s", [error_message(Reason)]);
-        {ok, File} ->
-            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
-            message(add, Add)
-    end;
-
-handle({drop, FileName}) when is_list(FileName) ->
-    case ?Query:exec(?File:find(FileName)) of
-        [File] ->
-            Drop =
-                [?File:path(FN) || FN <- ?Query:exec(File, ?File:included())],
-            ?FileMan:drop_file(File, [{progress, progress(drop)}]),
-            message(drop, Drop);
-        [] ->
-            message(status, "Already dropped", [])
-    end;
+    do_load_beam(FileName, TargetDir, ToSave);
 
 handle({draw, File, Type}) ->
     Filter = convert_filter(Type),
@@ -416,23 +408,19 @@ handle({showconfig}) ->
                 Env <- ?Query:exec([env]),
                 #env{name=Name, value=Value} <- [?Graph:data(Env)]]);
 
+%% todo If this option is still necessary, it should use ?Graph:save_envs/0.
 handle({saveconfig, AppDirs, IncDirs, OutDir}) ->
-    [?Graph:delete(Env) || Env <- ?Graph:path(?Graph:root(), [env])],
-    [?Graph:mklink(?Graph:root(), env,
-                   ?Graph:create(#env{name=appbase, value=Dir})) ||
-                      Dir <- AppDirs],
-    [?Graph:mklink(?Graph:root(), env,
-                   ?Graph:create(#env{name=include, value=Dir})) ||
-                      Dir <- IncDirs],
-    ?Graph:mklink(?Graph:root(), env,
-                  ?Graph:create(#env{name=output, value=OutDir})),
+    ?Syn:del_envs(),
+    [?Syn:create_env(appbase, Dir) || Dir <- AppDirs],
+    [?Syn:create_env(include, Dir) || Dir <- IncDirs],
+    ?Syn:create_env(output, OutDir),
     message(status, "Configuration saved.", []);
 
 handle({filelist}) ->
     Files = ?Query:exec([file]),
 
     Err = fun(File) ->
-                  case ?Query:exec(File, [{form, {type,'==',error}}]) of
+                  case ?Query:exec(File, ?File:error_forms()) of
                       [] -> no_error;
                       _  -> error
                   end
@@ -450,7 +438,6 @@ handle({reset}) ->
 %%% Transformation interface
 
 handle({transform, Mod, Args}) ->
-    ?Graph:backup(),
     ?Transform:do(Mod, Args);
 
 handle({reply, Id, Reply}) ->
@@ -580,6 +567,101 @@ paarse(_) ->
 
 %%% ============================================================================
 
+add_filedir(File) ->
+    case ?MISC:is_erl(File) of
+        true  ->
+            do_add_file(File);
+        false ->
+            true = ?MISC:is_beam(File),
+	    do_load_beam(File)
+    end.
+
+drop_filedir(File)->
+    do_drop_file(File).
+
+do_add_file(FileName)->
+    case ?FileMan:add_file(FileName, [update, {progress, progress(add)}]) of
+        {error, Reason} ->
+            message(invalid, "~s", [FileName]),
+            message(status, "~s", [error_message(Reason)]),
+	    false;
+        {file, File} ->
+            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
+            message(add, Add),
+	    true
+    end.
+
+do_drop_file(FileName)->
+    case ?Query:exec(?File:find(FileName)) of
+        [File] ->
+            Drop =
+                [?File:path(FN) || FN <- ?Query:exec(File, ?File:included())],
+	    ?FileMan:drop_file(File, [{progress, progress(drop)}]),
+	    message(drop, Drop),
+	    true;
+	[] ->
+	    message(status, "Already dropped", []),
+	    false
+    end.
+
+%% @doc Traverse a complete directory recursively while doing the action
+%% specified on all "*.erl" and "*.beam" files each folder contains.
+recurse_erl(Start=[_|_], Action) when is_function(Action,1) ->
+    Result = lists:map(Action, erl_beam(Start)),
+    case Result /= [] of
+	true ->
+	    case lists:any(fun(X)->X end, Result) of
+		false ->
+		    message(status, "~s", [error_message({none_proc,[]})]);
+		true ->
+		    case lists:any(fun(X)->not X end, Result) of
+			true ->
+			    message(status, "~s",
+				    [error_message({some_proc,[]})]);
+			false ->
+			    ok
+		    end
+	    end;
+        false ->
+            ok
+    end.
+
+erl_beam(Start) ->
+    Files = ?MISC:find_files(
+	       filename:absname(Start),
+	       ?MISC:'or'(fun ?MISC:is_erl/1, fun ?MISC:is_beam/1)),
+    case Files of
+	[] ->
+	    message(status, "~s", [error_message({not_found,Start})]),
+	    [];
+	_ ->
+	    FileMod = [{filename:rootname(filename:basename(F)), F}
+		       || F <- Files],
+	    {Erl,Beam0} = lists:partition(
+			    fun({_M,F})-> ?MISC:is_erl(F) end, FileMod),
+	    {ErlMod,_ErlFile} = lists:unzip(Erl),
+	    Beam = ?MISC:pdel(ErlMod, Beam0),
+	    All = Erl ++ Beam,
+	    [F || {_,F} <- All]
+    end.
+
+do_load_beam(File) ->
+    do_load_beam(File,filename:dirname(File),false).
+
+do_load_beam(FileName, TargetDir, ToSave)->
+    case refcore_loadbeam:start(FileName,TargetDir,ToSave) of
+        {error, Reason} ->
+            message(invalid, "~s", [FileName]),
+            message(status, "~s", [error_message(Reason)]),
+	    false;
+        {ok, File} ->
+            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
+            message(add, Add),
+	    true
+    end.
+
+%%% ----------------------------------------------------------------------------
+
 progress(Op) ->
     fun
         (File, Count, Max) ->
@@ -599,8 +681,15 @@ convert_filter(8) -> not_lex;
 convert_filter(_) -> all.
 
 
+%@todo refactor to ?LocalError
 error_message({no_include_file, File}) ->
     ?MISC:format("Include file \"~s\" not found", [File]);
+error_message({not_found, Path})->
+    ?MISC:format("No file could be handled from \"~s\"", [Path]);
+error_message({some_proc, []})->
+    ?MISC:format("Not all files were processed", []);
+error_message({none_proc, []})->
+    ?MISC:format("No files were processed", []);
 error_message(Error) ->
     ?MISC:format("Error: ~p", [Error]).
 

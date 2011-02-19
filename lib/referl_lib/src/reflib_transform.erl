@@ -46,7 +46,7 @@
 %%% function.
 %%%
 %%% Every function in the list must form a valid ESG batch (see {@link
-%%% referl_esg}). The batch is implicitly closed by this module, the
+%%% refcore_esg}). The batch is implicitly closed by this module, the
 %%% transformation code should not call the ?ESG module directly.
 %%%
 %%% Error conditions are signalled by throwing exceptions from the
@@ -115,7 +115,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(reflib_transform).
--vsn("$Rev: 4838 $").
+-vsn("$Rev: 4969 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
@@ -142,7 +142,7 @@
 %%% @type proplist() = [atom() | {atom(), term()}]. See the standard module
 %%% `proplists'.
 
-%%% @type node() = referl_graph:node()
+%%% @type node() = refcore_graph:node()
 
 %%% ============================================================================
 %%% Interface functions
@@ -158,7 +158,10 @@ start_link() ->
 do(Mod=reftr_apply_funcluster, Args) when is_list(Args) ->
     Mod:do(Args); %@todo un-hack
 do(Mod, Args) when is_list(Args) ->
-    refcore_db:backup(),
+    case Mod of
+        refusr_sq -> no_backup_needed;
+        _         -> ?Graph:backup()
+    end,
     case gen_server:call(?TRANSFORM_SERVER, {do, Mod, Args}) of
         ok -> ok;
         {error, Error} -> erlang:error(Error, [Mod, Args])
@@ -495,11 +498,11 @@ do_transform(Mod, Args) ->
     end.
 
 run(Transform) ->
-try
-   runs(Transform, first)
-after
-  ?ESG:finalize()
-end.
+    try
+       runs(Transform, first)
+    after
+      ?ESG:finalize()
+    end.
 
 
 runs([], first)          -> [];

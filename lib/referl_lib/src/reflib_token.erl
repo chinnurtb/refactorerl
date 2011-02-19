@@ -28,11 +28,11 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(reflib_token).
--vsn("$Rev: 4459 $ ").
+-vsn("$Rev: 5020 $ ").
 
 %% Properties
 -export([pos/1, pos/2, text/1, data/1, type/1]).
--export([map_pos/2]).
+-export([map_pos/2, map_pos/3]).
 
 %% Queries
 -export([file/0, form/0, expr/0, typexp/0, clause/0, original/0, virtuals/0]).
@@ -79,6 +79,7 @@ type(Lex) ->
     (?Token:data(Lex))#token.type.
 
 %% @type line_col() = {natural(), natural()}
+
 %% @spec linecol(node()) -> {line_col(),line_col()}
 %% @doc Returns the line and column number of the first and last character
 %%      of the token.
@@ -86,31 +87,10 @@ linecol(Token) ->
     File = ?Query:exec1(Token, file(), token_file),
     linecol(File, Token).
 
+%% @doc Returns the line and column number of the first and last character
+%%      of `Token', assuming it is located in `File'.
 linecol(File,Token) ->
-    Res =
-        foldpos(
-          fun (Node,
-               #token{prews=Pre, text=Text},_,_,{_,LC}) when Node =:= Token ->
-                  Start = lc_aggr(LC,Pre),
-                  End   = lc_aggr(Start,init(Text)),
-                  {stop,{ok,{Start,End}}};
-              (_,#token{prews=Pre, text=Text, postws=Post},_,_,{Atom,LC}) ->
-                  {next,{Atom,lc_aggr(LC,Pre++Text++Post)}}
-          end, {not_found,{1,1}}, File, none),
-    case Res of
-        {ok,T={{_,_},{_,_}}} ->
-            T;
-        {not_found,_} ->
-            not_found
-    end.
-
-init(L) ->
-    lists:sublist(L,length(L)-1).
-
-lc_aggr({L,C},Txt) ->
-    ?MISC:string_linecol(Txt,inf,{1,L,C}).
-
-
+    pos(File,Token,linecol).
 
 %% @spec pos(node()) -> {integer(), integer()}
 %% @doc Returns the character position of `Token' in the source file that
@@ -124,32 +104,42 @@ pos(Token) ->
 %% @see pos/1
 %% @spec (file_node(),token_node()) -> {integer(),integer()}
 pos(File,Token) ->
+    pos(File,Token,scalar).
+
+pos(File,Token,PosType)->
     foldpos(
       fun (Node, _, Start, End, _) when Node =:= Token ->
               {stop,{Start,End}};
           (_,_,_,_,Acc) ->
               {next,Acc}
-      end, not_found, File, none).
+      end, not_found, File, none, PosType).
+
+%% @doc Returns the scalar position of all listed tokens from `File' in a
+%% single run.
+%% Note that it assumes that no duplicate token is given.
+%% Use lists:usort/1 if in doubt.
+%% @spec (#file{},[#token{}]) -> [{#token{},{integer(),integer()}}]
+map_pos(File,Tokens)->
+    map_pos(File,Tokens,scalar).
 
 %% @doc Returns the position of all listed tokens from `File' in a single run.
-%% @spec (#file{},[#token{}]) -> [{#token{},{integer(),integer()}}]
-map_pos(_,[]) ->
-    [];
-map_pos(File,Tokens) ->
-    InitAcc =
-        {length(Tokens),
-         dict:from_list([{E,[]} || E <- Tokens]),
-         []},
-    {_,_,Result} =
-        ?Token:foldpos(
-           fun (Node, _, Start, End, Acc={N,Dict,Res}) ->
-                   case dict:is_key(Node,Dict) of
+%% Note that it assumes that no duplicate token is given.
+%% Use lists:usort/1 if in doubt.
+%% @spec (#file{},[#token{}],scalar|linecol) ->
+%%  [{#token{},{integer(),integer()}}]
+map_pos(File,Tokens,PosType) ->
+    TokenSet = sets:from_list(Tokens),
+    InitAcc = {length(Tokens),[]},
+    {_,Result} =
+        foldpos(
+           fun (Node, _, Start, End, Acc) ->
+                   case sets:is_element(Node,TokenSet) of
                        false ->
                            {next,Acc};
                        true ->
-                           Dict2 = dict:erase(Node,Dict),
+                           {N,Res} = Acc,
                            Res2 = [{Node,{Start,End}}|Res],
-                           Acc2 = {N-1,Dict2,Res2},
+                           Acc2 = {N-1,Res2},
                            case N of
                                1 ->
                                    {stop,Acc2};
@@ -157,7 +147,7 @@ map_pos(File,Tokens) ->
                                    {next,Acc2}
                            end
                    end
-           end, InitAcc, File, none),
+           end, InitAcc, File, none, PosType),
     Result.
 
 
@@ -246,25 +236,74 @@ foldpos(Fun, Acc0, File) ->
 %% @spec (Fun,Acc,node(),wsmask())->Acc
 %%       Fun = (node(), #token{}, integer(), integer(), Acc) ->
 %%          {stop, Acc} | {next, Acc}
-foldpos(Fun, Acc0, File, Ws) ->
+foldpos(Fun, Acc0, File, Ws)->
+    foldpos(Fun, Acc0, File, Ws, scalar).
+
+foldpos(Fun, Acc0, File, Ws, PosType) ->
     Tokens = ?Syn:leaves(File),
+    Start  = case PosType of
+                 scalar -> 1;
+                 linecol -> {1,1}
+             end,
+    foldpos0(Fun, Acc0, Tokens, Ws, Start, PosType).
+
+foldpos0(Fun, Acc0, Tokens, none, Start, PosType)->
+    foldpos1_none(Fun, Acc0, Tokens, Start, PosType);
+
+foldpos0(Fun, Acc0, Tokens, Ws, Start, PosType) ->
     WsMask = ws2mask(Ws),
     StMask = lists:takewhile(fun id/1, ?MISC:map_not(WsMask)),
-    foldpos(Fun, {WsMask,StMask}, Acc0, Tokens, 1).
+    foldpos1(Fun, {WsMask,StMask}, Acc0, Tokens, Start, PosType).
 
 %% @private
-foldpos(_, _, Acc, [], _) ->
+foldpos1(_, _, Acc, [], _, _) ->
     Acc;
-foldpos(Fun, WsM={WsMask,StMask}, Acc, [Head|Tail], Pos) ->
+%@todo perhaps also support linecol
+foldpos1(Fun, WsM={WsMask,StMask}, Acc, [Head|Tail], Pos, PosType=scalar) ->
     #lex{data=Data} = ?ESG:data(Head),
-    Lens   = toklens(Data),
-    Start  = Pos   + sum_mask(StMask,Lens),
-    End    = Start + sum_mask(WsMask,Lens) - 1,
-    Next   = Pos   + lists:sum(Lens),
+    Lens  = toklens(Data),
+    Start = Pos   + sum_mask(StMask,Lens),
+    End   = Start + sum_mask(WsMask,Lens) - 1,
     case Fun(Head, Data, Start, End, Acc) of
-        {stop, Result} -> Result;
-        {next, Acc1}   -> foldpos(Fun, WsM, Acc1, Tail, Next)
+        {stop, Result} ->
+            Result;
+        {next, Acc1}   ->
+            Next = Pos + lists:sum(Lens),
+            foldpos1(Fun, WsM, Acc1, Tail, Next, PosType)
     end.
+
+%% "Premature optimization is the root of all evil."
+foldpos1_none(_, Acc, [], _, _) ->
+    Acc;
+foldpos1_none(Fun, Acc, [Head|Tail], Pos, PosType=scalar) ->
+    #lex{data=Data} = ?ESG:data(Head),
+    #token{prews=Pre, text=Text} = Data,
+    Start = Pos   + length(Pre),
+    End   = Start + length(Text) - 1,
+    case Fun(Head, Data, Start, End, Acc) of
+        {stop, Result} ->
+            Result;
+        {next, Acc1}   ->
+            Next = End + 1 + length(Data#token.postws),
+            foldpos1_none(Fun, Acc1, Tail, Next, PosType)
+    end;
+
+foldpos1_none(Fun, Acc, [Head|Tail], Pos, PosType=linecol) ->
+    #lex{data=Data} = ?ESG:data(Head),
+    #token{prews=Pre, text=Text} = Data,
+    Start = lc_aggr(Pos,Pre), %@todo hm, could take a pretty PosType argument
+    {InitT,LastT} = lists:split(length(Text)-1,Text),
+    End   = lc_aggr(Start,InitT),
+    case Fun(Head, Data, Start, End, Acc) of
+        {stop, Result} ->
+            Result;
+        {next, Acc1}   ->
+            Next = lc_aggr(End,[LastT|Data#token.postws]),
+            foldpos1_none(Fun, Acc1, Tail, Next, PosType)
+    end.
+
+lc_aggr({L,C},Txt) ->
+    ?MISC:string_linecol(Txt,inf,{1,L,C}).
 
 id(X) ->
     X.

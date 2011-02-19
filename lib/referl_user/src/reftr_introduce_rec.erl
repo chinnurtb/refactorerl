@@ -14,12 +14,18 @@
 %%% The Original Code is RefactorErl.
 %%%
 %%% The Initial Developer of the  Original Code is Eötvös Loránd University.
-%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2010,
 %%% Eötvös Loránd University. All Rights Reserved.
+
 
 %%% ============================================================================
 %%% Module information
 
+%%% @doc This module is implemetns the introduce record refactoring. Given a
+%%% tuple skeleton, this transformation converts it to a record expression and
+%%% inserts compensating record expressions or record update expression  at the
+%%% needed places.
+%%%
 %%% == Parameters ==
 %%% <ul>
 %%% <li>A tuple (see {@link reflib_args:expr_range/1}).</li>
@@ -27,7 +33,7 @@
 %%% <li>Record filed names separated by whitespace
 %%%   (see {@link reflib_args:string/1}).</li>
 %%% </ul>
-
+%%%
 %%% == Conditions of applicability ==
 %%% <ul>
 %%% <li> The name of the record we introduce should not conflict with
@@ -44,43 +50,53 @@
 %%% <li> If the selected tuple is a function parameter, there must not be
 %%%   an implicit reference to the function.</li>
 %%% </ul>
-
+%%%
 %%% == Transformation steps and compensations ==
 %%% <ol>
-%%% <li> If the record didn't exist before, insert its definition.</li>
-%%% <li> Change the selected tuple to a record expression.</li>
-%%% <li> If the tuple was a function parameter, find all corresponding
-%%%   function calls and insert a function expression around the
-%%%   corresponding argument, wich transforms the matching tuple to the
-%%%   record expression.</li>
-%%% <li> Find all function calls in the function clause, which
-%%%   parameters contains a same typed record. Using the dataflow
-%%%   graph every possible called function are collected, where
-%%%   the transformation is executed again (these tuple parameters
-%%%   are replaced to record update).</li>
-%%% <li> Finally, the transformation finds every directly affected
-%%%    parts the graph - which call the transformed function - and
-%%%    replace their parameters to a record expression.</li>
+%%% <li> The refactoring finds every tuple in the function pattern, which has
+%%%   the same type. </li>
+%%% <li> The transformation checks every function clause to find those,
+%%%   which parameter contains at least one same typed tuple. </li>
+%%% <li> The refactoring collects every function calls, which calls the
+%%%   collected function clause. </li>
+%%% <li> The refactoring finds all function calls in the collected
+%%%   function clauses, where the parameter contains at least one same
+%%%   typed tuple. </li>
+%%% <li> The transformation collects the return parameter, if it is a same
+%%%   typed tuple </li>
+%%% <li> The refactoring finds every function calls in the collected function
+%%%   clauses, which parameter contains at least one same typed tuple. The
+%%%   transformation finds that function and the collection starts again
+%%%   from the first step. </li>
+%%% <li> If the record didn't exist before, its definition is constructed. </li>
+%%% <li> The collected tuples in the function patterns are replaced to record
+%%%   expressions. If a function clause contains function calls, the affected
+%%%   record gets bound with a variable name. </li>
+%%% <li> The return value is transformed to a record expression, if it was
+%%%   collected. </li>
+%%% <li> The unused variabled (in the record expression) are elliminated. </li>
+%%% <li> Those function calls parameters, which calls a collected function,
+%%%   are transformed to record expression. </li>
+%%% <li> If a collected function's return parameter is a same typed tuple,
+%%%   and the calling place is match expression, the left side is transformed
+%%%   to a record expression too. </li>
 %%% </ol>
-
+%%%
 %%% == Implementation status ==
 %%% Although the refactoring is implemented, the testing is in progress.
-%%% There are some known bugs, which elimination will be done in the near
-%%% future.
-
+%%%
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 %%% @author Matyas Karacsonyi <k_matyas@inf.elte.hu>
 
 -module(reftr_introduce_rec).
--vsn("$Rev: 4783 $ ").
+-vsn("$Rev: 4988 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
 
 -include("user.hrl").
 
--import(lists, [zipwith/3, flatten/1, any/2]).
--define(deb(Arg), io:format("Debug: ~p~n", [Arg])).
+
 %%% ============================================================================
 %%% Errors
 
@@ -126,179 +142,309 @@ prepare(Args) ->
                     ?LocalError(implicit, [])),
              Schema = ?Query:exec(Expr, ?Expr:children()),
 
-             transform(Recname, Recfields, Schema, Expr);
+             [{_, Fun}] = ?Syn:parent(Parent),
+
+             fun(_) ->
+                     transform(Recname, Recfields, Schema, Fun)
+             end;
 
          _ ->
              throw(?LocalError(illegal_selection, []))
      end].
 
-transform(RName, RFields, Schema, Start) ->
-    fun(_) ->
-            List = collect(Schema, Start),
-            Called = 
-                [begin
-                     PC = ?Query:exec(Pattern, ?Expr:children()),
-                     PR = case FunCalls of
-                              [] ->
-                                  make_record(RName, RFields, PFields);
-                              _ ->
-                                  make_record_pattern(VarName, RName, RFields, PFields)
-                          end,
-                     replace(Pattern, PR),
+transform(RName, RFields, Schema, Fun) ->
+    List = lists:flatten(collect(Schema, Fun)),
 
-                     lists:foreach(
-                       fun (Node) ->
-                               NC = ?Query:exec(Node, ?Expr:children()),
-                               RU = make_record_update(VarName, RName, RFields, PC, NC),
-                               replace(Node, RU)
-                       end, FunCalls),
-                     Back
-                 end || {Pattern, PFields, VarName, FunCalls, Back} <- List],
-            
-            lists:foreach(
-              fun (X) ->
-                      Expr = ?Query:exec(X, ?Expr:children()),
-                      Record = make_record(RName, RFields, Expr),
-                      replace(X, Record)
-              end, lists:umerge(Called))
-    end.
+    Called =
+        [begin
+             PC = ?Query:exec(Pattern, ?Expr:children()),
+             PR = case FunCalls of
+                      [] ->
+                          make_record(RName, RFields, PFields);
+                      _ ->
+                          make_record_pattern(VarName, RName, RFields, PFields)
+                  end,
+             replace(Pattern, PR),
 
-collect(Schema, Pattern) ->
+	     [begin
+		  Fields = ?Query:exec(R, ?Expr:children()),
+		  Ret = make_record(RName, RFields, Fields),
+		  replace(R, Ret)
+	      end || R <- Return, R /= []],
+
+             lists:foreach(
+               fun (Node) ->
+                       NC = ?Query:exec(Node, ?Expr:children()),
+                       RU = make_record_update(VarName, RName, RFields, PC, NC),
+                       replace(Node, RU)
+               end, FunCalls),
+             Back
+         end || {Pattern, PFields, VarName, FunCalls, Back, Return} <- List],
+
+    lists:foreach(
+      fun (X) ->
+              Expr = ?Query:exec(X, ?Expr:children()),
+              Record = make_record(RName, RFields, Expr),
+              replace(X, Record)
+      end, lists:umerge(Called)).
+
+collect(Schema, Fun) ->
     Visited = ets:new(visited_nodes, [set]),
-    
+
     try
-        PC = ?Query:exec(Pattern, ?Expr:children()),
-        [{_, Parent}] = ?Syn:parent(Pattern),
-        X = ?Query:exec(Parent, [pattern]),
-        lists:flatten(
-          [begin
-               C  = ?Query:exec(P, ?Expr:children()),
-               
-               case check_type(PC, C) of
-                   true ->
-                       collect(Schema, P, Visited);
-                   false ->
-                       []
-               end
-           end || P <- X])
+        collect(Schema, Fun, Visited)
     after
         ets:delete(Visited)
     end.
 
-collect(Schema, Pattern, Visited) ->
-    case ets:lookup(Visited, Pattern) of
-        [] ->
-            ets:insert(Visited, {Pattern}),
-            Children = ?Query:exec(Pattern, ?Expr:children()),
-            CD = [?ESG:data(C) || C <- Children],
-            
-            PFields = [begin
-                           Data = ?ESG:data(C),
-                           case Data of
-                               #expr{type=joker} ->
-                                   no;
-                               #expr{type=variable} ->
-                                   var_occ(Data, CD,
-                                           lists:delete(C,
-                                                        ?Query:exec(C, ?Query:seq(?Expr:variables(),
-                                                                                  ?Var:occurrences()))));
-                               #expr{type=match_expr} ->
-                                   [Left, Right] = ?Query:exec(C ,?Expr:children()),
-                                   Occ = lists:delete(Left, ?Query:exec(Left,
-                                                                        ?Query:seq(?Expr:variables(),
-                                                                                   ?Var:occurrences()))),
-                                   case var_occ(Data, CD, Occ) of
-                                       no ->
-                                           Right;
-                                       _ ->
-                                           C
-                                   end;
-                               _ ->
-                                   C
-                           end
-                       end || C <- Children],
-            
-            Sites = get_occurrences(Schema, Children),
-            
-            FunCalls = lists:umerge(
-                         [begin
-                              [{_, Parent}] = ?Syn:parent(S),
-                              
-                              case ?ESG:data(Parent) of
-                                  #expr{type=arglist} ->
-                                      [S];
-                                  _ ->
-                                      []
-                              end
-                          end || S <- Sites]),
-            
-            Back = lists:delete(Pattern, ?Dataflow:reach([Pattern], [back])),
-            Flow = lists:flatten([lists:delete(FC, ?Dataflow:reach([FC], [{back, false}])) ||
-                                     FC <- FunCalls]),
-            
-            FlC = lists:umerge([collect(Schema, F, Visited) || F <- Flow]),
-            [{Pattern, PFields, ?Var:new_varname(Pattern, "Rec"), FunCalls, Back} | FlC];
-        
-        _ ->
-            []
+collect(Schema, Fun, Visited) ->
+    Clauses = ?Query:exec(Fun, [funcl]),
+
+    TC = lists:flatten(
+           [begin
+                CP = collect_clauses(Schema, Clause, Visited),
+
+                case CP of
+                    [] ->
+                        [];
+                    _ ->
+                        [P || P <- CP, P /= []]
+                end
+            end || Clause <- Clauses]),
+    
+    FunCalls = lists:flatten([FC || {_, _, _, FC, _, _} <- TC]),
+    Flow = lists:flatten([lists:delete(FC, ?Dataflow:reach([FC], [{back, false}])) ||
+                             FC <- FunCalls]),
+    Funs = 
+	[X || {_, X} <- 
+		  lists:umerge([lists:filter(fun (X) ->
+						     case X of 
+							 {form, _} -> true;
+							 _ -> false
+						     end
+					     end, ?Syn:root_path(Call)) || Call <- Flow])],
+
+    TC ++ [collect(Schema, F, Visited) || F <- Funs].
+
+
+collect_clauses(Schema, Clause, Visited) ->
+    Patterns = ?Query:exec(Clause, [pattern]),
+    UsedNamesBuffer = ets:new(used_var_names, [set]),
+
+    try
+        [begin
+             case ets:lookup(Visited, Pattern) of
+                 [] ->
+                     ets:insert(Visited, {Pattern}),
+                     Fields = ?Query:exec(Pattern, ?Expr:children()),
+		     collect_clauses(Schema, Clause, Pattern, Fields, Visited, UsedNamesBuffer);
+
+                 _ ->
+                     []
+             end
+         end || Pattern <- Patterns]
+    after
+        ets:delete(UsedNamesBuffer)
+    end.
+
+collect_clauses(Schema, Clause, Pattern, Fields, Visited, UsedNamesBuffer) ->
+    case check_type(Schema, Fields) of
+	true ->
+	    PFields = pattern_fields([?ESG:data(C) || C <- Fields], Fields),
+	    FunCalls = get_funcalls(Schema, Fields, Visited),
+	    Back = lists:delete(Pattern, ?Dataflow:reach([Pattern], [back])),
+	    
+	    UsedNames = [Elem || {Elem} <- ets:tab2list(UsedNamesBuffer)],
+	    VarName = ?Var:new_varname(Pattern, "Rec", UsedNames),
+	    ets:insert(UsedNamesBuffer, {VarName}),
+
+	    Last = lists:last(?Query:exec(Clause, [body])),
+	    Return =
+		case {?Expr:type(Last),
+		      check_type(Schema, ?Query:exec(Last, ?Expr:children()))} of
+		    {tuple, true} ->
+			[Last |
+			 [begin
+			      RootPath = lists:reverse(?Syn:root_path(B)),
+			      ME = lists:filter(
+				     fun ({_, X}) ->
+					     case ?ESG:data(X) of
+						 #expr{type=match_expr} ->
+						     true;
+						 _ ->
+						     false
+					     end
+				     end, RootPath),
+
+			      case ME of
+				  [] ->
+				      [];
+
+				  [{_, MatchExpr}|_] ->
+				      [Left|_] = ?Query:exec(MatchExpr, ?Expr:children()),
+				      Left
+			      end
+			  end || B <- Back]];
+		    
+		    _ ->
+			[]
+		end,
+	    
+	    {Pattern, PFields, VarName, FunCalls, Back, Return};
+	
+	_ ->
+	    []
     end.
 
 
+%% @doc Collects which record elements should be bound in the pattern of a function.
+pattern_fields(_, []) ->
+    [];
+pattern_fields(FData, [Field|Rest]) ->
+    Data = ?ESG:data(Field),
+
+    Ret =
+        case Data of
+            #expr{type=joker} ->
+                no;
+            #expr{type=variable} ->
+                var_occ(Data, FData,
+                        lists:delete(Field,
+                                     ?Query:exec(Field, ?Query:seq(?Expr:variables(),
+                                                                   ?Var:occurrences()))));
+            #expr{type=match_expr} ->
+                [Left, Right] = ?Query:exec(Field ,?Expr:children()),
+                Occ = lists:delete(Left, ?Query:exec(Left,
+                                                     ?Query:seq(?Expr:variables(),
+                                                                ?Var:occurrences()))),
+                case var_occ(Data, FData, Occ) of
+                    no ->
+                        Right;
+                    _ ->
+                        Field
+                end;
+            _ ->
+                Field
+        end,
+    [Ret | pattern_fields(FData, Rest)].
+
+%% @doc Collects every same typed tuple in a function clause
 var_occ(_, _, []) ->
     no;
 var_occ(C, Pattern, [Node|Rest]) ->
     [{_, Parent}] = ?Syn:parent(Node),
-    
-    case ?ESG:data(Parent) of
-        #expr{type=tuple} ->
-            [{_, P2}] = ?Syn:parent(Parent),
-            
-            case ?ESG:data(P2) of
-                #expr{type=arglist} ->
-                    Eq = lists:zipwith(
-                           fun (P, N) ->
-                                   ND = ?ESG:data(N),
-                                   if
-                                       (C =:= P) and (P#expr.value /= ND#expr.value) ->
-                                           true;
-                                       true ->
-                                           false
-                                   end
-                           end, Pattern, ?Query:exec(Parent, ?Expr:children())),
-                    case lists:member(true, Eq) of
-                        true ->
-                            Node;
-                        _ ->
-                            var_occ(C, Pattern, Rest)
-                    end;
-                _ ->
-                    Node
-            end;
-        _ ->
-            Node
+    [{_, P2}] = ?Syn:parent(Parent),
+
+    case {?ESG:data(Parent), ?ESG:data(P2)} of
+        {#expr{type=tuple}, #expr{type=arglist}} ->
+	    Eq = lists:zipwith(
+		   fun (P, N) ->
+			   ND = ?ESG:data(N),
+			   if
+			       (C =:= P) and (P#expr.value /= ND#expr.value) ->
+				   true;
+			       true ->
+				   false
+			   end
+		   end, Pattern, ?Query:exec(Parent, ?Expr:children())),
+	    case lists:member(true, Eq) of
+		true ->
+		    Node;
+		_ ->
+		    var_occ(C, Pattern, Rest)
+	    end;
+
+	_ ->
+	    Node
+    end.
+
+%% @spec get_funcalls(node(), node(), node()) -> node()
+%% @doc Collects every function call from a function clause, where its parameter
+%%   contains at least one same typed tuple.
+get_funcalls(Schema, Fields, Visited) ->
+    VarOcc = ?Query:exec(Fields, ?Query:seq(?Expr:variables(), ?Var:occurrences())),
+
+    FunCalls =
+        [begin
+             [{_, Parent}] = ?Syn:parent(Node),
+             [{_, P2}] = ?Syn:parent(Parent),
+
+             case {?ESG:data(Parent), ?ESG:data(P2), ets:lookup(Visited, Parent)} of
+                 {#expr{type=tuple}, #expr{type=arglist}, []} ->
+                     ets:insert(Visited, {Parent}),
+                     Children  = ?Query:exec(Parent, ?Expr:children()),
+
+                     case check_type(Schema, Children) of
+                         true ->
+                             Parent;
+
+                         false ->
+                             []
+                     end;
+
+                 {#expr{type=infix_expr}, #expr{type=tuple}, []} ->
+                     ets:insert(Visited, {Parent}),
+                     Children  = ?Query:exec(P2, ?Expr:children()),
+                     [{_, P}] = ?Syn:parent(P2),
+
+                     case {check_type(Schema, Children), ?ESG:data(P)} of
+                         {true, #expr{type=arglist}} ->
+                             P2;
+
+                         {false, _} ->
+                             []
+                     end;
+
+                 _ ->
+                     []
+             end
+         end || Node <- VarOcc],
+   [Ret || Ret <- FunCalls, Ret /= []].
+
+%% @spec check_type([node()], [node()]) -> true | false
+check_type([], []) ->
+    true;
+check_type(_, []) ->
+    false;
+check_type([], _) ->
+    false;
+check_type([Pattern|RestPatt], [Schema|RestSch]) ->
+    P = ?Expr:type(Pattern),
+    S = ?Expr:type(Schema),
+    if
+        (P == S) or
+        (P == variable) or (S == joker) or
+        (S == variable) or (P == infix_expr)->
+            check_type(RestPatt, RestSch);
+
+        true ->
+            false
     end.
 
 
-get_skeleton(Exprs) ->
-    ?Check(length(Exprs) == 1, ?LocalError(not_tuple, [])),
-    [Expr] = Exprs,
-    ?Check(?Expr:type(Expr) == tuple, ?LocalError(not_tuple, [])),
-    Expr.
-
-
-split_fields(S) ->
-    [list_to_atom(A) || A <- string:tokens(S, " ")].
-
+%% @spec define_record(atom(), [atom()]) -> node()
+%% @doc Creates a record definition.
+define_record(Name, Fields) ->
+    ?Syn:construct({{form, record, Name}, [{{spec_field, F}, []} || F <- Fields]}).
 
 %% @spec make_record(atom(), [atom()], [node()]) -> node()
-%% @doc Creates a record expression. Copies the expressions.
-make_record(RName, RFields, Exprs) ->
-    RFNodes = zipwith(fun(N, E) ->
-                              {{record_field, N}, copy(E)}
-                      end, RFields, Exprs),
+%% @doc Creates a record expression.
+make_record(RName, RFields, Pattern) ->
+    RFNodes = make_record(RFields, Pattern),
     ?Syn:construct({{record_expr, RName}, RFNodes}).
 
+make_record([], []) ->
+    [];
+make_record([FName|Fields], [Node|NP]) ->
+    case Node of
+        no ->
+            [];
+        _ ->
+            [{{record_field, FName}, copy(Node)}]
+    end ++ make_record(Fields, NP).
 
+
+%% @spec make_record_pattern(atom(), atom(), [atom()], [node()]) -> node()
 make_record_pattern(VarName, RName, Fields, Pattern) ->
     RFields = make_record_pattern(Fields, Pattern),
     ?Syn:construct({match_expr, {var, VarName}, {{record_expr, RName}, RFields}}).
@@ -314,9 +460,10 @@ make_record_pattern([FName|Fields], [Node|NP]) ->
     end ++ make_record_pattern(Fields, NP).
 
 
+%% @spec make_record_update(atom(), atom(), [atom()], [node()], [node()]) -> node()
 make_record_update(VarName, RName, RFields, PC, NC) ->
     RUFields = make_record_update(RFields, PC, NC),
-    
+
     ?Syn:construct(
        case RUFields of
            [] ->
@@ -328,26 +475,23 @@ make_record_update(VarName, RName, RFields, PC, NC) ->
 make_record_update([], [], []) ->
     [];
 make_record_update([FName|RFields], [Pattern|PC], [Node|NC]) ->
-    P = ?ESG:data(Pattern),
-    N = ?ESG:data(Node),
+    P = ?Expr:value(Pattern),
+    N = ?Expr:value(Node),
 
     if
-        P#expr.value /= N#expr.value ->
+        P /= N ->
             [{{record_field, FName}, copy(Node)}];
         true ->
             []
     end ++ make_record_update(RFields, PC, NC).
 
-%% @spec define_record(atom(), [atom()]) -> form()
-%% @doc Creates a record definition.
-define_record(Name, Fields) ->
-    ?Syn:construct({{form, record, Name}, [{{spec_field, F}, []} || F <- Fields]}).
 
 copy(Node) ->
     proplists:get_value(Node, ?Syn:copy(Node)).
 
 replace(From, To) ->
     ?Transform:touch(From),
+
     case ?Syn:parent(From) of
         [{_, Parent}] ->
             ?Syn:replace(Parent, {node, From}, [To]);
@@ -355,44 +499,12 @@ replace(From, To) ->
             []
     end.
 
-get_occurrences(Schema, Children) ->
-    VarOcc = ?Query:exec(Children, ?Query:seq(?Expr:variables(), ?Var:occurrences())),
 
-    lists:umerge(
-      [begin
-           [{_, Parent}] = ?Syn:parent(Node),
-           
-           case ?ESG:data(Parent) of
-               #expr{type=tuple} ->
-                   C  = ?Query:exec(Parent, ?Expr:children()),
-                   
-                   case check_type(Schema, C) of
-                       true ->
-                           [Parent];
-                       
-                       false ->
-                           []
-                   end;
-               
-               _ ->
-                   []
-           end
-       end || Node <- VarOcc]).
+get_skeleton(Exprs) ->
+    ?Check(length(Exprs) == 1, ?LocalError(not_tuple, [])),
+    [Expr] = Exprs,
+    ?Check(?Expr:type(Expr) == tuple, ?LocalError(not_tuple, [])),
+    Expr.
 
-check_type([], []) ->
-    true;
-check_type(_, []) ->
-    false;
-check_type([], _) ->
-    false;
-check_type([Pattern|RestPatt], [Schema|RestSch]) ->
-    P = ?ESG:data(Pattern),
-    S = ?ESG:data(Schema),
-    if
-        (P#expr.type == S#expr.type) or
-        (P#expr.type == variable) or (S#expr.type ==joker) ->
-            check_type(RestPatt, RestSch);
-
-        true ->
-            false
-    end.
+split_fields(S) ->
+    [list_to_atom(A) || A <- string:tokens(S, " ")].

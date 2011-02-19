@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reflib_variable).
--vsn("$Rev: 4474 $").
+-vsn("$Rev: 4987 $ ").
 
 -export([name/1]).
 -export([valid_name/1]).
@@ -31,7 +31,7 @@
          scopes/0, clause/0]).
 
 %% Variable name generation
--export([new_varname/2, new_varname_with_prefix/2]).
+-export([new_varname/2, new_varname/3, new_varname_with_prefix/2]).
 
 -include("lib.hrl").
 
@@ -132,14 +132,19 @@ clause() ->
 %% If none of them are available, a fresh variable name will be returned,
 %% composed of the given prefix and a yet unused index.
 new_varname(Expr, Prefix) ->
-    Vars      = ?Query:exec(Expr, ?Query:all(?Expr:visible_vars(),
-                                             ?Expr:variables())),
+    new_varname(Expr, Prefix, []).
+
+new_varname(Expr, Prefix, UsedNamesBuffer) ->
+    [Clause] = ?Query:exec(Expr, ?Expr:clause()),
+    Vars     = ?Query:exec(Clause, [varvis]),
+
     UsedNames = [?Var:name(X) || X <- Vars],
-    Allowed   = ?Variables -- UsedNames,
+    Allowed   = ?Variables -- (UsedNames ++ UsedNamesBuffer),
     case Allowed of
         [First | _] -> First;
         []          -> varname_with_next_idx(Prefix, UsedNames, 1)
     end.
+
 
 %% @doc Returns a variable name that is not bound in the scope of the expression.
 %% The new name consists of the prefix and a yet unused index.

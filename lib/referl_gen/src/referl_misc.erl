@@ -25,7 +25,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_misc).
--vsn("$Rev: 4763 $").
+-vsn("$Rev: 4995 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -39,6 +39,7 @@
 -export([funlist_text/1, fun_text/1, recfld_text/1]).
 -export([string_to_term/1]).
 -export([normalize/1]).
+-export(['or'/2]).
 
 %% refgen_list ?List
 %% General list transformations
@@ -66,7 +67,7 @@
 -export([proplist_merge_def/2, proplist_validate/2,
          call_arg/3]).
 -export([pget/2, pgetu/2, pcopy/2, pdel/2]).
--export([lookup_symbols/3]).
+-export([lookup_symbols/3, is_proplist/1]).
 
 %% refgen_text ?Text
 %% Text transformations
@@ -81,6 +82,7 @@
          string_length/1, string_length/2,
          string_strs/2, string_EOLs/0,
          bin_linecol/2, string_linecol/2, string_linecol/3]).
+-export([is_erl/1, is_beam/1]).
 
 %% @todo
 %% refgen_misc ?MISC
@@ -92,6 +94,7 @@
 
 %% OS
 -export([os_cmd/2]).
+-export([find_files/2]).
 
 %% Records
 -export([get_rec_type/1, get_rec_value/2, set_rec_value/3, check_record/2]).
@@ -242,7 +245,7 @@ common_prefix([A|Xs], [A|Ys]) -> [A|common_prefix(Xs, Ys)];
 common_prefix(_, _) -> [].
 
 
-%% @spec ([any()]) -> ([any()])
+%% @spec ([[any()]]) -> ([[any()]])
 %% @doc Transposition. Only works for complete rectangular matrices.
 %%
 %%      (similar to `Data.List.transpose' in Haskell)
@@ -556,8 +559,31 @@ pcopy(Keys,Prop)->
 
 %% @doc Deletes keys from a proplist.
 %% @spec ([Key],[{Key,Value}]) -> [{Key,Value}]
+%% @equiv [KV || KV={K,_V}<-Prop, not lists:member(K,Delete)]
 pdel(Delete,Prop) ->
-    [KV || KV={K,_V}<-Prop, not lists:member(K,Delete)].
+    proplist_cut_(sets:from_list(Delete),Prop,[]).
+
+proplist_cut_(_, [], Res) ->
+    Res;
+proplist_cut_(ToDel, [KV={K,_V}|Tail], Res0) ->
+    Res =
+        case sets:is_element(K,ToDel) of
+            true ->
+                Res0;
+            false ->
+                [KV | Res0]
+        end,
+    proplist_cut_(ToDel, Tail, Res).
+
+%% @doc Determines if the type of a value is proplist.
+is_proplist([]) ->
+    true;
+is_proplist([{K,_V}|T]) when is_atom(K) ->
+    is_proplist(T);
+is_proplist([K|T]) when is_atom(K) ->
+    is_proplist(T);
+is_proplist(_) ->
+    false.
 
 %%% ----------------------------------------------------------------------------
 %%% Generic argument finder (for reflib_args and reftr_wrangler)
@@ -1288,6 +1314,19 @@ integer_to_list(N,P) ->
         Result -> Result
     end.
 
+is_erl(F)->
+    nomatch /= re:run(F, "\\.[eE][rR][lL]$", [{capture,first}]).
+%    lists:suffix(".erl",File).
+
+is_beam(F)->
+    nomatch /= re:run(F, "\\.[bB][eE][aA][mM]$", [{capture,first}]).
+%    lists:suffix(".beam",File).
+
+'or'(F,G) when is_function(F,1), is_function(G,1)->
+    fun(X)->
+            F(X) orelse G(X)
+    end.
+
 
 %%% ----------------------------------------------------------------------------
 %%% ETS functions
@@ -1408,4 +1447,24 @@ get_data(P,Old) ->
     after
         ?EXEC_TIMEOUT ->
             {timeout,Old}
+    end.
+
+find_files(File, Mask) when is_list(File), is_function(Mask,1) ->
+    case filelib:is_dir(File) of
+        true ->
+            Files = filelib:wildcard(filename:join(File,"*")),
+            lists:append([find_files(F, Mask) || F<-Files]);
+        false ->
+            case filelib:is_regular(File) of
+                true  ->
+                    case Mask(File) of
+                        true ->
+                            [File];
+                        false ->
+                            []
+                    end;
+                false ->
+%                    message("Warning: Not a file: " ++ File),
+                    []
+            end
     end.

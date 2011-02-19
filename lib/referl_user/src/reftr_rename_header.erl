@@ -56,7 +56,7 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(reftr_rename_header).
--vsn(" $Rev: 3840 $ ").
+-vsn(" $Rev: 4968 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -71,7 +71,7 @@
 
 %%% ============================================================================
 %%% Callbacks
-
+%%% @private
 prepare(Args)->
     NewName = ?Args:filename(Args),
     %%NewName1 = ?File:abs_path(NewName),
@@ -102,11 +102,13 @@ prepare(Args)->
 
 %%% ============================================================================
 %%% Implementation
-
+%%% @private
 transform(ActInclFile, FileNode)->
    ?File:del_include(ActInclFile, FileNode),
    ?Transform:touch(ActInclFile),
    ok.
+
+%%% @private
 transform0(FileNode, NewPath, OldPath)->
    ?Transform:rename(OldPath, NewPath),
    ?File:upd_path(FileNode, NewPath),
@@ -114,6 +116,7 @@ transform0(FileNode, NewPath, OldPath)->
    ?FileMan:save_file(FileNode),
    ok.
 
+%%% @private
 transform1(ActInclFile, FileNode)->
    ?File:add_include(ActInclFile, FileNode),
    ?Transform:touch(ActInclFile).

@@ -130,6 +130,20 @@ expressions between the point and the mark.
                    :file buffer-file-name
                    :position pos))
 
+(define-refac-operation (refactorerl-eliminate-import :menu "Eliminate import"
+                                                      :menu-group introelim
+                                                      :key "ei"
+                                                      :precondition :buffer-state)
+  ((pos :point))
+  "Performs the Eliminate Import refactoring.
+
+1. Position the cursor over any import form.
+2. Call the refactoring from the menu or with \\[refactorerl-eliminate-import]."
+  (refac-transform 'reftr_eliminate_import
+                   :file buffer-file-name
+                   :position pos))
+
+
 ;; todo This transformation does not seem stable enough.
 ;; (define-refac-operation (refactorerl-introduce-macro :menu "Introduce macro" :key "mi"
 ;;                                                       :menu-group introelim

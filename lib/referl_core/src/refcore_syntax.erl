@@ -29,22 +29,35 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_syntax).
--vsn("$Rev: 4862 $ ").
+-vsn("$Rev: 4995 $ ").
 
 %%% ============================================================================
 %%% Exports
 
+%% Node properties
 -export([node_type/1]).
--export([children/1, children_idx/1, parent/1, leaves/1, tree_text/1,
+%% Queries
+-export([first_leaf/0, last_leaf/0]).
+%% Comment handling
+-export([get_comments/1, put_comments/2]).
+%% Syntax tree queries
+-export([index/3, class/1]).
+-export([children/1, children_idx/1, parent/1, leaves/1,
+         tree_text/1, flat_text/1,
          root_path/1, root_path/2, get_file/1]).
 -export([construct/1, create/2, replace/3, replace/2, copy/1]).
+%% Syntax tree manipulation
 -export([build/2]).
--export([index/3, class/1]).
+%% Graph walk
+-export([walk_graph/4]).
+%% Link filtering
+-export([filter_fun/1, reindex_links/1]).
+%% Environment nodes
+-export([create_env/2]).
+-export([add_env/2, set_env/2, get_envs/0, get_env/1, get_env/2,
+         del_envs/0, del_env/1, del_env_sub/2, del_env_val/2, env_type/1]).
 
--export([first_leaf/0, last_leaf/0]).
--export([get_comments/1, put_comments/2]).
 
--export([walk_graph/4, filter_fun/1, reindex_links/1]).
 
 -include("core.hrl").
 -include("refcore_schema.hrl").
@@ -52,8 +65,8 @@
 %% TODO: do not use this header here
 -include_lib("referl_lib/include/lib_export.hrl").
 
-%% =============================================================================
-%% Node properties
+%%% ============================================================================
+%%% Node properties
 
 %% @spec node_type(Node::node()) -> atom()
 %% @doc  The type of the given syntax node.
@@ -61,8 +74,8 @@
 node_type(Node) ->
     ?Graph:class(Node).
 
-%% =============================================================================
-%% Queries
+%%% ============================================================================
+%%% Queries
 
 %% @spec first_leaf() -> (Node::node()) -> node()
 %% @doc  First leaf of syntactic subtree specified by `Node' as root.
@@ -86,8 +99,8 @@ leaf_down_(Node, DownFun) ->
     end.
 
 
-%% =============================================================================
-%% Comment handling
+%%% ============================================================================
+%%% Comment handling
 
 %% @spec get_comments(node() | [node()]) -> comments()
 %% @doc Strips comments from the parameter nodes and stores them in a special
@@ -234,7 +247,7 @@ children(Node, Struct, Lex, Fun) ->
         ord_children(Struct, Lex, ChildSet, Fun)
     catch
         error:{badmatch, missing} ->
-            throw({invalid_children, Struct, ChildSet})
+            throw({invalid_children, Node, Struct, ChildSet})
     end.
 
 unord_children(Node, Struct, Lex) ->
@@ -384,13 +397,18 @@ leaves(Top, Nodes) ->
 %% @spec tree_text(node()) -> Chars
 %%       Chars = [char() | Chars]
 %% @doc Returns the textual representation of the syntactical subtree that
-%% starts at `Top'.
+%% starts at `Top' as a deep list.
 tree_text(Top) ->
-    [case ?ESG:data(Token) of
-         #lex{data=#token{prews=Pre, text=Text, postws=Post}} ->
-             [Pre, Text, Post];
-         _ -> ""
-     end || Token <- leaves(Top)].
+    [[T#token.prews, T#token.text, T#token.postws]
+        || Token <- leaves(Top),
+           #lex{data=T=#token{}} <- [?ESG:data(Token)]].
+
+
+%% @spec flat_text(node()) -> [char()]
+%% @doc Returns the textual representation of the syntactical subtree that
+%% starts at `Top'.
+flat_text(Top) ->
+    lists:flatten(tree_text(Top)).
 
 
 %% @spec root_path(node()) -> [{atom(), node()}]
@@ -543,11 +561,11 @@ construct(fun_clause, [Name, Pattern, Guard, Body]) ->
 
 construct({spec_field, Name}, [DefaultVal]) ->
     create(#typexp{type=spec_field},
-           [{tlex, create_lex(atom, atom_to_list(Name))},
+           [{tlex, create_lex(atom, io_lib:write(Name))},
             {texpr, DefaultVal}]);
 construct({record_field, Field}, [Value]) ->
     create(#expr{type=record_field},
-           [{elex, create_lex(atom, atom_to_list(Field))},
+           [{elex, create_lex(atom, io_lib:write(Field))},
             {esub, Value}]);
 construct({record_access, Name}, [Access, Value]) ->
     create(#expr{type=record_access},
@@ -564,7 +582,7 @@ construct({record_expr, Name}, [Fields]) ->
 construct({record_index, Name}, [Field]) ->
     create(#expr{type=record_index, value=Name},
            [{elex, create_lex('#', atom_to_list('#'))},
-            {elex, create_lex(atom, atom_to_list(Name))},
+            {elex, create_lex(atom, io_lib:write(Name))},
             {esub, Field}]);
 construct({record_update, Name}, [Var, Fields]) ->
     F = create(#expr{type=field_list}, [{esub, F} || F <- Fields]),
@@ -1309,3 +1327,89 @@ schema_has(Schema, Type) ->
     [] /= [ found || {From2, _, Tos} <- Schema
                    , {To2, _} <- Tos
                    , From2 == Type orelse To2 == Type ].
+
+
+%%% ============================================================================
+%%% Environment nodes
+%%% @todo introduce typedness
+
+%% @doc  Creates an environment node with the given data.
+%% @todo Make an inverse operation.
+%% @todo unexport
+create_env(Name, Value) ->
+    Data = #env{name = Name, value = Value},
+    Node = ?Graph:create(Data),
+    ?Graph:mklink(?Graph:root(), env, Node).
+
+%% @doc  Adds a new environment node if it does not already exists
+add_env(Name,Value)->
+    case lists:member(Value,get_env(Name)) of
+        true ->
+            ok;
+        false ->
+            create_env(Name,Value)
+    end.
+
+%% @doc  Sets a new value for an environment node
+set_env(Name,Value)->
+    Old = p_named_env(Name),
+    case create_env(Name,Value) of
+        ok ->
+            Del = lists:map(fun ?Graph:delete/1, Old),
+            case lists:all(fun(ok)->true; (_)->false end, Del) of
+                true  -> ok;
+                false -> Del
+            end;
+        Err ->
+            Err
+    end.
+
+%% @doc Returns the type of an environment node
+env_type(env_var) ->
+    proplist;
+env_type(_)->
+    atomic.
+
+%% @doc  Returns all environment nodes.
+get_envs() ->
+    L = [{Name,Value} ||
+            Env <- p_all_env(),
+            #env{name=Name,value=Value} <- [?Graph:data(Env)]],
+    [{K,proplists:get_all_values(K,L)} || K <- proplists:get_keys(L)].
+
+%% @doc  Returns the values of environment nodes with the given name.
+get_env(Name) ->
+    [(?Graph:data(Env))#env.value || Env <- p_named_env(Name)].
+
+%% @doc  Returns the looked-up subvalues from the environment variable.
+get_env(Name, EnvName) ->
+    proplists:get_all_values(EnvName, get_env(Name)).
+
+%% @doc  Deletes all environment nodes.
+del_envs() ->
+    [?Graph:delete(Env) || Env <- p_all_env()].
+
+%% @doc  Deletes environment nodes that have the name `Name'.
+del_env(Name) ->
+    [?Graph:delete(Env) || Env <- p_named_env(Name)].
+
+%% @doc  Deletes environment node subentries with key `EnvName' from the
+%% environment named `Name'.
+del_env_sub(Name, EnvName) ->
+    [?Graph:delete(Env) ||
+        Env <- p_named_env(Name),
+        {EN,_} <- [(?Graph:data(Env))#env.value],
+        EN==EnvName].
+
+%% @doc  Deletes environment node entries of name `Name' which are associated
+%% with the value `Value'.
+del_env_val(Name, Value) ->
+    Envs = ?Graph:path(?Graph:root(), [{env, {{name, '==', Name}, 'and',
+                                             {value, '==', Value}}}]),
+    [?Graph:delete(Env) || Env <- Envs].
+
+p_all_env()->
+    ?Graph:path(?Graph:root(), [env]).
+
+p_named_env(Name)->
+    ?Graph:path(?Graph:root(), [{env, {name, '==', Name}}]).

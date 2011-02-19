@@ -34,6 +34,8 @@
 -define(Server, referl_gs_server).
 -define(Watch, gs_ui_watcher).
 
+%% @doc Starts the Erlang GS graphical refactoring browser user interface
+%% and opens its main window.
 start() ->
     case whereis(?Server) of
 	undefined ->
@@ -43,6 +45,7 @@ start() ->
 	    already_started
     end.
 
+%% @doc Shuts down the Erlang GS graphical interface and closes its windows.
 stop() ->
     terminate().
 

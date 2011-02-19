@@ -53,6 +53,8 @@
 %%%     funcitons used in the file are added to this list.</li>
 %%%     <li>The module qualifiers of the module are removed from the
 %%%     corresponding functions.</li>
+%%%     <li>The functions used only as implicit funexpression are not
+%%%     imported and the module qualifiers will be intact.</li>
 %%% </ol>
 %%%
 %%% == Implementation status ==
@@ -61,7 +63,7 @@
 %%% @author Lilla Hajos <lya@elte.hu>
 
 -module(reftr_introduce_import).
--vsn("$Rev: 2590 $"). % for emacs "
+-vsn("$Rev: 2590 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -71,6 +73,7 @@
 %%% ============================================================================
 %%% Errors
 
+%%% @private
 error_text(name_conflict, FunInfo)->
     [ ?MISC:funlist_text(FunInfo),
       " cannot be imported:"
@@ -79,7 +82,7 @@ error_text(name_conflict, FunInfo)->
 %%% ============================================================================
 %%% Callbacks
 
-
+%%% @private
 prepare(Args) ->
     File    = ?Args:file(Args),
     Module  = ?Args:module(Args),
@@ -107,23 +110,22 @@ prepare(Args) ->
 import_forms(File, Module) ->
     [ Form || Form <- ?Query:exec(File, ?File:forms()),
               ?Form:type(Form) == import,
-              ?Query:exec(Form, ?Query:seq(?Form:expr(1), ?Expr:module())) == [Module] ]. %@todo
+              ?Query:exec(Form, ?Query:seq(?Form:expr(1), ?Expr:module())) 
+                  == [Module] ]. %@todo
 
 %%@doc Funs of `Mod' which are called from `File' with module qualifiers.
 funrefs(File, Mod) ->
     lists:flatmap(
-        fun(Fun) ->
-                [ FunRef ||
-                    FunRef <- ?Query:exec(Fun, ?Query:any(
-                                                  ?Fun:applications(),
-                                                  ?Fun:implicits())),
-                    ?Query:exec(FunRef, ?Expr:modq()) =/= [],
-                    ?Query:exec(FunRef, ?Query:seq([?Expr:clause(),
-                                                    ?Clause:form(),
-                                                    ?Form:file()])) =:= [File]
-                ]
-        end,
-        ?Query:exec(Mod, ?Mod:locals())).
+      fun(Fun) ->
+              [ FunRef ||
+                  FunRef <- ?Query:exec(Fun, ?Fun:applications()),
+                  ?Query:exec(FunRef, ?Expr:modq()) =/= [],
+                  ?Query:exec(FunRef, ?Query:seq([?Expr:clause(),
+                                                  ?Clause:form(),
+                                                  ?Form:file()])) =:= [File]
+              ]
+      end,
+      ?Query:exec(Mod, ?Mod:locals())).
 
 %%@doc Funs used or imported in `File' which belong to the right module.
 funs_to_import(File, Module, FunRefs) ->

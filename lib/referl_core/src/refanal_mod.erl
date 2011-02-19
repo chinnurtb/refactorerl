@@ -30,6 +30,7 @@
 -include("core.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% @private
 schema() ->
     [{module, record_info(fields, module), []},
      {root,   [{module, module}]},
@@ -37,8 +38,10 @@ schema() ->
      {clause, [{modctx, module}]}
     ].
 
+%%% @private
 externs(_) -> [].
 
+%%% @private
 insert(Parent, _, {_, Child}, _) ->
     case ?Anal:data(Child) of
         #form{type=module, tag=Name} ->
@@ -54,6 +57,7 @@ insert(Parent, _, {_, Child}, _) ->
         _ -> ok
     end.
 
+%%% @private
 remove(Parent, _, {_, Child}, _) ->
     case ?Anal:data(Child) of
         #form{type=module, tag=Name} ->
@@ -70,6 +74,7 @@ remove(Parent, _, {_, Child}, _) ->
         _ -> ok
     end.
 
+%%% @private
 update(Form, #form{type=module, tag=Name}) ->
     [File] = ?Graph:path(Form, [{form, back}]),
     ?NodeSync:move_refs(module, [exp, func, ref, ctx, imp, def], File, Name),

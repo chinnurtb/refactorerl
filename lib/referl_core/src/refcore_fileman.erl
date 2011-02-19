@@ -24,7 +24,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(refcore_fileman).
--vsn("$Rev: 4846 $"). % for emacs"
+-vsn("$Rev: 4970 $"). % for emacs"
 
 %% Client interface
 -export([add_file/1, add_file/2, drop_file/1, drop_file/2, save_file/1]).
@@ -36,6 +36,9 @@
          terminate/2, code_change/3]).
 
 -export([create_file_node/2]).
+
+%% used by ri:cat_errors/1
+-export([file_text/1, tokenize/1, form_hash/1, orig_text/2, create_scanner/0]).
 
 -include("core.hrl").
 
@@ -163,27 +166,34 @@ save_file(File) ->
 
 -record(fmenv, {scanner}).
 
+%%% @private
 init(_) ->
-    Scanner = ?ErlScanner:create(),
-    %% Scanner = ?Scanner:new(
-    %%              [{file, filename:join(code:priv_dir(referl_core),
-    %%                                    "refcore_erl_scanner.lex.tab")},
-    %%               {callback, fun make_token/1}]),
-    put(?EnvKey, #fmenv{scanner=Scanner}),
+    create_scanner(),
     {ok, ?EnvKey}.
 
+%%% @private
+create_scanner() ->
+    Scanner = ?ErlScanner:create(),
+    put(?EnvKey, #fmenv{scanner=Scanner}).
+
+
+%%% @private
 handle_call(Req, _From, S) ->
     {reply, handle(Req), S}.
 
+%%% @private
 handle_cast(_, S) ->
     {noreply, S}.
 
+%%% @private
 handle_info(_, S) ->
     {noreply, S}.
 
+%%% @private
 terminate(_, _) ->
     ok.
 
+%%% @private
 code_change(_, S, _) ->
     {ok, S}.
 
@@ -267,6 +277,7 @@ handle_save_file(File) ->
             original -> Path;
             Dir      -> filename:join(Dir, filename:basename(Path))
         end,
+    make_backup(SavePath),
     case file:open(SavePath, [write]) of
         {ok, Dev} ->
             Text =
@@ -285,6 +296,41 @@ handle_save_file(File) ->
             {error, file:format_error(Reason)}
     end.
 
+%% @doc Creates a new backup file if the `file.erl' already exists
+%% as described in the `backup' environment
+%% (a list containing strings, 'datestamp' or 'timestamp'),
+%% or `file.erl.bak.Date-Time' by default.
+%% Backup is skipped if the `backup' environment contains `no_backup'.
+%%
+%% @todo Do something meaningful when the file copy fails.
+make_backup(File) ->
+    BackupStructure =
+        case ?Syn:get_env(backup) of
+            [no_backup] ->
+                [];
+            [Backup] ->
+                Backup;
+            _ ->
+                ["bak", ".", datestamp, "-", timestamp]
+        end,
+    BackupPostfix = [convert_backup_str(BStr) || BStr <- BackupStructure],
+
+    case {filelib:is_file(File), BackupPostfix} of
+        {false, _} -> no_backup_needed;
+        {true, []} -> no_backup_needed;
+        {true, _}  ->
+            NewFile = lists:flatten([File, "."] ++ BackupPostfix),
+            file:copy(File, NewFile)
+    end.
+
+convert_backup_str(datestamp) ->
+    {Y, Mo, D} = date(),
+    io_lib:format("~4..0B~2..0B~2..0B", [Y, Mo, D]);
+convert_backup_str(timestamp) ->
+    {H, Mi, S} = time(),
+    io_lib:format("~2..0B~2..0B~2..0B", [H, Mi, S]);
+convert_backup_str(BStr) ->
+    ?MISC:to_list(BStr).
 
 %% @spec add_new_file(string(), progress()) ->
 %%                                          {file, node()}|{error, string()}
@@ -372,9 +418,9 @@ file_status(File) ->
 %% calling `update'). `Progress' specifies what kind of progress reporting
 %% should be done.
 
-update(File, Forms, Actions, Progress) ->
+update(File, _Forms, Actions, Progress) ->
     #file{type=FileType, path=Path} = ?Graph:data(File),
-    update(Actions, Forms, 1, start, File, FileType,
+    update(Actions, 1, start, File, FileType,
            progress_start(Progress, Path, act_count(Actions))).
 
 act_count(Actions)              -> act_count(Actions, 0).
@@ -384,39 +430,32 @@ act_count([_        | Tail], N) -> act_count(Tail, N);
 act_count([],                N) -> N.
 
 
-update([{hold, Form} | ATail], [Form | FTail], Index, PSt, File, FT, P) ->
-    Count = 1 + length(?Graph:path(Form, [{fdep, back}])),
-    update(ATail, FTail, Index+Count, PSt, File, FT, P);
-
-update([{del, Form} | ATail], [Form | FTail], Index, PSt, File, FT, P) ->
+update([{hold, Form} | ATail], Index, PSt, File, FT, P) ->
+    Count = 1 + length(dep_forms(Form)),
+    update(ATail, Index+Count, PSt, File, FT, P);
+update([{del, Form} | ATail], Index, PSt, File, FT, P) ->
     ?PreProc:detach(File, Form),
-    lists:foreach(
-      fun (F) ->
-              ?ESG:remove(File, form, F)
-              %%?ESG:finalize()
-      end, [Form | ?Graph:path(Form, [{fdep, back}])]),
-    update(ATail, FTail, Index, PSt, File, FT, progress_step(P));
-
-update([{ins, {Hash, Input}} | ATail], Forms, Index, PSt, File, FT, P) ->
+    [?ESG:remove(File, form, F) || F <- dep_forms(Form)],
+    ?ESG:remove(File, form, Form),
+    update(ATail, Index, PSt, File, FT, progress_step(P));
+update([{ins, {Hash, Input}} | ATail], Index, PSt, File, FT, P) ->
     {NewForms, PSt1} = ?PreProc:preprocess(Input, File, PSt),
-    Index1 =
-        lists:foldl(
-          fun
-              (ProcessedTokens, Index0) ->
-                  Form = parse_form(FT, ProcessedTokens),
-                  set_form_hash(Form, Hash),
-                  ?ESG:insert(File, {form, Index0}, Form),
-                  Index0+1
-          end,
-          Index,
-          NewForms),
-    %%?ESG:finalize(),
-    update(ATail, Forms, Index1, PSt1, File, FT, progress_step(P));
-
-update([], _Forms, _Index, _PSt, _File, _FT, _P) ->
+    NewFormIdxs = ?MISC:index_list(NewForms, Index),
+    [add_form_at(FT, File, Hash, Index0, ProcessedTokens)
+        || {ProcessedTokens, Index0} <- NewFormIdxs],
+    update(ATail, Index + length(NewForms), PSt1, File, FT, progress_step(P));
+update([], _Index, _PSt, _File, _FT, _P) ->
     %% here we could shut down the progress reporter if needed
     ok.
 
+%% Parses and adds the form at `Index' to the file.
+add_form_at(FT, File, Hash, Index, ProcessedTokens) ->
+    Form = parse_form(FT, ProcessedTokens),
+    set_form_hash(Form, Hash),
+    ?ESG:insert(File, {form, Index}, Form).
+
+dep_forms(Form) ->
+    ?Graph:path(Form, [{fdep, back}]).
 
 %% @spec merge(Old::[node()], New::[formData()]) -> [formAction()]
 %% @doc Calculates a set of actions that update an `Old' form list to be the
@@ -434,7 +473,10 @@ update([], _Forms, _Index, _PSt, _File, _FT, _P) ->
 %% does not really work, analyser modules can't cope with that.
 
 merge(Old, New) ->
-    merge(Old, New, []).
+    Merge = merge(Old, New, []),
+    lists:filter(fun({Tag, _}) -> Tag =:= del end, Merge) ++
+    lists:filter(fun({Tag, _}) -> Tag =/= del end, Merge).
+
 
 merge(Old, [], R) ->
     lists:reverse(R, [{del, Form} || Form <- Old]);
@@ -541,7 +583,7 @@ make_token(Type, Text, {_Start, _End}) ->
 %% @doc Turns file text into a form list of token lists.
 %% @todo lexical error handling
 tokenize(Text) ->
-    Scanner = (get(?EnvKey))#fmenv.scanner,
+    #fmenv{scanner = Scanner} = get(?EnvKey),
     case Scanner(Text, ?ErlScanner:init(fun make_token/3)) of
         {ok, Tokens} ->
             [{form_hash(Form), Form} ||
@@ -695,7 +737,7 @@ orig_text(_, _) -> "".
 %% @doc Returns the forms that are physically present in a file (i.e. skipping
 %% the results of file inclusion).
 real_forms(File) ->
-    ?Graph:path(File, [{form, {hash, '/=', virtual}}]).
+    ?Query:exec(File, ?File:real_forms()).
 
 %% @spec includers(node()) -> [node()]
 %% @doc Returns files that depend on `File'.

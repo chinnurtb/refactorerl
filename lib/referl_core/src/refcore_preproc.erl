@@ -56,7 +56,7 @@
 %%%      reporting
 
 -module(refcore_preproc).
--vsn("$Rev: 4846 $ ").
+-vsn("$Rev: 4980 $ ").
 
 -export([preprocess/2, preprocess/3, detach/2]).
 
@@ -438,13 +438,14 @@ find_include(include, Name, FileNode) ->
         [_InclFile] -> Name;
         _ ->
             #file{path=FilePath} = ?Graph:data(FileNode),
+            RealName = real_path(Name),
             Base = filename:dirname(FilePath),
             AppBases = dirs_by_env(appbase),
             Dirs = dirs_by_env(include) ++
                    component_dir(AppBases, "include") ++
                    component_dir(AppBases, "src"),
             case [Filename ||   Dir      <- [Base | Dirs],
-                                Filename <- [filename:join(Dir, Name)],
+                                Filename <- [filename:join(Dir, RealName)],
                                 filelib:is_file(Filename)] of
                 [Filename|_] -> Filename;
                 []       ->
@@ -471,13 +472,33 @@ find_include(include_lib, Name, _) ->
             end
     end.
 
-%% Returns the specified component subdirectory (e.g. 'src' or 'include')
+%% @doc Returns the specified component subdirectory (e.g. 'src' or 'include')
 %% from all applications.
 component_dir(AppBases, SubDir) ->
     Dirs = lists:concat([filelib:wildcard(filename:join([AppBase, "*", SubDir]))
                 || AppBase <- AppBases]),
     [Dir || Dir <- Dirs, filelib:is_dir(Dir)].
 
+%% @doc Resolves the beginning environment variable of the path.
+%% Primarily it searches for an #env{name=env_var, value={EnvName, Path}}
+%% environment in the graph,
+%% secondarily it checks the OS environment variables.
+real_path([$$|Path]) ->
+    ["", EnvVar|Rest] = re:split(Path, "([a-zA-Z_]*\/?)", [{return, list}]),
+    BEnvVar = filename:basename(EnvVar),
+    EnvPath =
+        case proplists:get_value(BEnvVar, ?Syn:get_env(env_var)) of
+            undefined ->
+                case os:getenv(BEnvVar) of
+                    false -> throw({unknown_env_in_include, [$$|BEnvVar]});
+                    EnvPath2 -> EnvPath2
+                end;
+            EnvPath2 ->
+                EnvPath2
+        end,
+    filename:join(EnvPath, lists:flatten(Rest));
+real_path(Path) ->
+    Path.
 
 %% Returns the names of the files
 %% that are described in the named environment.

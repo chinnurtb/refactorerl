@@ -81,13 +81,13 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(reftr_reorder_funpar).
--vsn("$Rev: 4766 $ ").
+-vsn("$Rev: 4955 $ ").
 
 %%% ============================================================================
 %%% Exports
 
 %% Callbacks
--export([prepare/1]).
+-export([prepare/1, error_text/2]).
 
 -include("user.hrl").
 
@@ -95,38 +95,57 @@
 %%% Callbacks
 
 %% @private
+error_text(dirty_arg, MFA) ->
+    FunInfo = ?MISC:fun_text(MFA),
+    ["The function has a dirty argument in ", FunInfo].
+
+%% Note: depends on the representation of applications
+%% TODO: move to a query library
+path_application_args() -> ?Expr:child(2).
+
+path_expr_fun() -> ?Query:seq([?Expr:clause(), ?Clause:form(), ?Form:func()]).
+
+legal_order(Order, Arity) -> lists:sort(Order) =:= lists:seq(1, Arity).
+
+%% @private
 prepare(Args) ->
     NewOrder = ?Args:order(Args),
     Fun      = ?Args:function(Args),
     Arity    = ?Fun:arity(Fun),
-    ?Check(lists:sort(NewOrder) =:= lists:seq(1, Arity),
-           ?RefError(bad_order, [Arity])),
-
-    {_Mod, ModFunArity} = ?Fun:mod_fun_arity(Fun),
-% todo Repair the side effect analyser and reinsert this check.
-    ?Check(not ?Fun:is_dirty(Fun), ?RefError(side_effect, [ModFunArity])),
-
+    ?Check(legal_order(NewOrder, Arity), ?RefError(bad_order, [Arity])),
     ImpCalls = ?Query:exec(Fun, ?Fun:implicits()),
+    [fun()  -> ?Expr:expand_funexpr(ImpCalls) end,
+     fun(_) -> perform(Fun, NewOrder)  end].
 
+%% @private
+perform(Fun, NewOrder) ->
     Clauses1 = ?Query:exec(Fun, ?Query:seq(?Fun:definition(), ?Form:clauses())),
     Clauses  = [{Cl, ?Query:exec(Cl, ?Clause:patterns())} || Cl <- Clauses1],
 
-    [fun() -> ?Expr:expand_funexpr(ImpCalls) end,
-     fun(_) ->
-        % note: function applications have to be determined here,
-        % as expand_funexpr will contribute to FunApps
-        FunApps  = ?Query:exec(Fun, ?Fun:applications()),
-        ArgLists = [?Query:exec(App, ?Expr:child(2)) || App <- FunApps],
-        AppArgs  = [{ArgList, ?Query:exec(ArgList, ?Expr:children())}
-                    || [ArgList] <- ArgLists],
+    %% Note: function applications have to be determined
+    %% here, as expand_funexpr will contribute to FunApps
+    ArgLists = ?Query:exec(Fun, ?Query:seq(?Fun:applications(),
+                                           path_application_args())),
+    AppArgs  = [{ArgList, ?Query:exec(ArgList, ?Expr:children())} ||
+                   ArgList <- ArgLists],
 
-        [?Transform:touch(Node) || {Node, _} <- Clauses ++ AppArgs],
-        [?Syn:replace(Node, {range, hd(NArgs), lists:last(NArgs)},
-                      reorder(NArgs, NewOrder))
-         ||  {Node, NArgs} <- Clauses ++ AppArgs ]
-     end].
+    [check_dirty_arg(Expr) || {_, ArgList} <- AppArgs, Expr <- ArgList],
 
+    [?Transform:touch(Node) || {Node, _} <- Clauses ++ AppArgs],
+    [?Syn:replace(Node, {range, hd(NArgs), lists:last(NArgs)},
+                  reorder(NArgs, NewOrder)) ||
+        {Node, NArgs} <- Clauses ++ AppArgs].
 
 %% @private
 reorder(Args, Order) ->
       [lists:nth(N, Args) || N <- Order].
+
+%% @private
+check_dirty_arg(Node) ->
+    ?Check(not ?Expr:has_side_effect(Node), error_dirty_arg(Node)).
+
+%% @private
+error_dirty_arg(Node) ->
+    [Func] = ?Query:exec(Node, path_expr_fun()),
+    {_ModuleNode, MFA} = ?Fun:mod_fun_arity(Func),
+    ?LocalError(dirty_arg, MFA).

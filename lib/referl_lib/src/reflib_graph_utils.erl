@@ -25,7 +25,7 @@
 %%% @author Kornel Horvath <kornel@inf.elte.hu>
 
 -module(reflib_graph_utils).
--vsn("$Rev: 3841 $").
+-vsn("$Rev: 4969 $").
 -include("lib.hrl").
 -include_lib("referl_core/src/refcore_schema.hrl").
 
@@ -287,7 +287,7 @@ edges_idx_(FromNode, Dir, [{ToLink,ToNode}|ToTagNodes], Edges) ->
 %%       Matching type (node, filter, function) with the matced object
 %%       (node() or id()) determine the matching case.
 %%       Pathes are concatenated path sequences given back by `NextFun'.
-%%       Can use with {@link referl_graph:path/2} function.
+%%       Can use with {@link refcore_graph:path/2} function.
 %%
 %% Example:
 %% ```

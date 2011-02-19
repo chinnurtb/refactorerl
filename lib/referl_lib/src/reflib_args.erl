@@ -78,10 +78,10 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reflib_args).
--vsn("$Rev: 4838 $ ").
+-vsn("$Rev: 4985 $ ").
 
 -export([string/1, string/3, integer/1, integer/3, name/1, atom/3, bool/3]).
--export([function/1, variable/1, module/1, file/1, expression/1,
+-export([function/1, variable/1, module/1, file/1, form/1, expression/1,
          functions/1, record/1, record_field/1, records/1,
          macro/1, macros/1, funclusters/1]).
 -export([varname/1, filename/1, macname/1, macuse/1]).
@@ -91,7 +91,7 @@
 -include("lib.hrl").
 -define(CallArg(A,S,L),?MISC:call_arg(A,S,L)).
 
-%%% @type node() = referl_graph:node()
+%%% @type node() = refcore_graph:node()
 
 %%% ============================================================================
 %%% Error text
@@ -493,6 +493,20 @@ filebyname(File) ->
     ?Query:exec1(
        ?File:find(File),
        ?RefError(file_not_present, [File])).
+
+
+%% @spec form(arglist()) -> node()
+%% @doc Returns the form node. This value is specified with
+%% a `file' and `position' keys in the argument list.
+form(Args) ->
+    ?CallArg(Args, "Form", [{fun formbypos/2, [file, position]}]).
+
+formbypos(File, Pos) ->
+    ?Query:exec1(
+       ?Query:seq([?File:find(File),
+                   ?File:token(Pos),
+                   ?Token:form()]),
+       ?RefError(illegal_pos, [File, Pos])).
 
 %% @spec macname(arglist()) -> string()
 %% @doc Returns the target macro name. This value is specified with

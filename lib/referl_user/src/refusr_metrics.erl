@@ -19,7 +19,7 @@
 %%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
-
+%%% @author Judit Koszegi <kojqaai.inf.elte.hu>
 
 %%% @doc <b>Metric Query Language</b>
 %%%
@@ -177,6 +177,21 @@
 %%% <b>Function return points</b> The metric gives the number of the functions
 %%%  possible return points or the functions of the given module.
 %%%
+%%% <b>Max length of line</b> Gives the length of the longest line of the given
+%%%    module or function.
+%%%
+%%% <b>Average length of line</b> Gives the average length of the lines within 
+%%%    the given module or function.
+%%%
+%%% <b>No space after comma</b> Gives the number of cases when there are not any
+%%%    whitespaces after a comma or a semicolon in the given module's or 
+%%%    function's text.
+%%%
+%%% <b>Is tail recursive</b> This metric returns with 1, if the given function
+%%%    is tail recursive; with 0, if it is recursive, but not tail recursive; 
+%%%    and -1 if it is not a recursive function (direct and indirect recursions
+%%%    are also examined). 
+%%%
 %%% <b>Aggregation filters:</b>
 %%%
 %%% max      : maximum on the result list
@@ -208,11 +223,12 @@
 %%% show metrics|filters
 
 -module(refusr_metrics).
--vsn("$Rev: 4871 $ ").
+-vsn("$Rev: 5015 $ ").
 
 -export([cmd/1, prepare/1, preQuery/1, metric/1]).
--export([fun_return_points/1]). %% todo -> ...
-%-compile(export_all).
+-export([fun_return_points/1]). %% DEPRICATED. Use this function instead: 
+                                %% ?Fun:return_points/1 
+                                %% //?Query:exec(?Fun:return_points(Fun)).// 
 
 -include("user.hrl").
 
@@ -340,7 +356,9 @@ funlist()->
       max_depth_of_cases, number_of_funclauses,
       branches_of_recursion, mcCabe, calls_for_function,
       calls_from_function, number_of_funexpr, number_of_messpass,
-      fun_return_points, average_size].
+      fun_return_points, average_size,
+      max_length_of_line, average_length_of_line,
+      no_space_after_comma, is_tail_recursive].
 
 %%% @private
 filterlist()->
@@ -494,6 +512,10 @@ show({Metric, NodeType, Node})->
       number_of_messpass    -> fun messpass/1;
       fun_return_points     -> fun fun_return_points/1;
       average_size          -> fun average_size/1;
+      max_length_of_line    -> fun max_length_of_line/1;
+      average_length_of_line-> fun avg_length_of_line/1;
+      no_space_after_comma  -> fun no_space_after_comma/1;
+      is_tail_recursive     -> fun is_tail_recursive/1;
                           _ -> format_error({metric_fun, [Metric]})
    end,
    try
@@ -636,7 +658,9 @@ funlist(module)->
       max_depth_of_calling, min_depth_of_calling,
       max_depth_of_cases, number_of_funclauses,
       branches_of_recursion, mcCabe, number_of_funexpr,
-      number_of_messpass, average_size].
+      number_of_messpass, average_size,
+      max_length_of_line, average_length_of_line,
+      no_space_after_comma].
 
 modsum({module, Mod})->
     calculateModuleSum(Mod);
@@ -899,8 +923,7 @@ average_size({module, _Mod})->
 average_size({function, _})->
     throw(?RefError(incompat, [average_size])).
 
-%%% @todo Documentation
-%%% @todo Move to another module.
+%%% @private
 fun_return_points({module, Mod})->
     Functions = ?Query:exec(Mod, ?Mod:locals()),
     lists:flatten([fun_return_points({function, Fun}) || Fun <- Functions]);
@@ -922,3 +945,88 @@ return_points(Expr, Kind) when  Kind == case_expr;
     [return_points(ExprL,?Expr:type(ExprL)) || ExprL <- Exprs];
 return_points(Expr, _Other)->
     Expr.
+
+%%% @private
+max_length_of_line({module, Mod}) ->
+    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    Text = lists:flatten(?Syn:tree_text(File)),
+    lists:max(lists:map(fun length/1, string:tokens(Text,"\n")));
+max_length_of_line({function, Fun}) ->
+    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
+    Text = lists:flatten(?Syn:tree_text(Def)), 
+    lists:max(lists:map(fun length/1, string:tokens(Text,"\n"))).
+
+%%% @private
+avg_length_of_line({module, Mod}) ->
+    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    Text = lists:flatten(?Syn:tree_text(File)),
+    List = lists:map(fun length/1, string:tokens(Text,"\n")),
+    lists:sum(List) div length(List);
+avg_length_of_line({function, Fun}) ->
+    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
+    Text = lists:flatten(?Syn:tree_text(Def)), 
+    List = lists:map(fun length/1, string:tokens(Text,"\n")),
+    lists:sum(List) div length(List).
+
+%%% @private
+no_space_after_comma({module, Mod}) ->
+    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    Text = lists:flatten(?Syn:tree_text(File)),
+    length(lists:filter(fun ([]) -> true;
+                            ([X|_]) -> X =/= $ 
+                        end,
+                        tl(string:tokens(Text,","))));
+no_space_after_comma({function, Fun}) ->
+    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
+    Text = lists:flatten(?Syn:tree_text(Def)), 
+    length(lists:filter(fun ([]) -> true;
+                            ([X|_]) -> not lists:member(X, [$\s, $\n, $\t])
+                        end,
+                        tl(string:tokens(Text,",;")))).
+
+%%% @private
+%%% return value: 1 means tail recursive function,
+%%%               0 means recursive, but not tail recursive function
+%%%              -1 means non-recursive function
+is_tail_recursive({function, Fun}) ->
+    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
+    Exprs = ?Query:exec(Def, ?Query:seq(?Form:clauses(), 
+                                        ?Clause:exprs())),
+    case lists:reverse(Exprs) of
+        [] -> -1; %% is not a recursive function
+        [X|Xs] -> 
+            case lists:all
+                (fun(Expr) -> not is_recursive(Fun, Expr) end,
+                 Xs) of
+                false -> 0;  %% is a recursive function, but not tail recursive
+                true  -> case  is_recursive(Fun, X) of
+                             false -> -1; % is not a recursive function
+                             true -> 1 % is a tail recursive function
+                         end
+            end        
+    end;
+is_tail_recursive({module, _Mod}) ->
+    throw(?RefError(incompat, [is_tail_recursive])).
+
+
+%%% @private
+%%% helper function for is_tail_recursive function
+is_recursive(Fun, Expr) ->
+    %has direct recursive call
+    length(?Query:exec(Fun, ?Fun:applications(Expr))) > 0 
+        orelse
+        %has indirect recursive call
+        has_indirect_recursion(Fun, ?Query:exec(Expr, ?Expr:funapps()), []).
+    
+
+%%% @private
+%%% helper function for is_tail_recursive function
+has_indirect_recursion(_Fun, [], _Examined) -> false;
+has_indirect_recursion(Fun, [F1|Fs], Examined) ->
+    Fun == F1  orelse
+        has_indirect_recursion
+          (Fun, 
+           Fs ++ (?Query:exec(F1, ?Fun:called()) -- Examined),
+           [F1|Examined]).
+ 
+    

@@ -20,7 +20,7 @@
 %%% @doc File properties and file based queries
 
 -module(reflib_file).
--vsn("$Rev: 4692 $ ").
+-vsn("$Rev: 4960 $ ").
 
 %% =============================================================================
 %% Exports
@@ -30,7 +30,7 @@
 
 %% Queries
 -export([token/1, token/2,
-         find/1, module/0, forms/0, form/1,
+         find/1, module/0, forms/0, form/1, real_forms/0, error_forms/0,
          include_form/1, includes/0, included/0,
          records/0, record/1, macros/0, macro/1, module_form/1]).
 
@@ -42,9 +42,6 @@
 -export([abs_path/1, rel_path/2, rel_incl_path/2]).
 
 -include("lib.hrl").
-
-%% TODO: do not use import
--import(?MISC, [to_atom/1, to_list/1]).
 
 %% =============================================================================
 %% File related properties
@@ -150,6 +147,18 @@ forms() ->
 form(I) ->
     [{form, I}].
 
+%% @spec real_forms() -> query(#file{}, #form{})
+%% @doc Returns the forms that are physically present in a file (i.e. skipping
+%% the results of file inclusion).
+real_forms() ->
+    [{form, {hash, '/=', virtual}}].
+
+%% @spec error_forms() -> query(#file{}, #form{})
+%% @doc The result query returns all error forms.
+error_forms() ->
+    [{form, {type,'==',error}}].
+
+
 %% @spec includes() -> query(#file{}, #file{})
 %% @doc The result query returns the included files.
 includes() ->
@@ -175,8 +184,8 @@ records() ->
 %% @spec record(atom() | string()) -> query(#file{}, #record{})
 %% @doc The result query returns the defined record by name .
 record(Name) ->
-    [{record, {name, '==', to_atom(Name)}}].
-    
+    [{record, {name, '==', ?MISC:to_atom(Name)}}].
+
 %% @spec macros() -> query(#file{}, #form{})
 %% @doc The result query returns all the defined macros.
 macros() ->
@@ -186,7 +195,7 @@ macros() ->
 %% @doc The result query returns the defined macro by name.
 macro(Name) ->
     [{form, {{type, '==', macro}, 'and',
-             {tag, '==', to_list(Name)}}}].
+             {tag, '==', ?MISC:to_list(Name)}}}].
 
 %%% ============================================================================
 %%% Manipulations

@@ -17,20 +17,20 @@
 %%% Portions created  by Eötvös  Loránd University are  Copyright 2009,
 %%% Eötvös Loránd University. All Rights Reserved.
 
+%%% @author Jimmy <>
+%%%
 %%% @doc todo
 %%%
-%%% @todo author
-
-%%% todo make representation change
+%%% @todo make representation change
 %%%       Missing functions:
 %%%         reflib_clause:kind/1
-%%%             <- referl_gs_sup:children/2
+%%%             &lt;- referl_gs_sup:children/2
 %%%         reflib_expression:kind/1
-%%%             <- referl_gs_sup:children/2
+%%%             &lt;- referl_gs_sup:children/2
 
 -module(referl_gs_sup).
 
--svn("$Rev$").
+-svn("$Rev$ ").
 
 %% Exports
 -export([root/0, children/1, info/1, text/1, find_node/1,
@@ -69,6 +69,7 @@
 -endif.
 
 %% Implementation
+
 root() ->
     #tag{class=root, node=?Graph:root()}.
 

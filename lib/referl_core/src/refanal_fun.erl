@@ -29,6 +29,7 @@
 
 -include("core.hrl").
 
+%%% @private
 schema() ->
     [{func, record_info(fields, func), [{funcall, func}]},
      {form,   [{fundef, func}]},
@@ -37,8 +38,10 @@ schema() ->
      {module, [{func, func}, {funexp, func}, {funimp, func}]}
     ].
 
+%%% @private
 externs(_) -> [].
 
+%%% @private
 insert(Parent, _, {Tag, Child}, _) ->
     case ?Anal:data(Parent) of
         #file{type=module} when Tag == form ->
@@ -60,7 +63,7 @@ insert(Parent, _, {Tag, Child}, _) ->
             walk(fun add/3,[{Child,{?NodeSync:get_node(module,File),Child}}]);
         #form{type=record} ->
             File = ?Anal:parent(Parent),
-            walk(fun add/3,[{Child,{?NodeSync:get_node(module,File),none}}]);
+            walk(fun add/3,[{Child,{File,none}}]);
         #form{} -> ok;
 
         #clause{type=fundef} when Tag == name ->
@@ -177,9 +180,7 @@ add(Expr, #expr{type=funref}, {Mod, {{_FRef, DefMod}, MRef}}) ->
     [{esub, FunNameN}, {esub, ArityN}] = ?Anal:children(Expr),
     Arity = reflib_expression:value(ArityN),
     FunName = reflib_expression:value(FunNameN),
-    %%FunNode = ?NodeSync:get_node(func, {DefMod, {FunName, Arity}}),
     ?NodeSync:add_ref(func, {MRef, {Expr, Mod}}, {DefMod, {FunName, Arity}}),
-    %?NodeSync:add_ref(module, {MRef, FunNode}, Mod),
     [];
 
 add(Expr, #expr{}, Ctx) ->
@@ -201,7 +202,7 @@ add_funref(Ref, FunNd, Arity, LM) ->
             ok
     end.
 
-
+%%% @private
 remove(Parent, _, {Tag, Child}, _) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -316,7 +317,7 @@ del(Expr, #expr{}, Top) ->
 del(TExpr, #typexp{}, Ctx) ->
     [{C, Ctx} || {_, C} <- ?Anal:children(TExpr)].
 
-
+%%% @private
 update(_,_) -> ok.
 
 

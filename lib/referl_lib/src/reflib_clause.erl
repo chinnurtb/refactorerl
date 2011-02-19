@@ -17,13 +17,13 @@
 %%% Portions created  by Eötvös  Loránd University are  Copyright 2009,
 %%% Eötvös Loránd University. All Rights Reserved.
 
-%%% @doc This module contains functions that return a query that expects a 
+%%% @doc This module contains functions that return a query that expects a
 %%% clause semantical node as starting point.
 %%%
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reflib_clause).
--vsn("$Rev: 3992 $ ").
+-vsn("$Rev: 4961 $ ").
 
 -include("lib.hrl").
 
@@ -75,7 +75,7 @@ guard() -> [guard].
 body() -> [body].
 
 %% @spec body(integer()) -> query(#clause{}, #expr{})
-%% @doc The result query returns the `I'th top-level expression from the body 
+%% @doc The result query returns the `I'th top-level expression from the body
 %% of the clause.
 body(I) -> [{body, I}].
 
@@ -125,19 +125,29 @@ variable(VarName) ->
 
 %% @spec is_same_clause({#clause{}, #clause{}}) -> bool()
 %% @doc  Returns whether the two clauses are the same, disregarding whitespace.
+is_same_clause({C, C}) ->
+    true;
 is_same_clause({C1, C2}) ->
-    [Type1|Infos1] = clause_data(C1),
-    [Type2|Infos2] = clause_data(C2),
-    Diffs = [ d ||  {X1, X2} <- lists:zip(Infos1, Infos2),
-                    length(X1) /= length(X2) orelse
-                    not lists:all(fun ?Expr:is_same_expr/1, lists:zip(X1, X2))],
-    Type1 == Type2 andalso Diffs == [].
+    type(C1) == type(C2) andalso clause_diffs(C1, C2) == [].
 
+clause_diffs(C1, C2) ->
+    Infos1 = clause_data(C1),
+    Infos2 = clause_data(C2),
+    [ d ||  {X1, X2} <- lists:zip(Infos1, Infos2),
+            length(X1) /= length(X2) orelse
+            not lists_all(fun ?Expr:is_same_expr/1, lists:zip(X1, X2))].
+
+lists_all(_Fun, []) -> true;
+lists_all(Fun, [X|Xs]) ->
+?d(X),
+    case Fun(X) of
+        true  -> lists_all(Fun, Xs);
+        false -> false
+    end.
 
 %% Collects data about the clause.
 clause_data(Clause) ->
-    Type       = type(Clause),
     Patterns   = ?Query:exec([Clause], patterns()),
     Guards     = ?Query:exec([Clause], guard()),
     Body       = ?Query:exec([Clause], body()),
-    [Type, Patterns, Guards, Body].
+    [Patterns, Guards, Body].

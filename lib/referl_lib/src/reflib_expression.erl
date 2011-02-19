@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reflib_expression).
--vsn("$Rev: 4763 $ ").
+-vsn("$Rev: 4977 $ ").
 
 -export([role/1, type/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
@@ -35,7 +35,7 @@
 -export([is_same_expr/1, is_leaf/1]).
 -export([has_side_effect/1, has_message_passing/1, has_dirty_fun/1]).
 -export([fun_app_args/1, app_has_modq/1]).
-
+-export([virtuals/1]).
 
 
 -include("lib.hrl").
@@ -369,21 +369,30 @@ get_var_names(Prefix, Count, List) ->
 %% @todo Support macros.
 %% @todo Does not detect peculiar cases, e.g. two similar functions,
 %%       because the function arguments have separate variable nodes.
+is_same_expr({E, E}) ->
+    true;
 is_same_expr({E1, E2}) ->
-    case {is_leaf(E1), is_leaf(E2)} of
-        { true, false} -> false;
-        {false,  true} -> false;
-        { true,  true} ->
+    case {is_leaf(E1), is_leaf(E2), role(E1), role(E2)} of
+        {    _,     _, R1, R2} when R1 =/= R2 -> false;
+        { true, false,  _,  _} -> false;
+        {false,  true,  _,  _} -> false;
+        { true,  true,  _,  _} ->
             lex_content(E1) == lex_content(E2);
-        {false, false} ->
-            {Type1, Subs1, Cls1} = expr_data(E1),
-            {Type2, Subs2, Cls2} = expr_data(E2),
-            Type1 == Type2 andalso
-                lex_content(E1) == lex_content(E2) andalso
+        {false, false,  _,  _} ->
+            {Subs1, Cls1} = expr_data(E1),
+            {Subs2, Cls2} = expr_data(E2),
+            lex_content(E1) == lex_content(E2) andalso
                 length(Subs1) == length(Subs2) andalso
                 length(Cls1) == length(Cls2) andalso
-                lists:all(fun is_same_expr/1, lists:zip(Subs1, Subs2)) andalso
-                lists:all(fun ?Clause:is_same_clause/1, lists:zip(Cls1, Cls2))
+                lists_all(fun is_same_expr/1, lists:zip(Subs1, Subs2)) andalso
+                lists_all(fun ?Clause:is_same_clause/1, lists:zip(Cls1, Cls2))
+    end.
+
+lists_all(_Fun, []) -> true;
+lists_all(Fun, [X|Xs]) ->
+    case Fun(X) of
+        true  -> lists_all(Fun, Xs);
+        false -> false
     end.
 
 %% Returns whether the expression has subexpressions.
@@ -403,10 +412,9 @@ lex_content(Expr) ->
 
 %% Collects data about the expression.
 expr_data(Expr) ->
-    Type = role(Expr),
     Subs = ?Query:exec([Expr], sub()) -- [Expr],
     Cls  = ?Query:exec([Expr], clauses()),
-    {Type, Subs, Cls}.
+    {Subs, Cls}.
 
 %% @spec has_side_effect(#expr{}) -> bool()
 %% @doc Returns true if one of the expressions has a side effect,
@@ -435,3 +443,8 @@ fun_app_args(App) ->
 %% @doc Returns whether the given application has a module qualifier.
 app_has_modq(App) ->
     [] =/= ?Query:exec(App, modq()).
+
+%% @spec (#expr{}) -> [#lex{}]
+%% @doc Returns every virtual token under the expression.
+virtuals(Exp) ->
+    [Token || Token <- ?Query:exec(Exp, ?Query:seq(deep_sub(), [elex])), (?Graph:data(Token))#lex.data =:= virtual].

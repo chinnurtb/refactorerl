@@ -52,7 +52,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_rename_mod).
--vsn("$Rev: 4707 $ ").
+-vsn("$Rev: 4956 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -77,7 +77,7 @@ prepare(Args)->
     ?Check(not filelib:is_file(NewPath), ?RefError(file_exists,[NewPath])),
     References = [Node || Node <- ?Query:exec(ModuleObj, ?Mod:references()), not is_module_mac(Node)],
 
-    ?Macro:check_macros(References),
+    ?Macro:check_macros(References, {elex, 1}),
     
     fun()->
             transform(FileNode, ModuleForm, References, NewName, NewPath,

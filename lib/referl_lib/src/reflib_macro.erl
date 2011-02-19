@@ -21,7 +21,7 @@
 %%% macros. Macros are represented with the form that defines them.
 
 -module(reflib_macro).
--vsn("$Rev: 4857 $ ").
+-vsn("$Rev: 4957 $ ").
 
 %% =============================================================================
 %% Exports
@@ -34,7 +34,7 @@
 -export([file/0, find/1, macros/0, records/0, references/0]).
 -include("lib.hrl").
 
--export([check_macros/1, check_macros/2, update_macro/3]).
+-export([check_macros/1, check_macros/2, update_macro/3, usages/1]).
 
 %% =============================================================================
 %% Properties
@@ -113,8 +113,8 @@ substs_recur(Subst, Direction) ->
     end.
 
 %% @spec check([node()]) -> bool()
-%% @doc checks a list of virtual tokens if the macro they are originated from is used
-%% in the same role in every substitution
+%% @doc checks a list of virtual tokens if the macro they are originated
+%% from is used in the same role in every substitution
 %% @TODO better name
 check([Virtual | Virtuals]) ->
     [Token] = ?Query:exec(Virtual, [orig]),
@@ -128,31 +128,52 @@ check([]) -> true.
 %% @spec usages({atom, node()}) -> [node()]
 %% @doc returns the list of semantic nodes the given Token associated with
 %% @TODO the rest of the possible token types, better name
-usages({Type, Token}) ->
+usages({TokenType, Token}) ->
+    if 
+        (TokenType == '(' orelse TokenType == ')') ->
+                                                   Type = parenthesis;
+        true                                       -> 
+                                                   Type = TokenType
+    end,
     Virtuals = ?Query:exec(Token, [{orig, back}]),
-    Exprs = ?Query:exec(Virtuals, [{elex, back}]),
-    Erefs = [usages(Type, Expr, elex) || Expr <- Exprs],
+    GetNode = fun(Virtual) ->
+         [Node] = ?Query:exec(Virtual, ?Query:any([
+                           [{elex, back}], [{flex, back}],
+                           [{clex, back}], [{tlex, back}]
+                  ])),
+         Tag = case ?ESG:data(Node) of
+              #form{}   -> flex;
+              #clause{} -> clex;
+              #expr{}   -> elex;
+              #typexp{} -> tlex
+         end,
+         usages(Type, Node, {Tag, ?ESG:index(Node, Tag, Virtual)})
+    end,
+    Res = [GetNode(V) || V <- Virtuals],
 
-    Texprs = ?Query:exec(Virtuals, [{tlex, back}]),
-    Trefs = [usages(Type, Texpr, tlex) || Texpr <- Texprs],
+   % Exprs = ?Query:exec(Virtuals, [{elex, back}]),
+   % Erefs = [usages(Type, Expr, elex) || Expr <- Exprs],
 
-    Forms = ?Query:exec(Virtuals, [{flex, back}]),
-    Frefs = [usages(Type, Fexpr, flex) || Fexpr <- Forms],
-    Res = Erefs ++ Trefs ++ Frefs,
+   % Texprs = ?Query:exec(Virtuals, [{tlex, back}]),
+   % Trefs = [usages(Type, Texpr, tlex) || Texpr <- Texprs],
+
+   % Forms = ?Query:exec(Virtuals, [{flex, back}]),
+   % Frefs = [usages(Type, Fexpr, flex) || Fexpr <- Forms],
+   % Res = Erefs ++ Trefs ++ Frefs,
     lists:map(fun([])-> [Token]; (X) -> X end, Res);
 usages(X) -> [X].
 
-usages(atom, Expr, Link) ->
+usages(atom, Expr, {Link, _}) ->
      case Link of
           elex ->
                  ?Query:exec(Expr, ?Query:any([
-                         [modref],                %% module ref    -- elex
+                         ?Expr:module(),
                          [{name, back}, {funcl, back}, fundef], %% function def   -- elex
                          [{esub, back}, funlref], %% function application or impl fun expr  -- elex
                          [{esub, back}, {esub, back}, funeref], %% function application with module qualifier -- elex
                          [{esub, back}, {esub, back}, funlref], %% function application with module qualifier -- elex
-                         [recref], %% record ref  %% record referenc -- elex
-                         [fieldref] %% recordfield ref -- elex
+                         ?Expr:record(),
+                         ?Expr:field()
                  ]));
           tlex ->
                  ?Query:exec(Expr, [fielddef]);
@@ -162,12 +183,55 @@ usages(atom, Expr, Link) ->
                          [recdef] %% record def -- flex
                  ]))
      end;
-usages(variable, Expr, elex) ->
+usages(variable, Expr, {elex, _}) ->
             ?Query:exec(Expr, ?Query:any([
                          [varbind],
                          [varref]
                       ])
             );
+usages(parenthesis, Expr, {Link, _}) ->
+     case Link of
+          elex ->
+                 ?Query:exec(Expr, ?Query:any([
+                         [{esub, back}, funlref],
+                         [{esub, back}, funeref],
+                         []
+                 ]));
+          clex ->
+                 ?Query:exec(Expr, ?Query:seq(?Clause:form(), ?Form:func()));
+          flex ->
+                 case ?Form:type(Expr) of
+                      module ->
+                               ?Query:exec(Expr, ?Form:module());
+                      record ->
+                               ?Query:exec(Expr, ?Form:record());
+                      _      -> Expr
+                 end
+     end;
+usages(',', Expr, {LinkTag, Index}) ->
+     Res = case LinkTag of
+          elex ->
+                 ?Query:exec(Expr, ?Query:any([
+                         [{esub, back}, funlref],
+                         [{esub, back}, funeref],
+                         [{esub, back}, recref],
+                         []
+                 ]));
+          clex ->
+                 ?Query:exec(Expr, ?Query:any([
+                         ?Query:seq(?Clause:form(), ?Form:func()),
+                         []
+                 ]));
+          flex ->
+                 ?Query:exec(Expr, ?Query:any([
+                         [recdef],
+                         []
+                 ]))
+              end,
+     case Res of
+          [] ->     [{Expr, Index}];
+          [Node] -> [{Node, Index}]
+     end;
 usages(_, Expr, _) -> [Expr].
 
 %% @spec refs(node()) -> [[node()]]
@@ -180,16 +244,23 @@ refs(Macro) ->
         end,
     [F(X) || X <- Substs].
 
-check_macros(Updates) ->
-    Virtuals = lists:filter(fun(Z) -> ?Query:exec(Z, [llex]) =/= [] end,
-                    lists:concat(lists:map(fun(X) -> ?Query:exec(X, [elex]) end,
-                                    Updates))),
-    ?Check(?Macro:check(Virtuals), ?RefError(mac_error, [])).
-
 check_macros(Updates, Path) ->
     Virtuals = [Token || 
            Token <- lists:concat([?Query:exec(Exp, [Path]) || Exp <- Updates]),
            (?Graph:data(Token))#lex.data == virtual],
+    ?Check(?Macro:check(Virtuals), ?RefError(mac_error, [])).
+
+check_macros(Updates) ->
+
+    Virts = fun(ExpList, Path) -> 
+            [Token || Token <- lists:concat([?Query:exec(Exp, [Path]) || Exp <- ExpList]),
+                                                (?Graph:data(Token))#lex.data == virtual]
+        end,
+    Virtuals = lists:concat([Virts(ExpList, Path) || {ExpList, Path} <- Updates]),
+
+%    Virtuals = [Token || 
+%           Token <- lists:concat([?Query:exec(Exp, [Path]) || {Exp, Path} <- Updates]),
+%           (?Graph:data(Token))#lex.data == virtual],
     ?Check(?Macro:check(Virtuals), ?RefError(mac_error, [])).
 
 update_macro(Node, Path, NewName) ->

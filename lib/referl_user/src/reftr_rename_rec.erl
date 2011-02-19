@@ -62,7 +62,7 @@
 
 
 -module(reftr_rename_rec).
--vsn("$Rev: 4858 $"). % for emacs"
+-vsn("$Rev: 4959 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1]).
@@ -89,11 +89,9 @@ prepare(Args) ->
     ?Macro:check_macros(Refs, elex),
 
     fun() ->
-   %     [ ?Syn:replace(Expr, {elex,2}, [io_lib:write_atom(NewName)])
+        ?ESG:update(Def, (?ESG:data(Def))#form{tag=NewName}),
         [ ?Macro:update_macro(Expr, {elex, 2}, io_lib:write_atom(NewName))
           || Expr <- Refs],
-        %%?Syn:replace(Def, {flex,4}, [io_lib:write_atom(NewName)]),
-        ?ESG:update(Def, (?ESG:data(Def))#form{tag=NewName}),
         [ ?Transform:touch(Expr) || Expr <- [Def | Refs]] 
     end.
 

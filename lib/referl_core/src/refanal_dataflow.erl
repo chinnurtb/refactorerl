@@ -31,14 +31,17 @@
 
 -include("core.hrl").
 
+%%% @private
 schema() ->
     [{expr,   [{flow, expr},  {dep, expr},
                {sel, expr},   {cons_back, expr},
                {sel_e, expr}, {cons_e, expr}]}].
     %% Note: s_i, c_i <-> sel/i, cons_back/i
 
+%%% @private
 externs(_) -> [].
 
+%%% @private
 insert(Parent, Pre, {Tag, Child}, Post) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -132,8 +135,8 @@ insert(Parent, Pre, {Tag, Child}, Post) ->
                                      T ==  arglist ->
             App = ?Anal:parent(Parent),
             AppPar = ?Anal:parent(App),
-            add_del(rmlink, App, ?Anal:data(App), AppPar),
-            add_del(mklink, App, ?Anal:data(App), AppPar),            
+            add_del(rmlink, ?Anal:data(App), App, AppPar),
+            add_del(mklink, ?Anal:data(App), App, AppPar),            
             walk(fun add_del/4, [{Child, Parent}], mklink);
         #expr{} ->
             %% Child es reszkifejezeseinek az elemzese, uj el a
@@ -157,7 +160,7 @@ add_del(Dir, #expr{type=variable}, Expr, _P) ->
                 [Var] ->
                     VarBs = ?Graph:path(Var, [{varbind, back}]),
                     safe_link(Dir, VarBs, flow, Expr);
-                [] -> ok % io:format("~nError in variable analyzer!~n~n", [])
+                [] -> io:format("~nError in variable analyzer!~n~n", [])
                 %% Todo: Eliminate this branch...
             end
     end,
@@ -414,7 +417,7 @@ add_del(_Dir, #clause{}, Clause, P) ->
 
 add_del(_Dir, _Type, _Expr, _P) -> [].
 
-
+%%% @private
 remove(Parent, Pre, {Tag, Child}, Post) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -489,6 +492,7 @@ remove(Parent, Pre, {Tag, Child}, Post) ->
              end
     end.
 
+%%% @private
 update(_,_) -> ok.
 
 walk(Fun, [{Node, Parent} | Tail], Dir) ->

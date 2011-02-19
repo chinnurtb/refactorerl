@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq_lib).
--vsn("$Rev: 4867 $ ").
+-vsn("$Rev: 4994 $ ").
 
 -include("user.hrl").
 
@@ -335,7 +335,29 @@ entites() ->
             type = int,
             func = fun(File) ->
                            file_metrics(fun_return_points, File, true)
+                   end},
+       
+         #property{
+            name = [max_length_of_line],
+            type = int,
+            func = fun(File) ->
+                           file_metrics(max_length_of_line, File, true)
+                   end},
+
+         #property{
+            name = [average_length_of_line, avg_length_of_line],
+            type = int,
+            func = fun(File) ->
+                           file_metrics(average_length_of_line, File, true)
+                   end},
+
+         #property{
+            name = [no_space_after_comma],
+            type = int,
+            func = fun(File) ->
+                           file_metrics(no_space_after_comma, File, true)
                    end}
+
         ]},
 
 %%% ============================================================================
@@ -547,7 +569,28 @@ entites() ->
             name = [fun_return_points, fun_return_point,
                     function_return_points, function_return_point],
             type = int,
-            func = fun(Fun) -> fun_metrics(fun_return_points, Fun) end}
+            func = fun(Fun) -> fun_metrics(fun_return_points, Fun) end},
+ 
+         #property{
+            name = [max_length_of_line],
+            type = int,
+            func = fun(Fun) -> fun_metrics(max_length_of_line, Fun) end},
+
+         #property{
+            name = [average_length_of_line, avg_length_of_line],
+            type = int,
+            func = fun(Fun) -> fun_metrics(average_length_of_line, Fun) end},
+
+         #property{
+            name = [no_space_after_comma],
+            type = int,
+            func = fun(Fun) -> fun_metrics(no_space_after_comma, Fun) end},
+        
+         #property{
+            name = [is_tail_recursive],
+            type = int,
+            func = fun(Fun) -> fun_metrics(is_tail_recursive, Fun) end}
+          
         ]},
 
 %%% ============================================================================
@@ -870,6 +913,15 @@ entites() ->
             func = fun(Expr) ->
                            is_last_expr(Expr) andalso
                                ?Expr:type(Expr) == application
+                   end},
+
+          #property{
+            name = [tuple_repr_of_record, is_tuple_repr_of_record,
+                   record_tuple, is_record_tuple],
+            type = bool,
+            func = fun(Expr) ->
+                           ?Expr:type(Expr) == tuple andalso
+                               has_record_definition(Expr)
                    end}
         ]}
     ].
@@ -894,7 +946,7 @@ entity(Type) ->
         Rec   -> Rec
     end.
 
-%% @type node() = referl_graph:node().
+%% @type node() = refcore_graph:node().
 
 %% @spec sel_fun(EntityType::atom(), SelectorName::atom()) -> [Fun]
 %%       Fun = (node()) -> [node()]
@@ -984,11 +1036,34 @@ last_common_node(_,_) -> ?Graph:root().
 
 last_common_node([{_L, N} = H|T1], [H|T2], _) -> last_common_node(T1, T2, N);
 last_common_node(_, _, Node) -> Node.
-
+ 
+has_record_definition(Tuple) ->
+    case lists:filter (fun(Node) -> ?Expr:type(Node) == atom end,
+                       ?Dataflow:reach(
+                          ?Query:exec(Tuple, ?Expr:child(1)), [back])) 
+    of
+        [AtomExpr] ->  
+            case find_rec_with_name(Tuple, ?Expr:value(AtomExpr)) of
+                [Rec] ->
+                    length(?Query:exec(Rec, ?Rec:fields())) + 1 ==
+                        length(?Query:exec(Tuple, ?Expr:children()));
+                [] -> 
+                    false
+            end;
+        _ ->
+             false
+    end.
+           
+find_rec_with_name(Tuple, Atom) ->
+    ?Query:exec(Tuple, ?Query:seq([?Expr:clause(),
+                                   ?Clause:form(),
+                                   ?Form:file(),
+                                   ?Rec:find(Atom)])).
+                         
 %% @private
 %% @spec file_metrics(Name::atom(), File::entity(), Check::atom()) -> int()
-%% @doc Metrics needs a module node, and a file entity can be either a module node or
-%% a file node, so it needs to be converted.
+%% @doc Metrics needs a module node, and a file entity can be either a
+%% module node or a file node, so it needs to be converted.
 %% Module nodes exist without files in the database, and most of the metrics
 %% needs the files too. The `Check' parameter indicates whether the file is
 %% needed.

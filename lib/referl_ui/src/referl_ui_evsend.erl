@@ -47,7 +47,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_ui_evsend).
--vsn("$Rev: 3779 $").
+-vsn("$Rev: 5002 $ ").
 -behaviour(gen_event).
 
 -export([start/1, start/2]).
@@ -63,6 +63,10 @@
 start(Pid) ->
     start(Pid, notag).
 
+%% @spec start(pid(),any()) -> pid()
+%% @doc Registers a new process that should receive UI events. Returns the
+%% dispatcher process ID.
+%% The given tag will accompany each piped message in the form of {Tag,Msg}.
 start(Pid, Tag) ->
     spawn(fun() -> sender(Pid, Tag) end).
 

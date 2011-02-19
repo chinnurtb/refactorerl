@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq).
--vsn("$Rev: 4855 $ ").
+-vsn("$Rev: 5016 $ ").
 
 -export([run/2]).
 -export([prepare/1, error_text/2]).
@@ -28,6 +28,7 @@
 -include("user.hrl").
 
 -define(Lib, refusr_sq_lib).
+-define(SQUI, refusr_sq_ui).
 
 %% The record `state' stores the data of a single step in the semantic query.
 %% `action' is the type of the current action. The action can be:
@@ -37,16 +38,15 @@
 %%   iteration
 %%   property_query
 %%   statistics
-%% `type', `res' and `prev_res', `prev_res' contains the data of the current and
-%% the previous result.
--record(state, {action=selection, type, res, prev_type, prev_res=[],
-                show_pos=true}).
+%% `type', `res', `prev_type' and `prev_res' contain data for the current and
+%% the previous result respectively.
+-record(state, {action=selection, type, res, prev_type, prev_res=[]}).
 
 -record(chains, {max_length=0, complete=[], incomplete=[], recursive=[]}).
 
 %%% ============================================================================
 %%% Errors
-
+%%% @private
 error_text(lexical_error, Error) ->
     refusr_sq_lexer:format_error(Error);
 error_text(syntax_error, Error) ->
@@ -76,11 +76,16 @@ run(Params, Query) when is_list(Query) ->
         {ok, Tokens, _} ->
             case refusr_sq_parser:parse(Tokens) of
                 {ok, Result} ->
-                    Display = proplists:get_value(display, Params, stdio),
-                    ShowPos = proplists:get_value(show_pos, Params, true),
                     QueryRes = process_semantic_query(Params, Result),
-                    show(QueryRes, Display, ShowPos);
-                {error, {_, _, Err}} -> throw(?LocalError(syntax_error, Err))
+                    ShowPos = proplists:get_value(show_pos, Params, scalar),
+                    PosNodes = ?SQUI:poscalc(QueryRes, ShowPos),
+                    LineNum = proplists:get_value(linenum, Params, false),
+                    PosText = ?SQUI:show(PosNodes, LineNum),
+                    Dev = proplists:get_value(display, Params, stdio),
+                    Display = {Dev, LineNum},
+                    ?SQUI:display(PosText, Display);
+                {error, {_, _, Err}} ->
+                    throw(?LocalError(syntax_error, Err))
             end;
         {error, {_, _, Error}, _} ->
             throw(?LocalError(lexical_error, Error))
@@ -272,7 +277,7 @@ filter({'and', Filter1, Filter2}, EntityType, Entities) ->
            EntityType,
            filter(Filter1, EntityType, Entities));
 
-%% todo: sq + list [a,s,d...] -> split
+%% @todo sq + list [a,s,d...] -> split
 filter({'in', Property, {query_seq, QuerySeq}}, EntityType, Entities) ->
     FstInitialState = #state{res=[hd(Entities)], type=EntityType},
     FstResultingState = process_query_seq(FstInitialState, QuerySeq),
@@ -308,8 +313,8 @@ filter({query_seq, QuerySeq}, EntityType, Entities) ->
       end,
       Entities);
 
-%% Comparison works on atom, int and string.
-%% todo: regexp match -> if a string doesn't match
+%% @doc Comparison works on atom, int and string.
+%% @todo regexp match -> if a string doesn't match
 filter({CompOp, Filt1, Filt2}, EntityType, Entities) ->
     Comp1 = if
                 is_tuple(Filt1) -> filter(Filt1, EntityType, Entities);
@@ -427,21 +432,19 @@ prop_fun(EntityType, Filter) ->
         [Fun]   -> Fun
     end.
 
-flatsort(List) -> lists:usort(lists:flatten(List)).
-
 collect_res(#state{res=Res} = State) ->
     PrevRes =
         case State#state.action of
             property_query ->
                 State#state.prev_res;
             closure ->
-                flatsort(Res#chains.complete ++
-                         Res#chains.incomplete ++
-                         Res#chains.recursive);
+                ?MISC:flatsort(Res#chains.complete ++
+                               Res#chains.incomplete ++
+                               Res#chains.recursive);
             iteration ->
-                flatsort([hd(List) || List <- Res#chains.incomplete]);
+                ?MISC:flatsort([hd(List) || List <- Res#chains.incomplete]);
             _ ->
-                flatsort(Res)
+                ?MISC:flatsort(Res)
         end,
 
     PrevType = case State#state.action of
@@ -449,196 +452,3 @@ collect_res(#state{res=Res} = State) ->
                    _              -> State#state.type
                end,
     {PrevType, PrevRes}.
-
-
-%%% ============================================================================
-%%% Show
-
-%% Calls `positions/2' when position display is on.
-positions(_Type, _List, false) ->
-    not_needed;
-positions(Type, List, true) ->
-    positions(Type, List).
-
-%% If the node position is not needed,
-%% this function skips its calculation.
-%% Otherwise, it returns the real position and text of the node.
-fetch(Node, Type, not_needed, false) ->
-    {1, text(Type, Node)};
-fetch(Node, Type, Dict, true) ->
-    {dict:fetch(Node, Dict), text(Type, Node)}.
-
-
-show(#state{type=Type, res=Nodes, action=initial_selection}, Disp, ShowPos) ->
-    List = lists:flatten(Nodes),
-    Dict = positions(Type, List, ShowPos),
-    display(
-      lists:append(
-        [[fetch(Node, Type, Dict, ShowPos),
-          {nopos, "\n"}] || Node <- List]),
-      Disp);
-
-show(#state{type=Type, res=Res, action=iteration}, Disp, ShowPos) ->
-    Nodes = flatsort( Res#chains.complete ++
-                      Res#chains.incomplete ++
-                      Res#chains.recursive),
-
-    Dict = positions(Type, Nodes, ShowPos),
-    display(
-      lists:flatten(
-        [ [[[fetch(Node, Type, Dict, ShowPos), {nopos, " "}] ||
-              Node <- lists:reverse(List)],
-          {nopos, "...\n"}] || List <- Res#chains.incomplete ] ++
-
-        [ [[[fetch(Node, Type, Dict, ShowPos), {nopos, " "}] ||
-              Node <- lists:reverse(List)],
-          {nopos, "*\n"}] || List <- Res#chains.recursive ] ++
-
-        [ [[[fetch(Node, Type, Dict, ShowPos), {nopos, " "}] ||
-              Node <- lists:reverse(List)],
-          {nopos, "\n"}] || List <- Res#chains.complete ]),
-      Disp);
-
-show(#state{action=closure}=State, Disp, ShowPos) ->
-    show(State#state{action=iteration}, Disp, ShowPos);
-
-show(#state{type=Type, prev_type=PrevType, action=selection} = St, Disp, ShowPos) ->
-    Dict = positions(Type, lists:flatten(St#state.res), ShowPos),
-    List = lists:filter( fun({_, Ns}) -> Ns /= [] end,
-                         lists:zip(St#state.prev_res, St#state.res) ),
-    display(
-      lists:flatten(
-        [[{nopos, [text(PrevType, PrevNode), ":\n"]},
-         [[{nopos, "    "},
-           fetch(Node, Type, Dict, ShowPos),
-           {nopos,"\n"}] ||
-             Node <- Nodes ]] ||
-            {PrevNode, Nodes} <- List]),
-      Disp);
-
-show(#state{type=Type, res=Res, action=property_query,
-            prev_type=PrevType, prev_res=PrevRes}, Disp, ShowPos) ->
-    Dict = positions(PrevType, PrevRes, ShowPos),
-    display(
-      lists:append(
-        [[fetch(Node, PrevType, Dict, ShowPos),
-          {nopos, [io_lib:format(":\n    ~p = ~p\n", [Type, Prop])]}] ||
-            {Node, Prop} <- lists:zip(PrevRes, Res)]),
-      Disp);
-
-show(#state{type=Type, res=Res, action=statistics}, Disp, _) ->
-    display([{nopos, io_lib:format("~p = ~p", [Type, Res])}], Disp).
-
-display(List, stdio) ->
-    io:put_chars([Text || {_, Text} <- List]);
-display(List, msg) ->
-    io:put_chars([Text || {_, Text} <- List]),
-    ?UI:message(queryres, [{Pos, lists:flatten(Text)} || {Pos, Text} <- List]).
-
-
-file_and_tokens(function, Node) ->
-   ?Query:exec(Node, ?Query:seq(?Fun:definition(),
-                                ?Query:all([ ?Form:file(),
-                                             ?Syn:first_leaf(),
-                                             ?Syn:last_leaf() ])));
-
-file_and_tokens(record, Node) ->
-    ?Query:exec(Node, ?Query:seq(?Rec:form(),
-                                 ?Query:all([ ?Form:file(),
-                                              ?Syn:first_leaf(),
-                                              ?Syn:last_leaf() ])));
-
-file_and_tokens(field, Node) ->
-    Rec = ?Query:exec(Node, [{field, back}]),
-    file_and_tokens(record, Rec);
-
-file_and_tokens(macro, Node) ->
-   ?Query:exec(Node, ?Query:all([ ?Form:file(),
-                                  ?Syn:first_leaf(),
-                                  ?Syn:last_leaf() ]));
-
-file_and_tokens(expression, Node) ->
-    [File] = ?Syn:get_file(Node),
-    [First] = ?Query:exec(Node, ?Syn:first_leaf()),
-    [Last] = ?Query:exec(Node, ?Syn:last_leaf()),
-    [File, First, Last];
-
-file_and_tokens(variable, Node) ->
-    case ?Query:exec(Node, ?Var:bindings()) of
-        [Bind | _] -> file_and_tokens(expression, Bind);
-        [] -> []
-    end.
-
-
-positions(file, Nodes) ->
-    dict:from_list(
-      [ begin
-            Pos = case ?Graph:class(File) of
-                      file ->
-                          {?File:path(File), 1, 1};
-                      module ->
-                          case ?Query:exec(File, ?Mod:file()) of
-                              [] -> nopos;
-                              [Node] -> {?File:path(Node), 1, 1}
-                          end
-                  end,
-            {File, Pos}
-        end || File <- Nodes ]);
-
-positions(Type, Nodes) ->
-    NodesWithTokens = [ {Node, file_and_tokens(Type, Node)} || Node <- Nodes ],
-    CollTokens =
-        dict:to_list(
-          lists:foldl(
-            fun({_Node, []}, Dict) ->
-                    Dict;
-               ({_Node, [File, First, Last]}, Dict) ->
-                    D1 = case dict:is_key(File, Dict) of
-                             false -> dict:store(File, [First], Dict);
-                             true -> dict:append(File, First, Dict)
-                         end,
-                    dict:append(File, Last, D1)
-            end,
-            dict:new(),
-            lists:keysort(2, NodesWithTokens))),
-    TokenPos = lists:flatten(
-                 [?Token:map_pos(File, Tokens)|| {File, Tokens} <- CollTokens]),
-    lists:foldl(
-      fun({Node, []}, Dict) ->
-              dict:store(Node, nopos, Dict);
-         ({Node, [File, First, Last]}, Dict) ->
-              {First, {Pos1, _}} = lists:keyfind(First, 1, TokenPos),
-              {Last, {_, Pos2}} = lists:keyfind(Last, 1, TokenPos),
-              dict:store(Node, {?File:path(File), Pos1, Pos2}, Dict)
-      end,
-      dict:new(),
-      NodesWithTokens).
-
-
-text(file, File) ->
-    case ?Graph:class(File) of
-        file ->
-            Path = ?File:path(File),
-            string:substr(Path, string:rstr(Path, "/")+1);
-        module ->
-            case ?Query:exec(File, ?Mod:file()) of
-                [] -> io_lib:write_atom(?Mod:name(File));
-                [Node] ->
-                    Path = ?File:path(Node),
-                    string:substr(Path, string:rstr(Path, "/")+1)
-            end
-    end;
-text(function, Fun) ->
-    [Mod] = ?Query:exec(Fun, ?Fun:module()),
-    ?MISC:fun_text([?Mod:name(Mod), ?Fun:name(Fun), ?Fun:arity(Fun)]);
-text(record, Rec) ->
-    io_lib:write_atom(?Rec:name(Rec));
-text(macro, Mac) ->
-    ?Macro:name(Mac);
-text(variable, Var) ->
-    ?Var:name(Var);
-text(field, Field) ->
-    io_lib:write_atom(?RecField:name(Field));
-text(expression, Expr) ->
-    Text = string:strip(lists:flatten(?Syn:tree_text(Expr))),
-    string:strip(Text, both, $\n).

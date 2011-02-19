@@ -22,7 +22,7 @@
 %%% @author Benjamin Somhegyi <soto20@inf.elte.hu>
 
 -module(refanal_pp_anal).
--vsn("$Rev$").
+-vsn("$Rev$"). % for emacs"
 -behaviour(refcore_anal).
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
@@ -30,10 +30,13 @@
 -include("core.hrl").
 -include("refcore_pp.hrl").
 
+%%% @private
 schema() -> [].
 
+%%% @private
 externs(_) -> [].
 
+%%% @private
 insert(_, _, {_, Child}, _) ->
     case ?Anal:data(Child) of
         #form{pp=node} ->
@@ -53,9 +56,11 @@ insert(_, _, {_, Child}, _) ->
 
 
 %TODO: Do we need reformatting when remove/4 is called??
+%%% @private
 remove(_, _, _, _) ->
     ok.
 
+%%% @private
 update(_,_) ->
     ok.
 

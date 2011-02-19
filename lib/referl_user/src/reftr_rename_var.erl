@@ -50,7 +50,7 @@
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(reftr_rename_var).
--vsn("$Rev: 4544 $ ").
+-vsn("$Rev: 4956 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -71,7 +71,7 @@ prepare(Args) ->
     ClashNames = [?Var:name(V) || V <- Visibles ++ Useds],
     ?Check(not lists:member(NewName, ClashNames), ?RefError(var_exists, NewName)),
 
-    ?Macro:check_macros(Occs),
+    ?Macro:check_macros(Occs, {elex, 1}),
     fun () ->
         [?Macro:update_macro(VarOcc, {elex, 1}, NewName) || VarOcc <- Occs]
     end.

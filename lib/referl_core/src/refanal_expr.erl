@@ -22,20 +22,23 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refanal_expr).
--vsn("$Rev$").
+-vsn("$Rev$"). % for emacs"
 -behaviour(refcore_anal).
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
 
 -include("core.hrl").
 
+%%% @private
 schema() ->
     [{expr, [{top, expr}, {clause, clause}]}].
 
+%%% @private
 externs(_) -> [].
 
 %% TODO: pattern clauses in generators?
 
+%%% @private
 insert(Parent, Pre, {Tag,Child}, Post) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -64,6 +67,7 @@ insert(Parent, Pre, {Tag,Child}, Post) ->
             walk(fun add/3, [{Child, ok}])
     end.
 
+%%% @private
 remove(Parent, _, {Tag, Child}, _) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form->
@@ -87,6 +91,7 @@ remove(Parent, _, {Tag, Child}, _) ->
             walk(fun del/3, [{Child, ok}])
     end.
 
+%%% @private
 update(_,_) ->
     ok.
 

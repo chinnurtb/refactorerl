@@ -92,7 +92,7 @@
 
 
 -module(reftr_move_fun).
--vsn("$Rev: 4842 $ ").
+-vsn("$Rev: 4968 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -225,6 +225,7 @@ prepare(Args) ->
     [fun()   -> transform_1(Info)          end,
      fun(ok) -> flatten(transform_2(Info)) end].
 
+%%% @private
 prepare_recmac(FunDefs, FromFile, ToFile) ->
     Used_Rec = usort(exec(FunDefs, ?Form:records())),
     Used_Mac = usort(exec(FunDefs, ?Form:macros())),     
@@ -392,7 +393,7 @@ transform_2(#info{frommod = FromMod, fundefs = FunDefs,
 
 %%% ----------------------------------------------------------------------------
 %%% Macro/record
-
+%%% @private
 correct_recmac(_, {localdefine, _Node, Form, false}, _, ToFile) ->
     {_, NewForm} = lists:keyfind(Form, 1, ?ESG:copy(Form)),
     ?File:add_form(ToFile, NewForm);

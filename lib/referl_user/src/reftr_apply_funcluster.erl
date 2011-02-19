@@ -31,7 +31,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reftr_apply_funcluster).
--vsn("$Rev: 4838 $").
+-vsn("$Rev: 4968 $"). % for emacs "
 
 -export([do/1]).
 -export([get_operations/2,commit/1,main/0,
@@ -40,6 +40,7 @@
 
 -include("user.hrl").
 
+%%% @private
 error_text(inv_struc,[X]) ->
     ["Invalid structure: ", io_lib:print(X)];
 error_text(file_exists,[F]) ->
@@ -67,6 +68,7 @@ error_text(_,_) -> unknown.
 
 %%% ============================================================================
 
+%%% @private
 do(Args) ->
     Clusters = ?Args:funclusters(Args),
     {ok,DestDir} = file:get_cwd(), %@todo
@@ -78,6 +80,7 @@ do(Args) ->
          end),
     ?d(Re).
 
+%%% @private
 main() ->
     {ok,DestDir} = file:get_cwd(),
     catch_referr(
@@ -90,9 +93,11 @@ main() ->
 
 %%% ============================================================================
 
+%%% @private
 commit(Res) ->
     commit(real_tr(),Res).
 
+%%% @private
 commit(Tr,Moves) ->
     check_creates(Moves),
     (Tr#tr.graph_backup_0)(),
@@ -134,13 +139,14 @@ do_wait() ->
     ?Transform:wait().
 
 %%% ----------------------------------------------------------------------------
-
+%%% @private
 real_tr() ->
     #tr{ transform_do_2   = fun ?Transform:do/2,
          transform_wait_0 = fun do_wait/0,
          graph_backup_0   = fun ?Graph:backup/0,
          addfile_1        = fun addfile/1 }.
 
+%%% @private
 test_tr() ->
     #tr{ transform_do_2   = fun test_do/2,
          transform_wait_0 = fun test_wait/0,
@@ -186,7 +192,7 @@ catch_referr(Fun) when is_function(Fun,0) ->
     end.
 
 %%% ============================================================================
-
+%%% @private
 get_operations(Clusters,Path) ->
     Ops    = get_fun_recmac(Clusters),
 io:format("~p~n", [Ops]), %%% TODO: delete this DEBUG line

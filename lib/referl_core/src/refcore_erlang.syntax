@@ -101,17 +101,17 @@ FModule ->
 
 FExport ->
     #form{type=export, paren=default}
-    ('-' 'export' '(' '[' eattr->EAFunList ']' ')' 'stop')
+    ('-' 'export' '(' eattr->EAFunList ')' 'stop')
 
   | #form{type=export, paren=no}
-    ('-' 'export'     '[' eattr->EAFunList ']'     'stop')
+    ('-' 'export'     eattr->EAFunList     'stop')
 
 FImport ->
     #form{type=import, paren=default}
-    ('-' 'import' '(' eattr->EAtom ',' '[' eattr->EAFunList ']' ')' 'stop')
+    ('-' 'import' '(' eattr->EAtom ',' eattr->EAFunList  ')' 'stop')
 
   | #form{type=import, paren=no}
-    ('-' 'import'     eattr->EAtom ',' '[' eattr->EAFunList ']'     'stop')
+    ('-' 'import'     eattr->EAtom ',' eattr->EAFunList     'stop')
 
 FRecord ->
     #form{type=record, paren=default, tag<-'atom'}
@@ -396,8 +396,8 @@ EALstHead ->
     #expr{type=list}
     (esub->ExpAttr {',' esub->ExpAttr})
 
-EAFunList -> #expr{type=funlist} ( [ esub->EAFunRef {',' esub->EAFunRef} ] )
-EAFunRef  -> #expr{type=funref}  ( esub->EAtom '/' esub->EInt )
+EAFunList -> #expr{type=funlist} ('[' [esub->EAFunRef {',' esub->EAFunRef}] ']')
+EAFunRef  -> #expr{type=funref}  (esub->EAtom '/' esub->EInt)
 
 EBinary ->
     #expr{type=binary}

@@ -18,7 +18,7 @@
 %%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Generic graph query interface. A graph query is the generalization of
-%%% a path (see {@link referl_graph:path()} and {@link referl_graph:path/2}).
+%%% a path (see {@link refcore_graph:path()} and {@link refcore_graph:path/2}).
 %%% Paths are special cases of queries, and they are executed with the same
 %%% efficiency when used in queries.
 %%%
@@ -35,14 +35,14 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(reflib_query).
--vsn("$Rev: 3827 $").
+-vsn("$Rev: 4969 $").
 
 -export([exec/1, exec/2, exec1/2, exec1/3]).
 -export([seq/1, seq/2, all/1, all/2, any/1, any/2, unique/1]).
 
 %% @type query(Start, End)
 
-%% query(Start, End) = referl_graph:path() |
+%% query(Start, End) = refcore_graph:path() |
 %%                     fun(node(Start)) -> [node(End)] |
 %%                     tuple()
 

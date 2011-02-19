@@ -22,9 +22,10 @@
 
 %%% @doc This module implements a console user interface for the tool.
 %%%
-%%% The idea behind "ri" is to enable the user to be able to do refactorings
+%%% The idea behind `ri' is to enable the user to be able to do refactorings
 %%% as easily as you can do debugging with Erlang's dbg module.
 %%% You give a simple, short command, and get response on the console.
+%%% Functions suffixed by `_h' give brief help about the respective function.
 %%%
 %%% == Server management command list ==
 %%% <ul>
@@ -123,20 +124,24 @@
 %
 
 -module(ri).
--vsn("$Rev: 4875 $").
+-vsn("$Rev: 5038 $ ").
 
 -export([help/0, h/0, h/1]).
 
--export([add/1,   drop/1, save/1,
+-export([add/1, add/2,  drop/1, save/1,
          ls/0,    ls/1,   reset/0, cat/1,   cat/2, cat/3,
          undo/0,  graph/0,graph/1,graph/2,
          svg/0,   svg/1,  svg/2, gn/2,
          getcfg/0,setcfg/3 ]).
+-export([envs/0, env/1, env/2, addenv/3, setenv/2,
+         delenv/1, delenv/2, delenv/3]).
 
 -export([add_h/0,    drop_h/0,  save_h/0,
          ls_h/0,     reset_h/0, cat_h/0,
          undo_h/0,   graph_h/0, svg_h/0, gn_h/0,
          getcfg_h/0, setcfg_h/0 ]).
+-export([envs_h/0, env_h/0, addenv_h/0, setenv_h/0,
+         delenv_h/0]).
 
 -export([elimvar/2,extfun/3, expfun/2, genfun/3,
          inlfun/2, inlmac/2, intrec/4, intmac/3,
@@ -144,7 +149,7 @@
          reorder/3,renfld/4, renfun/3,
          renhrl/2, renrec/3, renmac/3,
          renmod/2, renvar/3, tupfun/2, upregex/0,
-         appfuncl/1, q/1, q/2, q/3]).
+         appfuncl/1, q/1, q/2, q/3, q/4]).
 
 -export([elimvar_h/0,extfun_h/0, expfun_h/0, genfun_h/0,
          inlfun_h/0, inlmac_h/0, intrec_h/0, intmac_h/0,
@@ -162,6 +167,8 @@
 -export([test/0, test/1, test/2]).
 %-export([rgxpos_text/2]). %%DEBUG
 %-export([getparen/1]). %%DEBUG
+
+-export([cat_errors/0, cat_errors/1]).
 
 -include("ui.hrl").
 -include_lib("referl_core/include/core_export.hrl").
@@ -211,9 +218,11 @@ error_text(ErrType, ErrParams) ->
      io_lib:print(ErrType), ", ", io_lib:print(ErrParams), "}"].
 
 
+%% @doc Shows brief help text
 help() ->
     h().
 
+%% @doc Shows brief help text
 h() ->
   message2([
     "The following help topics are available:\n"
@@ -229,6 +238,7 @@ h() ->
     "You can also give one of the exported functions to get help on that.\n"
   ]).
 
+%% @doc Shows brief help text on a topic or function
 h(all) ->
     h(),
     lists:foreach(fun h/1, [usage,refac,server,regexp]);
@@ -346,36 +356,48 @@ ht(regexp) ->
 
 extfun_h() ->
     message("extfun(ModFile,Range_of_body,NewFunc)").
+
+%% @doc Extract function refactoring
 extfun(File, Range, Name) ->
     transformr(extract_fun, File, Range, [{name, Name}]).
 % ri:extfun(mod_or_file,"A+B",f).
 
 intmac_h() ->
     message("intmac(ModFile,Range_of_body,NewMac)").
+
+%% @doc Introduce macro refactoring
 intmac(File, Range, Name) ->
     transformr(introduce_macro, File, Range, [{name, Name}]).
 % ri:intmac(mod_or_file,"A+B",m).
 
 merge_h() ->
     message("merge(ModFile,Range_of_expression,NewVar)").
+
+%% @doc Merge common subexpressions refactoring
 merge(File, Range, Varname=[C|_]) when is_integer(C) ->
     transformr(merge, File, Range, [{varname, Varname}]).
 % ri:merge(mod_or_file,"1+2","V").
 
 inlfun_h() ->
     message("inlfun(ModFile,Pos_of_fun_application)").
+
+%% @doc Inline function refactoring
 inlfun(File, Pos) ->
     transformp(inline_fun, File, Pos, []).
 % ri:inlfun(mod_or_file,"f[(]1").
 
 inlmac_h() ->
     message("inlmac(ModFile,Pos_of_macro_use)").
+
+%% @doc Inline macro refactoring
 inlmac(File, Pos) ->
     transformp(inline_mac, File, Pos, []).
 % ri:inlmac(mod_or_file,"?Mac").
 
 tupfun_h() ->
     message("tupfun(ModFile,Range_of_arguments)").
+
+%% @doc Tuple function arguments refactoring
 tupfun(File, Range) ->
     transformr(tuple_funpar, File, Range, []).
 %%@todo :wishlist Begin,End -> name/arity first last
@@ -388,6 +410,8 @@ tupfun(File, Range) ->
 reorder_h() ->
     message("reorder(ModFile,{Fun,Arity},PermutationList)").
 %@todo :wishlist check Order
+
+%% @doc Reorder function arguments refactoring refactoring
 reorder(File, {Fun,Arity}, Order=[I|_])
       when is_atom(Fun), is_integer(Arity), is_integer(I) ->
     transform(reorder_funpar, File,
@@ -396,12 +420,16 @@ reorder(File, {Fun,Arity}, Order=[I|_])
 
 expfun_h() ->
     message("expfun(ModFile,Pos_of_funexpr)").
+
+%% @doc Expand implicit fun expression refactoring
 expfun(File, Pos) ->
     transformp(expand_funexpr, File, Pos, []).
 % ri:expfun(mod_or_file, "fun g").
 
 movfun_h() ->
     message("movfun(Source,Target,FunctionList=[{FunctionName,Arity}|_])").
+
+%% @doc Move function refactoring
 movfun(Source, Target, Fun={A,I})
       when is_atom(A), is_integer(I) ->
     movfun(Source, Target, [Fun]);
@@ -415,6 +443,8 @@ movfun(Source, Target, Funlist=[{A,I}|_])
 
 movrec_h() ->
     message("movrec(Source,Target,RecordList=[Record|_])").
+
+%% @doc Move record refactoring
 movrec(Source, Target, Rec) when is_atom(Rec) ->
     movrec(Source, Target, [Rec]);
 % ri:movrec(mod_or_file,b,rec).
@@ -426,6 +456,8 @@ movrec(Source, Target, Reclist=[A|_]) when is_atom(A) ->
 
 movmac_h() ->
     message("movmac(Source,Target,MacroList=[Macro|_])").
+
+%% @doc Move macro refactoring
 movmac(Source, Target, Mac=[C|_]) when is_integer(C) ->
     movmac(Source, Target, [Mac]);
 % ri:movmac(mod_or_file,b,"Mac").
@@ -437,6 +469,8 @@ movmac(Source, Target, Maclist=[[C|_]|_]) when is_integer(C) ->
 
 genfun_h() ->
     message("genfun(ModFile,Range_of_body,NewVar)").
+
+%% @doc Generalize function by new argument refactoring
 genfun(File, Range, Newname) ->
     transformr(gen, File, Range, [{varname, Newname}]).
 % ri:genfun(mod_or_file, "[+]\\(2", "Two").
@@ -447,6 +481,8 @@ genfun(File, Range, Newname) ->
 
 renfun_h() ->
     message("renfun(ModFile,{FunctionName,Arity},NewFun)").
+
+%% @doc Rename function refactoring
 renfun(File, {Fun,Arity}, Newname)
       when is_atom(Fun), is_integer(Arity) ->
     transform(rename_fun, File,
@@ -455,24 +491,32 @@ renfun(File, {Fun,Arity}, Newname)
 
 renvar_h() ->
     message("revar(ModFile,Pos_of_variable,NewVar)").
+
+%% @doc Rename variable refactoring
 renvar(File, Pos, Newname=[_|_]) ->
     transformp(rename_var, File, Pos, [{varname, Newname}]).
 % ri:renvar(mod_or_file, "X=", "V").
 
 renmod_h() ->
     message("renmod(OldModFile,NewMod)").
+
+%% @doc Rename module refactoring
 renmod(File, Newname) ->
     transform(rename_mod, File, [{name, Newname}]).
 % ri:renmod(mod_or_file, newmod).
 
 renhrl_h() ->
     message("renhrl(OldHrl,NewHrl)").
+
+%% @doc Rename header refactoring
 renhrl(File, Newname) ->
     transform(rename_header, File, [{name, Newname}]).
 % ri:renhrl("a.hrl", "b.hrl").
 
 renrec_h() ->
     message("renrec(ModFile,OldRecord,NewRecord)").
+
+%% @doc Rename record refactoring
 renrec(File,Record,NewName)
       when is_atom(Record) ->
     transform(rename_rec, File,
@@ -481,6 +525,8 @@ renrec(File,Record,NewName)
 
 renfld_h() ->
     message("renfld(ModFile,Record,OldField,NewField)").
+
+%% @doc Rename record field refactoring
 renfld(File,Record,Field,NewName)
       when is_atom(Record), is_atom(Field) ->
     transform(rename_recfield, File,
@@ -489,6 +535,8 @@ renfld(File,Record,Field,NewName)
 
 elimvar_h() ->
     message("elimvar(ModFile,Pos_of_variable)").
+
+%% @doc Eliminate variable by inlining refactoring
 elimvar(File, Pos) ->
     transformp(elim_var, File, Pos, []).
 % ri:elimvar(mod_or_file,"X=").
@@ -499,6 +547,8 @@ elimvar(File, Pos) ->
 
 intrec_h() ->
     message("intrec(ModFile,Range_of_tuple,NewRecord,Fields=[field|_])").
+
+%% @doc Introduce record in place of a tuple refactoring
 intrec(File, URange, Newname, AFields=[A|_]) when is_atom(A) ->
     SList = lists:map(fun atom_to_list/1, AFields),
     Fields = string:join(SList," "),
@@ -512,6 +562,8 @@ intrec(File, Range, Newname, Fields=[C|_]) when is_integer(C) ->
 
 renmac_h() ->
     message("renmac(ModFile,OldMacro,NewMacro)").
+
+%% @doc Rename macro refactoring
 renmac(File, Macro, Newname) ->
     transform(rename_mac, File, [{macro,Macro}, {name,Newname}]).
 % ri:renmac(mod_or_file,"Macname","NewMecname").
@@ -521,6 +573,8 @@ renmac(File, Macro, Newname) ->
 
 upregex_h() ->
     message("upregex()").
+
+%% @doc Upgrade regular expression syntax refactoring
 upregex() ->
     catch_referr(fun()->
         transform_trap(upgrade_regexp,[])
@@ -528,6 +582,8 @@ upregex() ->
 
 appfuncl_h()->
     message("appfuncl(Clusters)").
+
+%% @doc Apply function clustering results refactoring
 appfuncl(Clusters)->
     catch_referr(fun()->
                          transform_trap(apply_funcluster,
@@ -535,30 +591,86 @@ appfuncl(Clusters)->
                  end).
 
 q_h()->
-    message(["query(SemanticQuery)\n"
-             "query(ModFile,SemanticQuery)\n"
-             "query(ModFile,PositionRegexp,SemanticQuery)"]).
+    message2(["query(SemanticQuery)\n"
+              "query(ModFile,SemanticQuery)\n"
+              "query(ModFile,PositionRegexp,SemanticQuery)\n"
+              "query(SemanticQuery,Options)\n"
+              "query(ModFile,SemanticQuery,Options)\n"
+              "query(ModFile,PositionRegexp,SemanticQuery,Options)\n"
+              "Example usage:\n"
+              " ri:q(\"mods.funs.name\").\n"
+              " ri:q(mod1, \"f\\\\(X, Y\\\\)\", \"@fun.var\").\n"
+              " ri:q(\"mods.funs\",[linenum,{out,\"result.txt\"}]).\n"]).
 
 -define(SQ,refusr_sq).
-q(Q)->
-    catch_referr(
-      fun()->
-              ?SQ:run([{show_pos, false}], Q)
-      end).
 
-q(ModFile,Q)->
-    catch_referr(
-      fun()->
-              ?SQ:run([{show_pos, false}, {file,mod2filec(ModFile)}], Q)
-      end).
+%% @doc Run a semantic query
+q(Q=[C|_]) when is_integer(C)->
+    q_(Q, [], addqnone()).
 
-q(ModFile,Pos,Q)->
+%% @doc Run a semantic query starting from the given file
+q(ModFile,Q=[C|_]) when is_atom(ModFile), is_integer(C)->
+    q_(Q,[],addqmod(ModFile));
+q(Q=[C|_], Options=[O|_]) when is_integer(C), (is_atom(O) orelse is_tuple(O))->
+    q_(Q,Options,addqnone()).
+
+%% @doc Run a semantic query starting from the given position
+q(ModFile,Pos=[A|_],Q=[B|_])
+  when is_atom(ModFile), is_integer(A), is_integer(B)->
+    q_(Q,[],addqmodpos(ModFile,Pos));
+
+q(ModFile,Q=[C|_], Options=[O|_])
+  when is_atom(ModFile), is_integer(C), (is_atom(O) orelse is_tuple(O)) ->
+    q_(Q,Options,addqmod(ModFile)).
+
+%% @doc Run a semantic query starting from the given position with options
+q(ModFile,Pos=[A|_],Q=[B|_], Options=[O|_])
+  when is_atom(ModFile), is_integer(A), is_integer(B),
+       (is_atom(O) orelse is_tuple(O)) ->
+    q_(Q,Options,addqmodpos(ModFile,Pos)).
+
+addqnone()->
+    fun()->
+            []
+    end.
+
+addqmod(ModFile)->
+    fun()->
+            [{file,mod2filec(ModFile)}]
+    end.
+
+addqmodpos(ModFile,Pos)->
+    fun()->
+            File = mod2filec(ModFile),
+            [{file,File},
+             {position,to_pos(File,Pos)}]
+    end.
+
+q_(Query=[Ch|_],Options0,Fun)
+  when is_integer(Ch), is_function(Fun,0) ->
     catch_referr(
       fun()->
-              File = mod2filec(ModFile),
-              ?SQ:run([{show_pos, false},
-                       {file,File},
-                       {position,to_pos(File,Pos)}], Q)
+              Options = proplists:unfold(Options0),
+              PosL0 =
+                  [case E of
+                       {out,FileName} ->
+                           {ok,IODev} = file:open(FileName, [write]),
+                           % the file will be closed on process termination
+                           {false,[{display,{iodev,IODev}}]};
+                       {linenum,B}when is_boolean(B)->
+                           {true,[E]};
+                       _ ->
+                           message("unknown option: "++io_lib:print(E)),
+                           {false,[]}
+                   end || E <- Options],
+              {Pos,L0} = lists:unzip(PosL0),
+              ShowPos =
+                  case lists:any(fun(B)->B end,Pos) of
+                      true  -> linecol;
+                      false -> none
+                  end,
+              L = lists:append(L0),
+              ?SQ:run(L ++ [{show_pos, ShowPos} | Fun()], Query)
       end).
 
 %%% ============================================================================
@@ -585,15 +697,21 @@ cat_h() ->
     message(["cat(ModFile)\n",
              "cat(ModFile,RecMac)\n"
              "cat(ModFile,FunName,Arity)"]).
+
+%% @doc Display the contents of the given file or module
 cat(ModFile) ->
     catch_referr(fun() ->
         message(?Syn:tree_text(get_filenode(ModFile))) end).
 
+%% @doc Display the definition of the given record or macro
+cat(ModFile, {FunName,Arity})->
+    cat(ModFile, FunName, Arity);
 cat(ModFile, RecMac) ->
     catch_referr(fun() ->
         message2(recmactext(ModFile, RecMac))
     end).
 
+%% @doc Display a function definition
 cat(ModFile, FunName, Arity) ->
     catch_referr(fun() ->
         message2(funtext(ModFile, FunName, Arity))
@@ -627,81 +745,208 @@ funtext(ModFile, FunName, Arity) ->
                        ?RefError(fun_not_found,[FunName,Arity])),
     ?Syn:tree_text(Fun).
 
+%% -----------------------------------------------------------------------------
+
 getcfg_h() ->
     message("getcfg()").
+
+%% @doc Display environment variables (deprecated)
+%% @todo delete
 getcfg() ->
     trapui(fun ?UI:showconfig/0).
 
 setcfg_h() ->
     message("setcfg(AppDirs,IncDirs,OutDir)").
+
+%% @doc Configure directories (deprecated)
+%% @todo delete
 setcfg(AppDirs,IncDirs,OutDir) ->
     trapui(fun()->
                ?UI:saveconfig(AppDirs,IncDirs,OutDir)
            end).
 
+envs_h()->
+    message("envs()").
+
+%% @doc Lists all environment nodes
+envs()->
+    case ?Syn:get_envs() of
+        [] ->
+            message("no environment variable set");
+        L ->
+            message2(lists:map(fun show_env/1, L))
+    end.
+
+env_h()->
+    message(["env(Variable)\n"
+             "env(Variable,SubKey)"]).
+%% @doc Lists a specific environment node
+env(Name)->
+    message2(show_env({Name,?Syn:get_env(Name)})).
+
+%#env{name=env_var, value=[{EnvName, EnvVal}]}
+
+addenv_h()->
+    message("addenv(Variable,SubKey,NewValue)").
+
+%% @doc Adds a new subkey to a proplist environment node
+addenv(Name, EnvName, EnvVal) when is_atom(EnvName)->
+    addenv(Name, atom_to_list(EnvName), EnvVal);
+addenv(Name, EnvName, EnvVal) when is_atom(EnvVal)->
+    addenv(Name, EnvName, atom_to_list(EnvVal));
+addenv(Name, EnvName, EnvVal)->
+    ?Syn:add_env(Name, {EnvName, EnvVal}).
+
+delenv_h()->
+    message(["delenv(Variable)\n"
+             "delenv(Variable,SubKey)\n"
+             "delenv(Variable,SubKey,OldValue)"]).
+
+%% @doc Deletes a subkey from a proplist environment node
+delenv(Name, EnvName) when is_atom(EnvName)->
+    delenv(Name,atom_to_list(EnvName));
+delenv(Name, EnvName)->
+    ?Syn:del_env_sub(Name,EnvName).
+
+%% @doc Deletes a specific key-value pair from a proplist environmnent node
+delenv(Name, EnvName, EnvVal) when is_atom(EnvName)->
+    delenv(Name, atom_to_list(EnvName), EnvVal);
+delenv(Name, EnvName, EnvVal) when is_atom(EnvVal)->
+    delenv(Name, EnvName, atom_to_list(EnvVal));
+delenv(Name, EnvName, EnvVal)->
+    ?Syn:del_env_val(Name,{EnvName,EnvVal}).
+
+%% @doc Lists the value for a subkey of a proplist environment node
+env(Name, EnvName) when is_atom(EnvName)->
+    env(Name, atom_to_list(EnvName));
+env(Name, EnvName)->
+    case ?Syn:get_env(Name,EnvName) of
+        [] ->
+            message("error: Environment variable sub-key not found");
+        L=[_|_] ->
+            message2(show_env({Name,[{EnvName,EV} || EV <- L]}))
+    end.
+
+%#env{name=output}
+%#env{name=backup}
+
+setenv_h()->
+    message("setenv(Variable,Value)").
+
+%% @doc Sets the value of an environment node
+%% @todo setenv/3
+setenv(Name, Value)->
+    case ?Syn:env_type(Name) of
+        proplist ->
+            message("Please use addenv/3, delenv/2 and delenv/3 instead.");
+        atomic ->
+            ?Syn:set_env(Name,Value)
+    end.
+
+%% @doc  Deletes an environment node
+delenv(Name)->
+    ?Syn:del_env(Name).
+
+show_env({_Name,[]})->
+    "error: Environment variable not found\n";
+show_env({Name,Values})->
+    case ?Syn:env_type(Name) of
+        proplist ->
+            [io_lib:format("~p:~n", [Name]),
+             [io_lib:format(" ~p = ~p~n",[K,V]) || {K,V} <- Values]];
+        atomic ->
+            [Value] = Values,
+            io_lib:format("~p = ~p~n", [Name,Value])
+    end.
+
+%% @doc Returns the names of the files
+%% that are described in the named environment.
+%% @equiv refcore_syntax:get_env(Name)
+%% @todo delete
+dirs_by_env(Name) ->
+    [(?Graph:data(Dir))#env.value ||
+        Dir <- ?Graph:path(?Graph:root(), [{env, {name, '==', Name}}])].
+
+%% -----------------------------------------------------------------------------
+
 add_h() ->
-    message("add(ModFileDirList)").
+    message2(["add(ModFileDirList)\n"
+              "add(AppBase, App)"]).
+
+%% @doc Adds an application to the database.
+add(AppBase, App) ->
+    AppBaseS = ?MISC:to_list(AppBase),
+    AppS     = ?MISC:to_list(App),
+    case [AB || AB <- dirs_by_env(appbase),
+                {match, _} <- [re:run(AB, AppBaseS)]] of
+        [Base] ->
+            AppNotFound = "Application " ++ AppS ++
+                " not found under " ++ AppBaseS,
+            case filelib:wildcard(filename:join(Base, AppS ++ "*")) of
+                [] ->
+                    message(AppNotFound);
+                Dirs ->
+                    case filelib:is_dir(filename:join(Base, AppS)) of
+                        true ->
+                            add_src_dir(filename:join(Base, AppS));
+                        false ->
+                            case Dirs == [Dir || Dir <- Dirs, {match, _} <- [re:run(Dir, AppS ++ "[a-zA-Z]*-[0-9.]*")]] of
+                                true ->
+                                    add_src_dir(lists:last(Dirs));
+                                false ->
+                                    message(AppNotFound),
+                                    io:format("Applications under :~n" ++ AppBaseS),
+                                    [io:format("    ~s~n", [Dir]) || Dir <- Dirs]
+                            end
+                    end
+            end;
+        [] -> message("Application base " ++ AppBaseS ++ " not found")
+    end.
+
+add_src_dir(Dir) ->
+    SrcDir = filename:join(Dir, "src"),
+    message("Adding: " ++ SrcDir),
+    add(SrcDir).
+
 
 %% @doc Add either a module, a file, a directory or a list of these
 add(L=[H|_]) when not is_integer(H) ->
-    lists:foreach(fun add/1,L);
-add(Mod) when is_atom(Mod) ->
-    catch_referr(fun()->
-        try
-            add(mod2file(Mod,true))
-        catch
-            ?RefError(mod_not_found,[Mod]) ->
-                N = atom_to_list(Mod),
-                add_([N++".erl", N++".beam"])
-        end
-    end);
-add(File=[C|_]) when is_integer(C) ->
-    catch_referr(fun()->
-                         add_(File)
-                 end).
+    lists:foreach(fun add_/1,L);
+add(X) ->
+    catch_referr(
+      fun()->
+	      add_(X)
+      end).
+%  ri:add([a,b]).
+%  ri:add("a.erl").
 
-add_(L=[H|_]) when not is_integer(H)->
-    lists:foreach(fun add/1,L);
-add_(File=[C|_]) when is_integer(C)->
+add_(Mod) when is_atom(Mod) ->
+    try
+	add_(mod2file(Mod,true))
+    catch
+	?RefError(mod_not_found,[Mod]) ->
+	    N = atom_to_list(Mod),
+	    add_if_exists(N++".erl") orelse
+		add_if_exists(N++".beam") orelse
+		begin
+		    message("Error: no matching .erl or .beam"),
+		      error
+		end
+    end;
+add_(File=[C|_]) when is_integer(C) ->
     case io_lib:deep_char_list(File) of
         true ->
-            recurse_erl(File, fun add_file/1);
+	    trapui_nx(fun()-> ?UI:add_dir(File) end);
         false ->
-            message("Error: bad file argument given")
+            message("Error: bad file argument given"),
+	    error
     end.
 
-is_erl(F)->
-    nomatch /= re:run(F, "\\.[eE][rR][lL]$", [{capture,first}]).
-%    lists:suffix(".erl",File).
-
-is_beam(F)->
-    nomatch /= re:run(F, "\\.[bB][eE][aA][mM]$", [{capture,first}]).
-%    lists:suffix(".beam",File).
+add_if_exists(F)->
+    filelib:is_regular(F) andalso
+	error/=add_(F).
 
 %% @private
-add_file(File) ->
-    case is_erl(File) of
-        true  ->
-            trapui(fun()-> ?UI:add(File) end);
-        false ->
-            case is_beam(File) of
-                true  ->
-                    load_beam(File);
-                false ->
-                    message("Unkown file: '"++File++"'")
-            end
-    end.
-%ri:add([a,b]).
-%ri:add("a.erl").
-
-load_beam(File) ->
-    case trapui(fun()-> ?UI:load_beam(File,filename:dirname(File),false) end)of
-        {ok, nostatus} ->
-            ok;
-        {ok, {error, String}} ->
-            throw(?LocalError(load_beam,[String]))
-    end.
-
 drop_h() ->
     message("drop(ModFileDirList)").
 
@@ -713,16 +958,14 @@ drop(Mod) when is_atom(Mod) ->
         drop(mod2file(Mod,true))
     end);
 drop(File) when is_list(File) ->
-    recurse_erl(File, fun drop_file/1).
-
-%% @private
-drop_file(File) ->
-    trapui(fun()-> ?UI:drop(File) end).
+    trapui(fun()-> ?UI:drop_dir(File) end).
 %ri:drop(a).
 
 save_h() ->
     message2(["save(ModFileDirList)\n"]).
 
+%% @doc Saves a file (debug)
+%% @todo Is this still needed?
 save(L=[H|_]) when not is_integer(H) ->
     lists:foreach(fun save/1,L);
 save(Mod) when is_atom(Mod) ->
@@ -730,10 +973,8 @@ save(Mod) when is_atom(Mod) ->
         save(mod2file(Mod,true))
     end);
 save(File) when is_list(File) ->
-    recurse_erl(File, fun save_file/1).
-
-%% @private
-save_file(File) ->
+%    recurse_erl(File, fun save_file/1).
+%save_file(File) ->
     catch_referrsave(fun()->
         ?FileMan:save_file(get_filenode(File))
     end).
@@ -743,9 +984,11 @@ ls_h() ->
     message2(["ls()\n"
               "ls(ModFile)\n" ]).
 
+%% @doc Lists modules contained in the database
 ls() ->
     trapui(fun ?UI:filelist/0).
 
+%% @doc Lists includes, records, macros and functions in a file or moule
 ls(ModFile) ->
     catch_referr(fun() -> ls_(ModFile) end).
 
@@ -768,6 +1011,8 @@ ls_(ModFile) ->
 
 undo_h() ->
     message("undo()").
+
+%% @doc Undoes the previous refactoring
 undo() -> trapui(fun()-> ?UI:undo([]) end).
 
 graph_h() ->
@@ -776,12 +1021,15 @@ graph_h() ->
         "graph(TargetNameFile)\n"
         "graph(TargetFile,FilterList)\n" ]).
 
+%% @doc Draws a graph with default name from database contents (debug)
 graph() ->
     graph(?DEF_GRAPH_NAME).
 
+%% @doc Draws a graph from database contents, saves result in `Target' (debug)
 graph(Target) ->
     graph(Target,[]).
 
+%% @doc Draws a graph from filtered database contents (debug)
 graph(Target, Filter) when is_atom(Target) ->
     graph(atom_to_list(Target)++".dot",Filter);
 
@@ -793,12 +1041,16 @@ svg_h() ->
         "svg()\n"
         "svg(TargetNameFile)\n"
         "svg(Target,Options)\n" ]).
+
+%% @doc Draws a graph converted to SVG with default name (debug)
 svg() ->
     svg(?DEF_GRAPH_NAME).
 
+%% @doc Draws a graph converted to SVG from database contents (debug)
 svg(Target) ->
     svg(Target, []).
 
+%% @doc Draws a graph converted to SVG from filtered database contents (debug)
 svg(Target, Opts) when is_atom(Target) ->
     svg(atom_to_list(Target)++".svg",Opts);
 svg(Target, Opts) when is_list(Target) ->
@@ -814,11 +1066,15 @@ svg(Target, Opts) when is_list(Target) ->
 
 gn_h() ->
     message("gn(TypeAtom,Index)").
+
+%% @doc Prints out data of a graph node (debug)
 gn(TypeAtom,Index) when is_atom(TypeAtom), is_integer(Index) ->
     message(io_lib:print(?Graph:data({'$gn',TypeAtom,Index}))).
 
 reset_h() ->
     message("reset()").
+
+%% @doc Clears database contents and resets its schema
 reset()  -> trapui(fun ?UI:reset/0).
 
 %%% ============================================================================
@@ -1042,16 +1298,14 @@ busywait(P) ->
 %% @private
 %% @doc handle synchronous UI calls without a prelude
 trapui(Action) when is_function(Action,0) ->
-    trapui(fun nil/0, fun(_)-> Action() end).
+    catch_referr(
+      fun()->
+	      trapui_nx(Action)
+      end).
 
-%% @private
-%% @doc handle synchronous UI calls
-trapui(Pre,Action) ->
-    catch_referr(fun()->
-        trap(Pre,
-             Action,
-             fun(X)->{X,get_all_msg(uifinished)} end)
-    end).
+trapui_nx(Action) when is_function(Action,0)->
+    trap(Action,
+	 fun(X)->{X,get_all_msg(uifinished)} end).
 
 %% @private
 %% @doc handle synchronous UI/transform calls without a prelude
@@ -1098,12 +1352,33 @@ get_all_msg(F) ->
 %% @doc print out all messages of results
 get_all_msg_loop(F,S) ->
     receive
-        {F,[]}      -> finished;
-        {F,_}       -> S;
+        {F,[]}         -> finished;
+        {F,_}          -> S;
         {uifinished,_} -> get_all_msg_loop(F,S);
-        {status,S2} -> get_all_msg_loop(F,S2);
-        {invalid,_} -> {error,get_all_msg_loop(F,S)};
-        M           -> message("message: "++io_lib:format("~p",[M])),
+        {status,S2}    -> get_all_msg_loop(F,S2);
+        {invalid,_}    -> {error,get_all_msg_loop(F,S)};
+        {progress, {add, File, 1, Max}} ->
+            message2(io_lib:format("loading: ~s (~p forms)~n~4w|",
+				   [File, Max, 1])),
+            get_all_msg_loop(F,S);
+	{progress, {drop, File, 1, Max}} ->
+            message2(io_lib:format("dropping: ~s (~p forms)~n~4w|",
+				   [File, Max, 1])),
+            get_all_msg_loop(F,S);
+%        {progress, {add, File, N, _Max}} when N rem 10 =:= 0 ->
+%            message2(io_lib:format("(~p)", [N div 10])),
+%            get_all_msg_loop(F,S);
+        {progress, {AD, _File, N, _Max}} when (AD==add) orelse (AD==drop) ->
+            case N rem 15 of
+                0 -> message2(io_lib:format("~4w|~n",[N]));
+                _ -> message2(io_lib:format("~4w|",[N]))
+            end,
+            get_all_msg_loop(F,S);
+        {AD, [_File|Files]} when (AD==add) orelse (AD==drop) ->
+            message("done|"),
+            [message(" + " ++ File) || File <- Files],
+            get_all_msg_loop(F,S);
+        M           -> message2(io_lib:format("~nmessage: ~p~n",[M])),
                        get_all_msg_loop(F,S)
     after
         ?TO -> message("Error: timeout when "++
@@ -1114,56 +1389,6 @@ get_all_msg_loop(F,S) ->
 
 %%% ----------------------------------------------------------------------------
 %%% File and module related helpers
-
-%% @doc Traverse a complete directory recursively while doing the action
-%% specified on all "*.erl" files each folder contains.
-recurse_erl(Start=[_|_], Action) when is_function(Action,1) ->
-    lists:foreach(Action, erl_beam(Start)).
-
-erl_beam(Start) ->
-    Files = find_files(filename:absname(Start),
-                       'or'(fun is_erl/1, fun is_beam/1)),
-    FileMod = [{filename:rootname(filename:basename(F)), F} || F <- Files],
-    {Erl,Beam0} = lists:partition(fun({_,F})-> is_erl(F) end, FileMod),
-    {ErlMod,_ErlFile} = lists:unzip(Erl),
-    Beam = proplist_cut(Beam0, sets:from_list(ErlMod)),
-    All = Erl ++ Beam,
-    [F || {_,F} <- All].
-
-proplist_cut([], _) ->
-    [];
-proplist_cut([KV={K,_V}|Tail], ToDel) ->
-    case sets:is_element(K,ToDel) of
-        true ->
-            proplist_cut(Tail, ToDel);
-        false ->
-            [KV | proplist_cut(Tail, ToDel)]
-    end.
-
-find_files(File, Mask) when is_function(Mask,1) ->
-    case filelib:is_dir(File) of
-        true ->
-            Files = filelib:wildcard(filename:join(File,"*")),
-            lists:append([find_files(F, Mask) || F<-Files]);
-        false ->
-            case filelib:is_regular(File) of
-                true  ->
-                    case Mask(File) of
-                        true ->
-                            [File];
-                        false ->
-                            []
-                    end;
-                false ->
-                    message("Warning: Not a file: " ++ File),
-                    []
-            end
-    end.
-
-'or'(F,G) when is_function(F,1), is_function(G,1)->
-    fun(X)->
-            F(X) orelse G(X)
-    end.
 
 %% @private
 %% @doc looks up the module name of a loaded and error-free file
@@ -1330,24 +1555,27 @@ print_problems(ProblemAtom, Descr, Problems, Mods, Opt) ->
     end.
 
 
-%% Runs all test cases.
+%% @doc Runs all test cases.
+%% @todo Run unit tests and other regression indicators
 test() ->
-    reftest_refact:run().
+    {reftest_lib:run(),
+     reftest_refact:run()}.
 
-%% Runs the test cases of a transformation.
+%% @doc Runs the test cases of a transformation.
 %% The name of the transformation can be abbreviated up to ambiguity.
+%% @todo Run on a given entity
 test(Params) when is_list(Params) ->
     reftest_refact:run(Params);
 test(Mod) when is_atom(Mod) ->
     {ok, TestDirFiles} = file:list_dir(filename:join(["..", "test"])),
     ModList = atom_to_list(Mod),
-    case [F || F <- TestDirFiles, lists:prefix(ModList, F)] of
-        [FileName] -> reftest_refact:run([{test, [list_to_atom(FileName)]}]);
-        []         -> list_files(TestDirFiles);
-        FileNames  -> list_files(FileNames)
+    case [F || F <- lists:usort(TestDirFiles), lists:prefix(ModList, F)] of
+        [FileName|_] -> reftest_refact:run([{test, [list_to_atom(FileName)]}]);
+        []           -> list_files(TestDirFiles);
+        FileNames    -> list_files(FileNames)
     end.
 
-%% Runs a specific test case of a transformation.
+%% @doc Runs a specific test case of a transformation.
 %% If the name of the test case is numeric, it can be given as an integer.
 %% The name of the transformation can be abbreviated up to ambiguity.
 test(Mod, Case) when is_atom(Mod), is_integer(Case) ->
@@ -1362,8 +1590,8 @@ test(Mod, Case) when is_atom(Mod), is_atom(Case) ->
     {ok, TestDirFiles} = file:list_dir(filename:join(["..", "test"])),
     ModList = atom_to_list(Mod),
     CaseList = atom_to_list(Case),
-    case [F || F <- TestDirFiles, lists:prefix(ModList, F)] of
-        [ModName] ->
+    case [F || F <- lists:usort(TestDirFiles), lists:prefix(ModList, F)] of
+        [ModName|_] ->
             {ok, TestDir2} = file:list_dir(filename:join(["..", "test", ModName])),
             case lists:member(CaseList, TestDir2) of
                 false ->
@@ -1376,9 +1604,129 @@ test(Mod, Case) when is_atom(Mod), is_atom(Case) ->
     end.
 
 
-%% Lists the files of a directory.
+%% @doc Lists the files of a directory.
 list_files(AllFiles) ->
     io:format("Possible parameters:~n"),
     Files = lists:usort(AllFiles) -- [".svn", "DESC"],
     [io:format("    ~s~n", [File]) || File <- Files],
     missing_dir.
+
+
+%% @doc Returns the list of differences after files have been loaded.
+%%      This function does NOT consider forms with load errors.
+%% @todo Parallelising this operation does not seem to bring any speedup.
+cat_errors() ->
+    % todo [file] should have an interface function
+    Files = [File || File <- ?Query:exec([file]),
+                     not has_errors(File)],
+    io:format("~B files ", [length(Files)]),
+    Time1 = now(),
+    Results = pmap(fun cat_errors_with_display/1, Files),
+%    Results = lists:map(fun cat_errors_with_display/1, Files),
+    Time2 = now(),
+    {H,M,S} = calendar:seconds_to_time(timer:now_diff(Time2, Time1) div 1000000),
+    io:format("~nchecked in ~B hours, ~B minutes, ~B seconds~n", [H,M,S]),
+    case [Err || Err <- Results, Err =/= ok] of
+        []     -> no_cat_errors;
+        Errors -> Errors
+    end.
+
+has_errors(File) ->
+    Types = [(?ESG:data(Form))#form.type || Form <- ?Query:exec(File, ?File:real_forms())],
+    lists:member(error, Types).
+
+
+%% @doc Returns the list of differences between the original and the database
+%% version of a file.
+cat_errors(File) ->
+    ?FileMan:create_scanner(),
+    #file{path=Path, eol=Eol} = ?ESG:data(File),
+    {Text, _EOL} = ?FileMan:file_text(Path),
+    FileHashWForms = [{Hash, tokens_to_text(Tokens, Eol)}
+                        || {Hash, Tokens} <- ?FileMan:tokenize(Text)],
+    GForms = ?Query:exec(File, ?File:real_forms()),
+    case length(GForms) == length(FileHashWForms) of
+        false -> not_matching_form_count;
+        true ->
+            MatchingForms =
+                [{{GForm, (?ESG:data(GForm))#form.hash}, {{FHash, FText}, Idx}}
+                 || {GForm, {{FHash, FText}, Idx}} <- lists:zip(GForms, ?MISC:index_list(FileHashWForms))],
+            case [{Idx, GForm, FText}
+                    ||  {{GForm, Hash}, {{FHash, FText}, Idx}} <- MatchingForms,
+                        Hash =/= FHash] of
+                BadForms = [_|_] ->
+                    {changed_forms, BadForms};
+                [] ->
+                    case [{Idx, GForm, flat_text(GForm), FText}
+%                    case [{Idx, GForm, remove_ws(flat_text(GForm)), remove_ws(FText)}
+                             || {{GForm, _Hash}, {{_FHash, FText}, Idx}} <- MatchingForms,
+                                not is_similar(flat_text(GForm), FText)] of
+                        [] ->
+                            ok;
+                        BadForms ->
+                            {not_matching_forms, File, BadForms}
+                    end
+            end
+    end.
+
+
+is_similar(invalid_children, _) ->
+    false;
+is_similar(_, invalid_children) ->
+    false;
+is_similar(Txt1, Txt2) ->
+    Txt1 == Txt2.
+%    remove_ws(Txt1) == remove_ws(Txt2).
+
+% remove_ws(invalid_children) ->
+%     invalid_children;
+% remove_ws(Txt) ->
+%     lists:reverse(remove_prefix_ws(lists:reverse(remove_prefix_ws(Txt)))).
+%
+% remove_prefix_ws(invalid_children) ->
+%     invalid_children;
+% remove_prefix_ws(Txt) ->
+%     {_WS, Rest} = lists:splitwith(fun(Ch) -> lists:member(Ch, " \t\n") end, Txt),
+%     Rest.
+
+
+tokens_to_text(Tokens, Eol) ->
+    ?FileMan:orig_text(Eol, lists:flatten([Pre ++ Text ++ Post || #token{prews=Pre, text=Text, postws=Post} <- Tokens])).
+
+%% @todo Move to ?Syn.
+flat_text(Form) ->
+    try
+        lists:flatten(?Syn:tree_text(Form))
+    catch
+        throw:{invalid_children, _, _} -> invalid_children
+    end.
+
+
+
+
+cat_errors_with_display(File) ->
+    Ret = cat_errors(File),
+    case Ret of
+        ok ->
+            io:put_chars("o");
+        _ ->
+            io:put_chars("X")
+    end,
+    Ret.
+
+
+pmap(Fun, Xs) ->
+    S = self(),
+    [spawn(fun() -> pmap_f(S, Fun, X) end) || X <- Xs],
+    pmap_gather(length(Xs)).
+
+pmap_gather(0) ->
+    [];
+pmap_gather(N) ->
+    receive
+        {pmap, _, Ret} ->
+            [Ret|pmap_gather(N-1)]
+    end.
+
+pmap_f(Parent, Fun, X) ->
+    Parent ! {pmap, self(), (catch Fun(X))}.

@@ -29,6 +29,7 @@
 
 -include("core.hrl").
 
+%%% @private
 schema() ->
     [{field,  record_info(fields, field), []},
      {typexp, [{fielddef, field}]},
@@ -39,8 +40,10 @@ schema() ->
      {expr,   [{recref, record}]}
     ].
 
+%%% @private
 externs(_) -> [].
 
+%%% @private
 insert(Parent, _Pre, {Tag, Child}, _Post) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -55,12 +58,8 @@ insert(Parent, _Pre, {Tag, Child}, _Post) ->
         #clause{} -> 
             File = parent_file(Parent),
             walk(fun add_del/4, [{Child, File}], add_ref);
-        #expr{type=T, value = _RName} when T == record_update orelse 
-                                           T == record_expr -> 
-            %% TODO eliminate: #expr{value = Name} = ?Anal:data(Parent),
-            [Lex] = ?Graph:path(Parent, [{elex,2}]),
-            RName = ((?Graph:data(Lex))#lex.data)#token.value,
-            %% TODO
+        #expr{type=T, value = RName} when T == record_update orelse 
+                                          T == record_expr -> 
             File = file(Parent, ?Anal:data(Parent)),
             walk(fun add_del/4, [{Child, {File, RName}}], add_ref);  
         #expr{type=record_index, value = RName} ->
@@ -115,16 +114,11 @@ add_del(Dir, #expr{type=record_index, value = Name}, Expr, File) ->
     #expr{value = FldName} = ?Anal:data(Fld),
     ?NodeSync:Dir(field, {ref, Fld}, {{File, Name}, FldName}),
     [];
-%%add(#expr{type=record_update, value = Name}, Expr, File) ->
-add_del(Dir, #expr{type=record_update}, Expr, File) ->
-    [NN] = ?Graph:path(Expr, [{elex,2}]),
-    Name = ((?Graph:data(NN))#lex.data)#token.value, %% Bug: #expr{value = Name
+add_del(Dir, #expr{type=record_update, value = Name}, Expr, File) ->
     ?NodeSync:Dir(rec, {ref, Expr}, {File, Name}),
     [{esub, RecExpr}, {esub, Fld}] = ?Anal:children(Expr), %% ExpMax, FldSpec
     [{RecExpr, File}, {Fld, {File, Name}}];
-add_del(Dir, #expr{type=record_access}, Expr, File) ->
-    [NN] = ?Graph:path(Expr, [{elex,2}]),
-    Name = ((?Graph:data(NN))#lex.data)#token.value, %% Bug: #expr{value = Name}
+add_del(Dir, #expr{type=record_access, value=Name}, Expr, File) ->
     ?NodeSync:Dir(rec, {ref, Expr}, {File, Name}),
     [{esub, RecExpr}, {esub, Fld}] = ?Anal:children(Expr), %% ExpMax, EAtom
     #expr{value = FldName} = ?Anal:data(Fld),
@@ -148,6 +142,7 @@ add_del(Dir, #typexp{tag=Name}, TypExp, {File, RecName})->
 %% add_del(_, _, _, _) ->
 %%     [].
 
+%%% @private
 remove(Parent, _Pre, {Tag, Child}, _Post) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -165,12 +160,8 @@ remove(Parent, _Pre, {Tag, Child}, _Post) ->
             File = parent_file(Parent),
             walk(fun add_del/4, [{Child, File}], del_ref);
 
-        #expr{type=T, value = _RName} when T == record_update orelse 
+        #expr{type=T, value = RName} when T == record_update orelse 
                                            T == record_expr -> 
-            %% TODO eliminate: #expr{value = Name} = ?Anal:data(Parent),
-            [Lex] = ?Graph:path(Parent, [{elex,2}]),
-            RName = ((?Graph:data(Lex))#lex.data)#token.value,
-            %% TODO
             File = file(Parent, ?Anal:data(Parent)),
             walk(fun add_del/4, [{Child, {File, RName}}], del_ref);  
         #expr{type=record_index, value = RName} ->
@@ -204,7 +195,7 @@ remove(Parent, _Pre, {Tag, Child}, _Post) ->
             walk(fun add_del/4, [{Child, {File, RName}}], del_ref)
     end.
 
-
+%%% @private
 update(Form, #form{type=record, tag=Name})->
     File = ?Anal:parent(Form),
     ?NodeSync:move_refs(rec, [def], Form, {File, Name}),

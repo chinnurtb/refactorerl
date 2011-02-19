@@ -163,7 +163,7 @@ Erlang code.
 value({Type,  _Line})        -> Type;
 value({_Type, _Line, Value}) -> Value.
 
--record(vattr, {name, index}).
+-record(vattr, {name, index, eindex}).
 -record(struct, {data :: {atom(), [#cattr{}]},
                  head, structure, attribs}).
 
@@ -299,8 +299,8 @@ data(Class, Attrs) ->
        {abstract, Value}} || #cattr{name=Name, value=Value} <- Attrs] ++
      [{record_field,
        {atom, Name},
-       {application, {atom, tv}, [{atom, field(Ind)}]}} ||
-         #vattr{name=Name, index=Ind} <- Attrs]
+       {application, {atom, tv}, [{atom, field(EInd)}]}} ||
+         #vattr{name=Name, eindex=EInd} <- Attrs]
     }.
 
 builder(Class, Lex, Attrs, Rule) ->
@@ -399,7 +399,7 @@ proc_rule([#term{token=Token} = Elem | Tail],
     {NewVal, NextVA} =
         case lists:keyfind(Token, #tattr.token, VA) of
             #tattr{index=1, name=Name} = F ->
-                {[#vattr{name=Name, index=LexInd}], VA -- [F]};
+                {[#vattr{name=Name, index=LexInd, eindex=ElemInd}], VA -- [F]};
             #tattr{index=N} = F ->
                 {[], [F#tattr{index=N-1} | VA -- [F]]};
             _ ->

@@ -26,7 +26,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refanal_var).
--vsn("$Rev: 4732 $ ").
+-vsn("$Rev: 4970 $ ").
 -behaviour(refcore_anal).
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
@@ -34,6 +34,7 @@
 -include("core.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% @private
 schema() ->
     [{variable, record_info(fields, variable), [{varintro, expr}]},
      {clause, [{scope, clause}, {visib, expr},
@@ -41,10 +42,11 @@ schema() ->
      {expr,   [{varref, variable}, {varbind, variable}]}
     ].
 
+%%% @private
 externs(_) -> [].
 
 %% TODO: list comprehensions
-
+%%% @private
 insert(Parent, _Pre, {Tag, Child}, _) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -107,6 +109,7 @@ ins_funclause(Clause) ->
     add(Clause, ?Anal:data(Clause), {Clause, scope}),
     upd_cont(Clause, true, env_empty(), env_empty()).
 
+%%% @private
 remove(Parent, _, {Tag, Child}, _) ->
     case ?Anal:data(Parent) of
         #file{} when Tag == form ->
@@ -128,6 +131,7 @@ remove(Parent, _, {Tag, Child}, _) ->
         %%     ok %%throw('TODO')
     end.
 
+%%% @private
 update(_,_) ->
     %% TODO. (probably only variable name updates are interesting)
     ok.
