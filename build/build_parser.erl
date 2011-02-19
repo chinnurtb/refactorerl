@@ -1,7 +1,10 @@
-%%% The contents of this file are subject to the Mozilla Public License
-%%% Version 1.1 (the "License"); you may not use this file except in
-%%% compliance with the License. You may obtain a copy of the License at
-%%% http://www.mozilla.org/MPL/
+%%% -*- coding: latin-1 -*-
+
+%%% The contents of this file are subject to the Erlang Public License,
+%%% Version 1.1, (the "License"); you may not use this file except in
+%%% compliance with the License. You should have received a copy of the
+%%% Erlang Public License along with this software. If not, it can be
+%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
 %%%
 %%% Software distributed under the License is distributed on an "AS IS"
 %%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -13,20 +16,14 @@
 %%% The Initial Developer of the Original Code is Eötvös Loránd University.
 %%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
 %%% Loránd University. All Rights Reserved.
-%%%
-%%% Contributor(s): ______________________________________.
-%%%
+
 %%% @doc Builds inputs for the parser and scanner generators from the XML
 %%% description of the syntax, and creates the syntax schema
 %%%
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
-%%%
-%%% Changelog:
-%%% 2007-09-03, lovei
-%%%    * Syntax schema generation
 
 -module(build_parser).
--vsn("$Rev: 1206 $").
+-vsn("$Rev: 1247 $").
 
 -export([build/4]).
 
@@ -94,7 +91,7 @@ parser(Elem = #xmlElement{name='erlang-syntax'}, Dev) ->
       end, Parser#parser.rules),
 
     io:format(Dev, "Erlang code.~n~s",
-              ["-import(refac_syntax, [syn_elem/2]).\n"
+              ["-import(refac_synlex, [syn_elem/2]).\n"
                "-include(\"refactorerl.hrl\").\n"
                "tvalue({_,_,{#token{value=V},_}})->V.\n"]).
 
@@ -258,7 +255,7 @@ scanner(Elem = #xmlElement{name='erlang-syntax'}, Dev) ->
                         [Regexp, Type, Name, Name]) end,
       Scanner#scanner.rules),
     io:format(Dev, "Erlang code.~n~s",
-              ["-import(refac_syntax, [lex_elem/2]).\n"]).
+              ["-import(refac_synlex, [lex_elem/2]).\n"]).
 
 scanner_tokens(Elem) ->
     S1=lists:foldl(fun scanner_kwinfo/2, #scanner{}, Elem#xmlElement.content),

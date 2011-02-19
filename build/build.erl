@@ -1,7 +1,10 @@
-%%% The contents of this file are subject to the Mozilla Public License
-%%% Version 1.1 (the "License"); you may not use this file except in
-%%% compliance with the License. You may obtain a copy of the License at
-%%% http://www.mozilla.org/MPL/
+%%% -*- coding: latin-1 -*-
+
+%%% The contents of this file are subject to the Erlang Public License,
+%%% Version 1.1, (the "License"); you may not use this file except in
+%%% compliance with the License. You should have received a copy of the
+%%% Erlang Public License along with this software. If not, it can be
+%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
 %%%
 %%% Software distributed under the License is distributed on an "AS IS"
 %%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -13,21 +16,15 @@
 %%% The Initial Developer of the Original Code is Eötvös Loránd University.
 %%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
 %%% Loránd University. All Rights Reserved.
-%%%
-%%% Contributor(s): ______________________________________.
-%%%
+
 %%% @doc RefactorErl build script: generates the scanner and the parser,
 %%% compiles modules, creates release descriptors, startup scripts, release
 %%% tarballs.
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
-%%%
-%%% Changelog:
-%%% 2007-09-03, lovei
-%%%    * Syntax schema generation
 
 -module(build).
--vsn("$Rev: 1206 $").
+-vsn("$Rev: 1247 $").
 
 -export([start/0, cmp/0, rel/0, doc/0, build/3]).
 
@@ -81,25 +78,42 @@ build(Phase, Opts) ->
 %%       BaseDir = string()
 %%       Opts = [atom()]
 build(compile, BaseDir, Opts) ->
-    file:set_cwd(filename:join(BaseDir, "src")),
+    file:set_cwd(filename:join(BaseDir, "lib")),
     build_parser(Opts),
     make(Opts);
 
 build(release, BaseDir, Opts) ->
-    code:add_pathz(filename:join(BaseDir, "ebin")),
     build(compile, BaseDir, Opts),
     build_release(BaseDir);
 
 build(docs, _, _) ->
-    edoc:application(refactorerl).
+    edoc:application(refactorerl),
+    edoc:application(clustering).
 
-get_base_dir() ->    
-    {ok, Cwd} = file:get_cwd(),
-    CwdRev = lists:reverse(filename:split(Cwd)),
-    BaseRev = lists:dropwhile(fun("refactorerl" ++_) -> false; (_) -> true end,
-                              CwdRev),
-    filename:join(lists:reverse(BaseRev)).
+get_base_dir() ->
+    BaseDir = case code:lib_dir(refactorerl) of
+                  {error, _} ->
+                      {ok, Cwd} = file:get_cwd(),
+                      find_base_dir(filename:split(Cwd));
+                  Dir when is_list(Dir) ->
+                      find_base_dir(filename:split(Dir))
+              end,
+    lists:map(fun(D) -> code:add_patha(filename:join(BaseDir, D)) end,
+              filelib:wildcard("lib/*/ebin", BaseDir)),
+    BaseDir.
 
+find_base_dir([]) ->
+    exit(builder_not_found);
+find_base_dir(Path) ->
+    Dir = filename:join(Path),
+    case filelib:is_dir(filename:join(Dir, "build")) of
+        true ->
+            Dir;
+        false ->
+            [_ | Prefix] = lists:reverse(Path),
+            find_base_dir(lists:reverse(Prefix))
+    end.
+            
 make(Opts) ->
     case make:all(Opts) of
         error -> throw(make_error);
@@ -111,54 +125,62 @@ refresh_builder(BaseDir) ->
     BuildDir = filename:join(BaseDir, "build"),
     code:add_pathz(BuildDir),
     file:set_cwd(BuildDir),
-    make([load,nowarn_unused_vars,nowarn_unused_function]).
+    make([load]).
 
 build_parser(_Opts) ->
-    InTime = file_mtime(?SYNTAX_FILE ?SYNTAX_SUFFIX),
-    ParserTime = file_mtime(?SYNTAX_FILE ?PARSER_SUFFIX),
-    ScannerTime = file_mtime(?SYNTAX_FILE ?SCANNER_SUFFIX),
-    BuilderTime = module_time(build_parser),
-    if
-        InTime =:= 0 ->
-            Force = false,
-            throw(no_syntax_file);
-        InTime > ParserTime; InTime > ScannerTime;
-        BuilderTime > ParserTime; BuilderTime > ScannerTime ->
-            Force = true,
-            build_parser:build(?SYNTAX_FILE ?SYNTAX_SUFFIX,
-                               ?SYNTAX_FILE ?SCANNER_SUFFIX,
-                               ?SYNTAX_FILE ?PARSER_SUFFIX,
-                               filename:join(["..",
-                                              "include",
-                                              ?SYNTAX_FILE ".hrl"]));
-        true ->
-            Force = false
-    end,
-    ScOutTime = file_mtime(?SYNTAX_FILE ?SCANNER_OUTPUT),
-    PrOutTime = file_mtime(?SYNTAX_FILE ?PARSER_OUTPUT),
-    if
-        Force; ScannerTime > ScOutTime ->
-            case leex:file(?SYNTAX_FILE ?SCANNER_SUFFIX) of
-                error -> throw(leex_error);
-                _ -> ok
-            end;
-        true ->
-            ok
-    end,
-    if
-        Force; ParserTime > PrOutTime ->
-            case yecc:file(?SYNTAX_FILE ?PARSER_SUFFIX) of
-                error -> throw(yecc_error);
-                _ -> ok
-            end;
-        true ->
-            ok
+    {ok, Cwd} = file:get_cwd(),
+    try
+        file:set_cwd(filename:join([Cwd, "refactorerl", "src"])),
+        InTime = file_mtime(?SYNTAX_FILE ?SYNTAX_SUFFIX),
+        ParserTime = file_mtime(?SYNTAX_FILE ?PARSER_SUFFIX),
+        ScannerTime = file_mtime(?SYNTAX_FILE ?SCANNER_SUFFIX),
+        BuilderTime = module_time(build_parser),
+        if
+            InTime =:= 0 ->
+                Force = false,
+                throw(no_syntax_file);
+            InTime > ParserTime; InTime > ScannerTime;
+            BuilderTime > ParserTime; BuilderTime > ScannerTime ->
+                Force = true,
+                build_parser:build(?SYNTAX_FILE ?SYNTAX_SUFFIX,
+                                   ?SYNTAX_FILE ?SCANNER_SUFFIX,
+                                   ?SYNTAX_FILE ?PARSER_SUFFIX,
+                                   filename:join(["..",
+                                                  "include",
+                                                  ?SYNTAX_FILE ".hrl"]));
+            true ->
+                Force = false
+        end,
+        ScOutTime = file_mtime(?SYNTAX_FILE ?SCANNER_OUTPUT),
+        PrOutTime = file_mtime(?SYNTAX_FILE ?PARSER_OUTPUT),
+        if
+            Force; ScannerTime > ScOutTime ->
+                case leex:file(?SYNTAX_FILE ?SCANNER_SUFFIX) of
+                    error -> throw(leex_error);
+                    _ -> ok
+                end;
+            true ->
+                ok
+        end,
+        if
+            Force; ParserTime > PrOutTime ->
+                case yecc:file(?SYNTAX_FILE ?PARSER_SUFFIX) of
+                    error -> throw(yecc_error);
+                    _ -> ok
+                end;
+            true ->
+                ok
+        end
+    after
+        file:set_cwd(Cwd)
     end.
 
 
 build_release(BaseDir) ->
-    application:load(refactorerl),
-    {ok, Apps} = application:get_key(refactorerl, applications),
+    ok = application:load(refactorerl),
+    ok = application:load(clustering),
+    {ok, RApps} = application:get_key(refactorerl, applications),
+    {ok, CApps} = application:get_key(clustering, applications),
     {ok, Vsn} = application:get_key(refactorerl, vsn),
     Rel = {release,
            {"refactorerl", Vsn},
@@ -169,8 +191,8 @@ build_release(BaseDir) ->
                      {ok, V} = application:get_key(App, vsn),
                      {App, V}
              end,
-             Apps ++ [refactorerl])},
-    file:set_cwd(BaseDir),
+             ordsets:from_list(RApps ++ CApps ++ [refactorerl, clustering]))},
+    ok = file:set_cwd(BaseDir),
     case file:open("refactorerl.rel", [write]) of
         {ok, Dev} ->
             io:format(Dev, "~p.~n", [Rel]),

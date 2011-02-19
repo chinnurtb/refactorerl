@@ -1,0 +1,2 @@
+{'leex.erl', [nowarn_unused_vars,nowarn_unused_function]}.
+{'*', []}.
