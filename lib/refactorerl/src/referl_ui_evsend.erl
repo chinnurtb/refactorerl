@@ -23,7 +23,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_ui_evsend).
--vsn("$Rev: 2560 $").
+-vsn("$Rev: 2943 $").
 -behaviour(gen_event).
 
 -include("refactorerl.hrl").
@@ -39,13 +39,21 @@ start(Pid) ->
     spawn(fun() -> sender(Pid) end).
 
 sender(Pid) ->
-    link(Pid),
     ?UI:add_msg_handler(?MODULE, self()),
+    process_flag(trap_exit, true),
+    link(Pid),
     sender_loop(Pid).
 
 sender_loop(Pid) ->
     receive
-        Event -> Pid ! Event, sender_loop(Pid)
+        {'EXIT',_FromPID,_Reason} ->
+%            io:format("evsend: exit~n");
+%            ?UI:del_msg_handler(?MODULE, self())
+             ok;
+        Event ->
+%            io:format("evsend: ~p~n",[Event]),
+            Pid ! Event,
+            sender_loop(Pid)
     end.
 
 %% @private
@@ -69,6 +77,7 @@ handle_info(_Info, Sender) ->
 
 %% @private
 terminate(_Arg, Sender) ->
+%    io:format("evsend: terminate~n"),
     Sender ! terminated,
     ok.
 

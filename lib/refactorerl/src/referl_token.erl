@@ -28,7 +28,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_token).
--vsn("$Rev: 2497 $").
+-vsn("$Rev: 2714 $").
 
 %% Properties
 -export([pos/1, pos/2, text/1, data/1]).
@@ -295,7 +295,8 @@ escape_value([$t|T]) -> {$\t,T};
 escape_value([$v|T]) -> {$\v,T};
 escape_value([D|T]) when D >= $0, D =< $7 ->
     escape_value([D], T);
-escape_value([C|T])  -> {C,T}.
+escape_value([C|T])  -> {C,T};
+escape_value("") -> {0, []}.
 
 escape_value(Num, [D|T]) when D >= $0, D =< $7, length(Num) < 3 ->
     escape_value(Num ++ [D], T);

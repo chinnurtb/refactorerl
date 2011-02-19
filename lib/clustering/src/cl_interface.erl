@@ -21,9 +21,10 @@
 %%%
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 %%% @author Hanna Kollo <khi@inf.elte.hu>
+%%% @author Petra Krizsai <krizsai@inf.elte.hu>
 
 -module(cl_interface).
--vsn("$Rev: 2521 $").
+-vsn("$Rev: 2889 $").
 
 -export([run_cluster/0, run_cluster/1, run_cluster_default/0,
          run_cluster_default/1, run_cluster_labels/0, run_cluster_labels/1,
@@ -80,7 +81,7 @@ run_cluster() ->
 %% [{output, {process, cl_out:start_section_process(
 %%                         cl_out:file_name_gen("output", ".txt"))}}]
 %% '''
-%%         which will write the output into files `"output1.txt"', `output2.txt'
+%%         which will write the output into files `"output1.txt"', `"output2.txt"'
 %%         etc. </li>
 %% </ul>
 %%
@@ -347,12 +348,47 @@ run_cluster_alg(Output, Options) ->
                         [{mergefun, MergeFun},
                          {entitylist, cl_matrix:rows(TransformedAttribs)},
                          {distfun, DistFun}]),
-                cl_kmeans:run_cluster(Options2, TransformedAttribs)
+
+                % TODO Calling set_selfusage in one branch will make the results
+                % of k-means better; we could do something similar in the other
+                % branch. Probably this set_selfusage things should be done more
+                % elegantly. 
+                TransformedAttribs2 =
+                    case Entities of
+                        modules ->
+                            TransformedAttribs;
+                        functions ->
+                            set_selfusage(TransformedAttribs)
+                    end,
+
+                cl_kmeans:run_cluster(Options2, TransformedAttribs2)
         end,                   
 
     cl_matrix:delete(TransformedAttribs),
     cl_out:close(C),
     Result.
+
+%% @spec set_selfusage(attribs()) -> attribs()
+%%
+%% @doc Sets self usage in the matrix. It means that for all rows that are also
+%% columns, the value of the cell that corresponds to that row and column will
+%% be set to 1 (which means it uses itself).
+set_selfusage(Attribs) ->
+    Rows = cl_matrix:rows(Attribs),
+    Cols = cl_matrix:cols(Attribs),
+    lists:foldl(
+      fun(Row, Attribs2) ->
+              Attribs3 =
+                  %% Could be done more efficiently; `Cols' could be a `dict' or
+                  %% an `ets' table.
+                  case lists:member(Row, Cols) of
+                      true ->
+                          Attribs;
+                      false ->
+                          cl_matrix:add_col(Row, Attribs2)
+                  end,
+              cl_matrix:set(Row, Row, 1, Attribs3)
+        end, Attribs, Rows).
 
 %% @spec get_libs() -> [mod_name()]
 %%

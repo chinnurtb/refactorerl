@@ -47,7 +47,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(referl_error).
--vsn("$Rev: 2662 $").
+-vsn("$Rev: 3026 $").
 
 -include("refactorerl.hrl").
 
@@ -104,18 +104,28 @@ error_text(file_not_present, [Name]) ->
     ["File ", Name, " cannot be found in the database"];
 error_text(file_not_module, [File]) ->
     ["File ", File, " does not identify a module"];
+error_text(file_not_hrl, [File]) ->
+    ["File ", File, " does not identify a header file"];
+error_text(rel_path, [_]) ->
+    ["The path of the header file has to be an absolute path"];
 error_text(mod_not_found, [Name]) ->
     ["Module ", atom_to_list(Name), " not found"];
 error_text(fun_not_found, FunInfo) ->
     ["Function ", ?MISC:fun_text(FunInfo), " not found"];
 error_text(rec_not_found, [Name]) ->
-    ["Record ", Name, " not found"];
+    ["Record ", atom_to_list(Name), " not found"];
+error_text(recfld_not_found, RecFld) ->
+    ["Record field ", ?MISC:recfld_text(RecFld), " not found"];
+error_text(mac_not_found, [Name]) ->
+    ["Macro ", Name, " not found"];
 error_text(fun_exists, FunInfo) ->
     ["Function ", ?MISC:fun_text(FunInfo), " already exists"];
 error_text(var_exists, VarName) ->
     ["Variable ", VarName, " already exists"];
 error_text(rec_exists, RecName) ->
     ["Record ", RecName, " already exists"];
+error_text(mac_exists, RecName) ->
+    ["Macro ", RecName, " already exists"];
 error_text(imported_fun_exists, [_Mod, FunInfo]) ->
     ["Function ", ?MISC:fun_text(FunInfo), " is already imported"];
 error_text(autoimported_fun_exists, FunInfo) ->
@@ -129,14 +139,11 @@ error_text(pos_bad_type, [ExpectedType, Pos]) ->
      "has to indicate ", ?MISC:add_article(node_kind_text(ExpectedType))];
 error_text(bad_order, [Length]) ->
     ["The given order should have all values from 1 to ", integer_to_list(Length)];
-error_text(bad_order, Order) ->
-    ["The specified order is invalid"]++
-    [" or its length is not equal with an arity of the function. "]++
-    io_lib:write(Order);
 error_text(order_not_list, []) ->
     ["The new order has to be given as a list"];
-error_text(order_arity_mismatch, []) ->
-    ["The given order should have the same arity as the function"];
+error_text(order_arity_mismatch, [Arity]) ->
+    ["The given order should have the same arity as the function: ",
+     integer_to_list(Arity)];
 error_text(bad_range, []) ->
     ["A valid expression range has to be selected"];
 error_text(outside_used_vars, List) ->

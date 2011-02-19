@@ -20,12 +20,40 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @doc Expand implicit fun expression
+%%% @doc This refactoring expands an implicit fun expression to its
+%%% explicit form. The variable names are generated for the argument
+%%% list.
+%%%
+%%% Example:
+%%%
+%%% <pre>fun foo/2</pre> becomes to <pre>fun (V1, V2) -> foo(V1, V2) end</pre>
+%%%
+%%% == Parameters ==
+%%% <ul>
+%%%   <li>An expression
+%%%       (see {@link referl_args:expression/1}).</li>
+%%% </ul>
+%%%
+%%% == Conditions of applicability ==
+%%% <ul>
+%%%   <li>The selected expression should be an implicit fun expression
+%%%   or part/subexpression of an implicit fun expression</li>
+%%% </ul>
+%%%
+%%% == Transformation steps and compensations ==
+%%% <ol>
+%%%   <li>If the implicit fun expression is found, the new syntax
+%%%   structure is created and the old expression is replaced with the
+%%%   new one</li>
+%%% </ol>
+%%%
+%%% == Implementation status ==
+%%% The transformation is fully implemented.
 %%%
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(referl_tr_expand_funexpr).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 3006 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -43,11 +71,11 @@ error_text(implicit_not_found, []) ->
 
 %% @private
 prepare(Args) ->
-    ArgExpr = ?Args:expression(Args),
-    [Expr] = ?Query:exec(ArgExpr, ?Expr:sup()),
-    case is_implicit_fun_expr(Expr) of
-        false -> throw(?LocalErr0r(implicit_not_found));
-        true ->
+    case [E || {_, E} <- ?Syn:root_path(?Args:expression(Args)),
+               ?Syn:class(E) == expr, is_implicit_fun_expr(E)] of
+        [] ->
+            throw(?LocalErr0r(implicit_not_found));
+        [Expr|_] ->
             fun() ->
                     File = ?Syn:get_file(Expr),
                     ?Expr:expand_funexpr(Expr),
@@ -56,7 +84,6 @@ prepare(Args) ->
     end.
 
 is_implicit_fun_expr(Expr) ->
-    ExprKindOk = ?Expr:kind(Expr) == implicit_fun,
     SubExprKindOk =
         case ?Query:exec(Expr, ?Expr:children()) of
             [] -> false;
@@ -67,4 +94,4 @@ is_implicit_fun_expr(Expr) ->
                     _                                 -> false
                 end
         end,
-    ExprKindOk andalso SubExprKindOk.
+    ?Expr:kind(Expr) == implicit_fun andalso SubExprKindOk.

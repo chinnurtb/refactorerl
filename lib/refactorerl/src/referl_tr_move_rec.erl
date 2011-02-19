@@ -23,7 +23,17 @@
 %%% @doc This module implements the `Move records between files'
 %%% transformation
 %%%
-%%% Side conditions
+%%% == Parameters ==
+%%% <ul>
+%%%   <li>The file from the records are moved
+%%%       (see {@link referl_args:file/1}).</li>
+%%%   <li>The file's name to the records are moved
+%%%       (see {@link referl_args:filename/1}).</li>
+%%%   <li>The records to be moved
+%%%       (see {@link referl_args:records/1}).</li>
+%%% </ul>
+%%%
+%%% == Conditions of applicability ==
 %%%
 %%% <ul>
 %%%   <li>The names of the records to be moved do not clash with
@@ -42,7 +52,7 @@
 %%%   the place of the inclusion.</li>
 %%% </ul>
 %%%
-%%% Transformation steps and compensations
+%%% == Transformation steps and compensations ==
 %%%
 %%% <ol>
 %%%   <li>The record definitions are removed from the source file</li>
@@ -60,7 +70,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(referl_tr_move_rec).
--vsn("$Rev: 2662 $").
+-vsn("$Rev: 3006 $").
 -include("refactorerl.hrl").
 
 

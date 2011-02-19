@@ -20,30 +20,24 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @doc
-%%% This refactoring renames records in modules or header files. After the
-%%% transformation, the old name will be replaced by the
-%%% new name in the record definition and in every reference to the given
-%%% record (e.g.\ record field access or field update expressions). The
-%%% condition of the renaming is that there is no name conflict with another
-%%% record in the file (which contains the given record), in its
-%%% includes, or where it is included (the latter is only possible when we
-%%% are renaming in a header file).
+%%% @doc This refactoring renames records in modules or header
+%%% files. After the transformation, the old name will be replaced by
+%%% the new name in the record definition and in every reference to
+%%% the given record (e.g.\ record field access or field update
+%%% expressions). The condition of the renaming is that there is no
+%%% name conflict with another record in the file (which contains the
+%%% given record), in its includes, or where it is included (the
+%%% latter is only possible when we are renaming in a header file).
 %%%
-%%% Parameters
+%%% == Parameters ==
 %%% <ul>
-%%%   <li>The record to be renamed can be specified by:
-%%%     <ul>
-%%%       <li>The containing file and a position that points to the record
-%%%       definition or to a usage of the record (used in Emacs).</li>
-%%%       <li>The containing file and the old record name (used in command
-%%%       line).</li>
-%%%     </ul>
-%%%   </li>
-%%%   <li>The new name of the record as a string or as an atom.</li>
+%%%   <li>The record to be renamed
+%%%       (see {@link referl_args:record/1}).</li>
+%%%   <li>The new name of the record
+%%%       (see {@link referl_args:name/1}).</li>
 %%% </ul>
 %%%
-%%% Side conditions
+%%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li>There must be no record with the new name
 %%%     <ul>
@@ -54,19 +48,21 @@
 %%%   </li>
 %%% </ul>
 %%%
-%%% Transformation steps and compensations
+%%% == Transformation steps and compensations ==
 %%% <ol>
 %%%   <li>The record name is changed to the new name in the definition of
 %%%   the record and in every record expression that refers the record.</li>
 %%% </ol>
 %%%
+%%% == Implementation status ==
+%%% The transformation is fully implemented.
 %%%
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 %%% @author Lilla Hajos <lya@elte.hu>
 
 
 -module(referl_tr_rename_rec).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 3006 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -75,6 +71,7 @@
 %%% ============================================================================
 %%% Callbacks
 
+%% @private
 prepare(Args) ->
     NewName = ?Args:name(Args),
     Record  = ?Args:record(Args),

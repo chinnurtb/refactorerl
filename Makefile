@@ -20,9 +20,10 @@ doc: builder
 	$(ERL) -noshell -pa build -run build doc -run init stop
 
 clean:
-	$(RM) lib/*/ebin/*.beam build/*.beam
+	$(RM) lib/*/ebin/*.beam build/*.beam build/leex/ebin/*.beam
 	$(RM) lib/refactorerl/include/referl_syntax.hrl
 	$(RM) lib/refactorerl/src/referl_syntax_*.*
+	$(RM) lib/refactorerl/priv/erlang.lex*
 	$(RM) refactorerl.rel refactorerl.script refactorerl.boot
 
 .PHONY: default all tool doc builder clean

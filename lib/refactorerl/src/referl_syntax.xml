@@ -361,7 +361,7 @@ Authors: Tamas Nagy
     <!-- Guard sequences -->
     <ruleset head="Guard_seq">
       <chain-rule name="Guard"/>
-      
+
       <rule>
         <attrib name="kind" value="infix_expr"/>
         <symbol name="Guard" link="sub"/>
@@ -578,7 +578,7 @@ Authors: Tamas Nagy
     <ruleset head="Colon_qualifier">
       <rule>
         <attrib name="kind" value="infix_expr"/>
-	<symbol name="Expr_max" link="sub"/>
+    <symbol name="Expr_max" link="sub"/>
         <token type="colon" attr="value"/>
         <symbol name="Expr_max" link="sub"/>
       </rule>
@@ -1142,6 +1142,16 @@ Authors: Tamas Nagy
     <rep>
       <match name="Digit"/>
     </rep>
+    <opt>
+      <chars-of>eE</chars-of>
+      <opt>
+        <chars-of>+-</chars-of>
+      </opt>
+      <match name="Digit"/>
+      <rep>
+        <match name="Digit"/>
+      </rep>
+    </opt>
   </lexical>
 
   <lexical name="char">

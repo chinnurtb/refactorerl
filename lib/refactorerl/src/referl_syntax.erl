@@ -29,7 +29,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_syntax).
--vsn("$Rev: 2611 $").
+-vsn("$Rev: 2756 $").
 
 %%% ============================================================================
 %%% Exports
@@ -135,7 +135,7 @@ cut(From, To, List) ->
     lists:reverse(lists:dropwhile(fun(E) -> E =/= To end, Temp)).
 
 filter(S) ->
-    lists:filter(fun(C) -> lists:member(C, " \t\n") end, S).                         
+    lists:filter(fun(C) -> lists:member(C, " \t\n") end, S).
 
 
 %%% ============================================================================
@@ -162,7 +162,7 @@ children(Node) ->
     case Data of
         {root}            -> children(Node, file);
         #file{}           -> children(Node, form);
-        #form{type=error} -> throw(node_error);
+        #form{type=error} -> children(Node, flex); %throw(node_error);
         #form{type=lex}   -> children(Node, flex);
         #form{type=macro} -> children(Node, flex);
         #lex{}            -> children(Node, llex);
@@ -380,8 +380,7 @@ build(Data, Links) ->
     Node = ?ESG:create(Data),
     lists:foreach(
         fun
-            ({Tag, To}) ->
-                ?ESG:insert(Node, Tag, To)
+            ({Tag, To}) -> ?ESG:insert(Node, Tag, To)
         end, lists:flatten(Links)),
     Node.
 

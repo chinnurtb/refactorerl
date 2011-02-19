@@ -25,9 +25,9 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(build_parser).
--vsn("$Rev: 2247 $").
+-vsn("$Rev: 3043 $").
 
--export([build/1]).
+-export([build/5]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 
@@ -35,9 +35,8 @@
 %%%%% Node structure
 
 %% @doc Runs the build process. Builds the necessary files.
-build([ScannerFile, ParserFile, SyntaxFile, SchemaFile, NodeStructureFile]) ->
+build(SyntaxFile, ScannerFile, ParserFile, NodeStructureFile, SchemaFile) ->
     {Syntax, _} = xmerl_scan:file(SyntaxFile, [{validation,dtd}]),
-
     FilesToBuild =
         [
             {fun node_structure/1, NodeStructureFile, "node structure"}
@@ -451,19 +450,27 @@ schema_group([[From, Via, To]|Xs], Head, RuleAcc, Acc) ->
 
 %% the text of the scanner, to be handled by leex
 scanner(Root) ->
-    EndToken = xpath_attr("@end", Root),
-    "Definitions.\n" ++ scanner_generate_definitions(Root)
-        ++ "Rules.\n"
-        ++ scanner_generate_rules(Root, EndToken)
-        ++ scanner_generate_lexical_rules(Root, EndToken)
-        ++ "Erlang code.\n"
-        ++ "-include(\"refactorerl.hrl\").\n"
-        ++ "-import(?Token, [build/2]).\n".
+    [scanner_definitions(Root),
+     scanner_keywords(Root),
+     scanner_lexicals(Root)].
 
-scanner_generate_definitions(Root) ->
-    Patterns = collect_xml( Root, [ {"pattern", ["@name", "*"]}]),
-    [ PatternName ++ " = " ++ sc_texts(PatternContents) ++ "\n"
-        || [PatternName, PatternContents] <- Patterns ].
+scanner_definitions(Root) ->
+    [[Name, "=", sc_texts(Content), "\n"] ||
+        [Name, Content] <- collect_xml(Root, [{"pattern", ["@name", "*"]}])].
+
+%%%     EndToken = xpath_attr("@end", Root),
+%%%     "Definitions.\n" ++ scanner_generate_definitions(Root)
+%%%         ++ "Rules.\n"
+%%%         ++ scanner_generate_rules(Root, EndToken)
+%%%         ++ scanner_generate_lexical_rules(Root, EndToken)
+%%%         ++ "Erlang code.\n"
+%%%         ++ "-include(\"refactorerl.hrl\").\n"
+%%%         ++ "-import(?Token, [build/2]).\n".
+
+%%% scanner_generate_definitions(Root) ->
+%%%     Patterns = collect_xml( Root, [ {"pattern", ["@name", "*"]}]),
+%%%     [ PatternName ++ " = " ++ sc_texts(PatternContents) ++ "\n"
+%%%         || [PatternName, PatternContents] <- Patterns ].
 
 
 sc_texts(#xmlText{value=E}) ->
@@ -478,7 +485,8 @@ escape([Char | Tail])
        Char =:= $.; Char =:= $$; Char =:= $^;
        Char =:= $(; Char =:= $); Char =:= $?;
        Char =:= $[; Char =:= $]; Char =:= $|;
-       Char =:= $"     -> [$\\, Char | escape(Tail)];
+       Char =:= ${; Char =:= $};
+       Char =:= $\"     -> [$\\, Char | escape(Tail)];
 escape([Char | Tail])
   when Char =:= $\ ; Char =:= $\t; Char =:= $\n  -> escape(Tail);
 escape([Char | Tail])                            -> [Char | escape(Tail)];
@@ -508,30 +516,38 @@ octal(N)    -> octal(N, 3).
 octal(N, 1) -> "\\" ++ integer_to_list(N);
 octal(N, K) -> octal(N div 8, K - 1) ++ integer_to_list(N rem 8).
 
-scanner_generate_rules(Root, EndToken) ->
-    KwNameText = collect_xml( Root, [ {"keyword", ["@name", "text()"]}]),
-    lists:flatmap(
-        fun ([Name, Text]) ->
-                escape(lists:flatten(Text))
-                    ++ " : "
-                    ++ scanner_RHS(Name, EndToken)
-        end, KwNameText ).
+%% scanner_generate_rules(Root, EndToken) ->
+%%     KwNameText = collect_xml( Root, [ {"keyword", ["@name", "text()"]}]),
+%%     lists:flatmap(
+%%         fun ([Name, Text]) ->
+%%                 escape(lists:flatten(Text))
+%%                     ++ " : "
+%%                     ++ scanner_RHS(Name, EndToken)
+%%         end, KwNameText ).
 
-scanner_generate_lexical_rules(Root, EndToken) ->
-    LexicalRules = collect_xml( Root, [{"lexical", ["@name", "*"]}]),
-    lists:flatmap(
-        fun ([Name, Contents]) ->
-            sc_texts(Contents) ++ " : " ++ scanner_RHS(Name, EndToken)
-        end, LexicalRules).
+scanner_keywords(Root) ->
+    [[Name, "=", escape(lists:flatten(Text)), "\n"] ||
+        [Name, Text] <- collect_xml(Root, [{"keyword", ["@name", "text()"]}])].
 
-scanner_RHS([Name], EndToken) ->
-    TokenType =
-        if
-            Name =:= EndToken -> "end_token";
-            true              -> "token"
-        end,
-    ["{", TokenType, ",",
-     "{'", Name, "', TokenLine, build('", Name, "', TokenChars)}}.\n"].
+scanner_lexicals(Root) ->
+    [[Name, "=", sc_texts(Content), "\n"] ||
+        [Name, Content] <- collect_xml(Root, [{"lexical", ["@name", "*"]}])].
+
+%% scanner_generate_lexical_rules(Root, EndToken) ->
+%%     LexicalRules = collect_xml( Root, [{"lexical", ["@name", "*"]}]),
+%%     lists:flatmap(
+%%         fun ([Name, Contents]) ->
+%%             sc_texts(Contents) ++ " : " ++ scanner_RHS(Name, EndToken)
+%%         end, LexicalRules).
+
+%% scanner_RHS([Name], EndToken) ->
+%%     TokenType =
+%%         if
+%%             Name =:= EndToken -> "end_token";
+%%             true              -> "token"
+%%         end,
+%%     ["{", TokenType, ",",
+%%      "{'", Name, "', TokenLine, build('", Name, "', TokenChars)}}.\n"].
 
 
 %%%%% =========================================================================

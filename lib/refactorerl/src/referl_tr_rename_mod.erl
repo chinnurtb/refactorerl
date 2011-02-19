@@ -20,13 +20,16 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @author Istvan Bozo <bozo_i@inf.elte.hu>
-
 %%% @doc This module implements the rename module refactoring. The rename module
 %%% refactoring renames a module to the given new name. Renames the file and
 %%% make changes in other file where this module is referenced.
 %%%
-%%% Conditions of applicability
+%%% == Parameters ==
+%%% <ul>
+%%% <li>A module (see {@link referl_args:module/1}).</li>
+%%% </ul> 
+%%%
+%%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li>The given new name should be a legal file name.</li>
 %%%   <li>There must not exist another module with the given new name in the
@@ -35,16 +38,21 @@
 %%%    name in the directory of the module to be renamed.</li>
 %%% </ul>
 %%%
-%%% Rules of the transformation
+%%% == Transformation steps and compensations ==
 %%% <ol>
 %%%   <li>Rename the current module name to the new name.</li>
 %%%   <li>Rename the related module qualifiers to the given new name.</li>
 %%%   <li>Rename the references to the module in the import lists.</li>
 %%%   <li>Rename the file to the new name.</li>
 %%% </ol>
+%%%
+%%% == Implementation status ==
+%%% The transformation is fully implemented.
+%%% 
+%%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(referl_tr_rename_mod).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 2974 $").
 -include("refactorerl.hrl").
 
 %% Callbacks

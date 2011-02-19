@@ -40,4 +40,5 @@
 -import(proplists).
 
 %%
--define(CMISC, cl_misc).
+-define(CMISC,      cl_misc).
+-define(Matrix,     cl_matrix).

@@ -20,7 +20,7 @@
 %%% @doc File properties and file based queries
 
 -module(referl_file).
--vsn("$Rev: 2565 $").
+-vsn("$Rev: 2902 $").
 -include("refactorerl.hrl").
 
 -import(?MISC, [to_atom/1, to_list/1]).
@@ -40,6 +40,9 @@
 %% Manips
 -export([add_include/2, del_include/2, add_form/2, add_form/3,
          del_form/1, del_form/2, upd_path/2]).
+
+%% Useful path calculators
+-export([abs_path/1, rel_path/2, rel_incl_path/2]).
 
 
 %% =============================================================================
@@ -183,14 +186,12 @@ macro(Name) ->
 %% @spec add_include(node(#file{}), node(#file{}) | string()) -> ok
 %% @doc Adds an include form to the file if the include path is not present.
 add_include(File, InclPath) when is_list(InclPath) ->
-    case lists:member(?Graph:path(?Graph:root(), find(InclPath)), 
+    case lists:member(?Graph:path(?Graph:root(), find(InclPath)),
                       ?Graph:path(File, includes())) of
         true ->
             ok;
         false ->
-            PL1 = filename:split(InclPath),
-            PL2 = filename:split(filename:dirname(?File:path(File))),
-            Path = filename:join(relative_path(PL1, PL2)),
+            Path = rel_incl_path(InclPath, ?File:path(File)),
             Tokens =
                 [?ESG:create(#lex{type=token,
                                   data=?Token:build(Type, Text)}) ||
@@ -205,10 +206,6 @@ add_include(File, InclPath) when is_list(InclPath) ->
     end;
 add_include(File, InclFile) ->
     add_include(File, path(InclFile)).
-
-relative_path([P|Path], [P|Dir]) -> relative_path(Path, Dir);
-relative_path(Path, _) -> Path.
-    
 
 %% @spec del_include(node(#file{}), node(#file{})) -> ok
 %% @doc Removes the including of a file.
@@ -269,3 +266,47 @@ antecedent_types(Type) ->
 upd_path(File, NewPath) ->
     Data = ?ESG:data(File),
     ?ESG:update(File, Data#file{path = NewPath}).
+
+
+%% -----------------------------------------------------------------------------
+%% Path calculators
+
+%% Generates absolute path and eliminates "./" and "../" relative path
+%% elements. If the path is only a file name, the result is the
+%% original `Path'.
+abs_path(Path) ->
+    S = filename:split(filename:absname(Path)),
+    LongName = hd(lists:reverse(S)),
+    case erlang:length(Path) /= erlang:length(LongName) of
+         true -> Z = fun("..", _) -> "";
+                        (_, "..") -> "";
+                        (E, _)    -> E
+                     end,
+                 filename:join(lists:zipwith(Z, S, tl(S) ++ [[]]));
+	    _ -> Path
+    end.
+
+rel_path(Dir, Path) ->
+    AbsDir  = filename:split(abs_path(Dir)),
+    AbsPath = filename:split(abs_path(Path)),
+    case {AbsDir, AbsPath} of
+        {[X|_], [X|_]} -> filename:join(path_elems(AbsDir, AbsPath));
+        _              -> Path
+    end.
+
+rel_incl_path(Incl, Path) ->
+    Dirs = [AbsDir
+            || Dir <- [filename:dirname(Path) | stored_include_paths()],
+               AbsDir <- [abs_path(Dir)]],
+    RelPaths = [rel_path(Dir, Incl) || Dir <- lists:usort(Dirs)],
+    {_, MinRelPath} = lists:min([{erlang:length(P), P} || P <- [Incl|RelPaths]]),
+    MinRelPath.
+
+stored_include_paths() ->
+    [(?Graph:data(Env))#env.value
+     || Env <- ?Graph:path(?Graph:root(), [{env, {name, '==', include}}])].
+
+path_elems([X|Dir], [X|AbsPath]) -> path_elems(Dir, AbsPath);
+path_elems(Dir, AbsPath)         -> rel_part(Dir) ++ AbsPath.
+rel_part([])  -> []; %% ["."]
+rel_part(Dir) -> lists:duplicate(erlang:length(Dir), "..").

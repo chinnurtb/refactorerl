@@ -23,7 +23,17 @@
 %%% @doc This module implements the `move functions between modules'
 %%% refactoring.
 %%%
-%%% Conditions of applicability
+%%% == Parameters ==
+%%% <ul>
+%%%   <li>The module from the functions are moved
+%%%       (see {@link referl_args:module/1}).</li>
+%%%   <li>The module's name to the functions are moved
+%%%       (see {@link referl_args:name/1}).</li>
+%%%   <li>The functions to be moved
+%%%       (see {@link referl_args:functions/1}).</li>
+%%% </ul>
+%%%
+%%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li>The names of the selected functions should not conflict with
 %%%   other functions in the target module, neither with those
@@ -38,7 +48,7 @@
 %%%   same record definition in the source and in the target module.</li>
 %%% </ul>
 %%%
-%%% Rules of the transformation
+%%% == Transformation steps and compensations ==
 %%% <ol>
 %%%   <li>In the refactoring step the functions to be moved have to be
 %%%   marked either at the definition or in the export list. A list
@@ -79,7 +89,7 @@
 
 
 -module(referl_tr_move_fun).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 3006 $").
 
 -include("refactorerl.hrl").
 

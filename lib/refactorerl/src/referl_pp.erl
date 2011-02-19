@@ -45,7 +45,7 @@
 -export([format/4, format_default/0, format_validator/0]).
 
 
--export([trim_lines/2, trim_lines/4, is_comment_lines/1]).
+%-export([trim_lines/2, trim_lines/4, is_comment_lines/1]).
 
 
 
@@ -165,56 +165,6 @@ error_text(invalid_options, Wrongs) ->
 
 
 %%% ============================================================================
-%%% Miscellaneous functions
-
-
-
-%% @spec proplist_merge_def(List::proplist(), DefList::proplist()) ->
-%%           proplist()
-%% @doc  Add missing key value pair from `DefList' to `List'.
-proplist_merge_def(List, DefList) when is_list(List), is_list(DefList) ->
-    List ++ ?MISC:list_substract(DefList, List,
-        fun({Type,_},{Type,_}) -> true; ({_,_},{_,_}) -> false end).
-
-
-%% @spec proplist_validate(List::proplist(), ValidatorList::ValidatorProplist) ->
-%%           WrongPairs::proplist()
-%%       ValidatorProplist = [{Key::atom(),
-%%                             ValidatorFun::((Value::term()) -> boolean())}]
-%% @doc  Validate the values of keys in the `List' by the validator functions
-%%       given in `ValidatorList'.
-proplist_validate(List,ValidatorList) when is_list(List),
-        is_list(ValidatorList) ->
-    lists:reverse(lists:foldl(
-        fun({Key,Value}, Wrongs) ->
-            case proplists:get_value(Key, ValidatorList) of
-                Fun when is_function(Fun) ->
-                    case Fun(Value) of
-                        true -> Wrongs;
-                        _    -> [{Key,Value}|Wrongs]
-                    end;
-                undefined -> [{Key,Value}|Wrongs]
-            end
-        end,
-        [],
-        List)).
-
-
-%% @spec ets_keys(EtsTableID::integer()) -> [term()]
-%% @doc  Returns the keys of the ETS table identified by `EtsTableID'.
-%%       If the type ot the ETS table is `ordered_set' than list is also
-%%       ordered. In other cases the order is undefined it depending on the
-%%       storage order.
-ets_keys(EtsTableID) ->
-    ets:select(EtsTableID,
-        [{'_', [], [{element,ets:info(EtsTableID,keypos),'$_'}]}]).
-
-
-
-
-
-
-%%% ============================================================================
 %%% Source code formation
 
 
@@ -293,8 +243,8 @@ format_validator() ->
 format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
         is_list(Options) ->
     % Check the options
-    Options1 = proplist_merge_def(Options, format_default()),
-    case proplist_validate(Options1, format_validator()) of
+    Options1 = ?MISC:proplist_merge_def(Options, format_default()),
+    case ?MISC:proplist_validate(Options1, format_validator()) of
         [] -> ok;
         Wrongs -> throw(?LocalError(invalid_options, Wrongs))
     end,
@@ -308,7 +258,7 @@ format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
     State0 = create_ppState(),
     State = downProp(Node1, Node2, Config, State0),
     % Add spaces and new lines to the white spaces between tokens
-    Idxs = ets_keys(State#ppState.tokens),
+    Idxs = ?MISC:ets_keys(State#ppState.tokens),
     case lists:member(SpMode, [check,reformat,reset]) orelse
             lists:member(NlMode, [check]) of
         true ->
@@ -355,7 +305,7 @@ format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
     % Set initial indentations
     case lists:member(InMode, [check,reset]) of
         true ->
-            LnIdxs    = ets_keys(State#ppState.lines),
+            LnIdxs    = ?MISC:ets_keys(State#ppState.lines),
             LnIdxsLen = length(LnIdxs),
             LnIdxs2 = case {State#ppState.hasPrevLine,
                             State#ppState.hasNextLine} of
@@ -619,12 +569,12 @@ format_indent([LineIdx|LineIdxs], InMode, UseTab, TabSize,
             TokData2 = LexData2#lex.data,
             {Parts2,_} = ?MISC:string_lines(TokData2#token.postws),
             {[PostWsFirstLine], PostWsLastLines} = lists:split(1,Parts2),
-            PostWsLastLines2 = lists:map(fun(Ln) -> 
-					case ?MISC:string_strs(Ln, ?MISC:string_EOLs()) of
-						{0,_} -> Ln;
-						{_,_} -> PreWsLastLine2 ++ ?MISC:string_trim(Ln,left)
-					end
-				end,
+            PostWsLastLines2 = lists:map(fun(Ln) ->
+                    case ?MISC:string_strs(Ln, ?MISC:string_EOLs()) of
+                        {0,_} -> Ln;
+                        {_,_} -> PreWsLastLine2 ++ ?MISC:string_trim(Ln,left)
+                    end
+                end,
                 PostWsLastLines),
             % Update postws
             TokData2B = TokData2#token{postws =
@@ -949,7 +899,7 @@ calc_indices_tokrec([], {LineIdxA,LastCharIdxA,CharCntA,PostWsA},
             calc_indices_tokrec_line({LineIdxA,LineAFirstIdx,LineALastIdx},
                 {CharCntA,LastCharIdxA,PostWsA}, TabSize, State),
             % Update the minimal/maximal line index
-            LineIdxs = ets_keys(State#ppState.lines),
+            LineIdxs = ?MISC:ets_keys(State#ppState.lines),
             ets:insert(State#ppState.etc, {minLineIdx, hd(LineIdxs)}),
             ets:insert(State#ppState.etc, {maxLineIdx, lists:last(LineIdxs)});
         true -> ok
@@ -1124,19 +1074,6 @@ path_down([], _ParentNode, PathDown) -> lists:reverse(PathDown);
 path_down([{Tag,ChildNode}|Path], ParentNode, PathDown) ->
     Idx = ?Graph:index(ParentNode,Tag,ChildNode),
     path_down(Path, ChildNode, [{Tag,Idx}|PathDown]).
-
-
-% Find the partially subsituated macros
-%% get_part_substs(SubStTableID) ->
-%%     ets:foldl(fun({SubStNode, TokCnt, FoundTok}, Wrongs) ->
-%%             if
-%%                 FoundTok/=TokCnt ->
-%%                     [{SubStNode,(?Graph:data(SubStNode))#lex.data,
-%%                       TokCnt,FoundTok} | Wrongs];
-%%                 true -> Wrongs
-%%             end
-%%         end,
-%%         [], SubStTableID).
 
 
 %%
@@ -1365,23 +1302,15 @@ xlnxtok(Token, NeighFun, DirFun, CollectFrom, Count, Line) ->
     NeighToken = NeighFun(Token),
     [Token1,Token2] = DirFun([NeighToken,Token]),
     {Idx,_} = ?MISC:string_strs(ws_between(Token1,Token2), ?MISC:string_EOLs()),
+
+    if
+        0<CollectFrom andalso CollectFrom=<Count -> NewLine = [Token|Line];
+        true                                     -> NewLine = Line
+    end,
+
     if
         no/=NeighToken andalso 0==Idx ->
-            if
-                0<CollectFrom andalso CollectFrom=<Count ->
-                    xlnxtok(NeighToken, NeighFun, DirFun, CollectFrom,
-                             Count+1, [Token|Line]);
-                true ->
-                    xlnxtok(NeighToken, NeighFun, DirFun, CollectFrom,
-                             Count+1, Line)
-            end;
+            xlnxtok(NeighToken, NeighFun, DirFun, CollectFrom, Count+1, NewLine);
         true ->
-            if
-                0<CollectFrom andalso CollectFrom=<Count ->
-                    {Token, NeighToken, DirFun([Token|Line])};
-                true ->
-                    {Token, NeighToken, DirFun(Line)}
-            end
+            {Token, NeighToken, DirFun(NewLine)}
     end.
-
-

@@ -1,6 +1,6 @@
 -*- coding: latin-1 -*-
 @title The RefactorErl application
-@version 0.6
+@version 0.6.1
 @copyright 2006-2009 Eötvös Loránd University
 @doc
 == Storage layer ==
@@ -47,7 +47,7 @@
   <dt>{@link referl_clause. `?Clause'}</dt>
   <dd>Clause-related queries</dd>
 
-  <dt>{@link referl_expr. `?Expr'}</dt>
+  <dt>{@link referl_expression. `?Expr'}</dt>
   <dd>Expression-related queries</dd>
 
   <dt>{@link referl_module. `?Mod'}</dt>

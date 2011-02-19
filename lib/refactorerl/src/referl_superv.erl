@@ -23,7 +23,7 @@
 %%% @author Laszlo Lovei <lovei@elte.hu>
 
 -module(referl_superv).
--vsn("$Rev: 2170 $").
+-vsn("$Rev: 2716 $").
 -behaviour(application).
 -behaviour(supervisor).
 
@@ -72,6 +72,13 @@ init(top) ->
         3000,
         worker,
         [?Transform]},
+       %% Lexical scanner server
+       {scanner,
+        {referl_scanner, start_link, ["erlang.lex.tab"]},
+        permanent,
+        3000,
+        worker,
+        [referl_scanner]},
        %% User interface bridge
        {ui,
         {?UI, start_link, []},

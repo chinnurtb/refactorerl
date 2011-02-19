@@ -15,33 +15,37 @@
 %%%
 %%% The Initial Developer of the Original Code is Eötvös Loránd University.
 %%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% LorÃ¡nd University. All Rights Reserved.
+%%% Loránd University. All Rights Reserved.
 
-%%% @doc Defines measures for determining the fitness of a clustering result
-%%% The clustering result is passed as a parameter, and it is suppesed to
-%%% refer to the acual content of the database.
+%%% @doc Implements k-means algorithm. 
 %%%
 %%% @author Petra Krizsai <krizsai@inf.elte.hu>
 
 -module(cl_kmeans).
 
--vsn("$Rev: 2524 $").
+-vsn("$Rev: 2814 $").
 
 -include("cluster.hrl").
 
 -import(proplists, [get_value/2]).
--export([run_cluster/2, random_elements/2]).
+
+%%% Interface function
+-export([run_cluster/2]).
+
+%%% Functions that are used by other modules, but are not interface functions
+-export([random_elements/2, run_cluster_default/0, transform_ets/1, 
+         compare_clusters/3]).
 
 %%% @type clusters() = ets({entity(), centroid()}).
 %%%
 %%% Represents a clustering. Each cluster is represented by a centroid, which is
 %%% assigned to the entities in that cluster.
 
-%%% @type stop_rec() = #stop_rec{clusterlist=[clusters()], 
+%%% @type stop_rec() = #stop_rec{clusterlist=[clusters()],
 %%%                              entities=[entity()]}.
-%%% 
+%%%
 %%% Represents parameters for stopping functions.
-%%% 
+%%%
 %%% Fields:
 %%% <ul>
 %%%     <li>`clusterlist': List of clusterings.</li>
@@ -49,9 +53,12 @@
 %%% </ul>
 -record(stop_rec, {clusterlist, entities}).
 
-%% @spec run_cluster(proplist(), matrix()) -> dict(centroid(), [entity()])
+%% @spec run_cluster(proplist(), matrix()) ->
+%%                  {[dict(centroid(), [entity()])], matrix()} | [[[entity()]]]
 %%
-%% @doc Executes the K-means algorithm on the modules to be clustered.
+%% @doc Executes the K-means algorithm on the modules to be clustered. Returns
+%% the result according to the format. If the selected format is `dict', the
+%% attribs matrix is returned as well.
 %%
 %% Options:
 %% <ul>
@@ -66,74 +73,84 @@
 %%         the algorithm runs until the clusterings are unchanged.
 %%         `MaxIteration' specifies the maximum number of iterations.
 %%         If it is `-1', there will be no limit for number of iterations.
-%%         `MaxIteration' in `iterations' defines how many iterations to be 
+%%         `MaxIteration' in `iterations' defines how many iterations to be
 %%         performed.</li>
+%%     <li>`format::(list | dict)': Defines the format of the result.</li>
 %% </ul>
 run_cluster(Options, Attribs) ->
+
+    %% Reading the options
     Opts = cl_utils:proplist_update(run_cluster_default(), Options),
-    K = get_value(k, Opts),
     InitCentroids = get_value(initcentroids, Opts),
     MergeFun = get_value(mergefun, Opts),
     DistFun = get_value(distfun, Opts),
     Entities = get_value(entitylist, Opts),
     StoppingCriteria = get_value(stoppingcriteria, Opts),
+    Format = get_value(format, Opts),
+
+    %% Calculating the initial centroids
     Centroids =
         case InitCentroids of
             undefined ->
-                random_elements(Entities, K);
+                random_elements(Entities, get_value(k, Opts));
             _ ->
                 InitCentroids
         end,
-    Attribs2 = set_selfusage(Attribs),
-    {ClusterList, _} =
+
+    %% Running the clustering algorithm
+    {ClusterList, _, NewAttribs} =
         case StoppingCriteria of
              {iterations, Number} ->
-                 do(Centroids, Attribs2, DistFun, MergeFun,
+                 do(Centroids, Attribs, DistFun, MergeFun,
                     fun stopping_fun_iterations/2, Number, Entities, []);
              {unchanged, MaxIterations} ->
-                 do(Centroids, Attribs2, DistFun, MergeFun,
+                 do(Centroids, Attribs, DistFun, MergeFun,
                     fun stopping_fun_unchanged/2, MaxIterations, Entities, [])
         end,
-    
-    lists:reverse(
+
+    %% Destroying and converting Clusterings
+    Clusterings =
       lists:foldl(
         fun(Ets, Clusterings) ->
-           Clusters = [Cluster || {_, Cluster} <- dict:to_list(transform_ets(Ets))],
+           Dict = transform_ets(Ets),
+           Clusters =
+               case Format of
+                   dict ->
+                       Dict;
+                   list ->
+                       [Cluster || {_, Cluster} <- dict:to_list(Dict)]
+               end,
            ets:delete(Ets),
            [Clusters | Clusterings]
-        end, [], ClusterList)).
-                          
+        end, [], ClusterList),
+
+    %% Returning the result and destroying NewAttribs if not returned
+    case Format of
+        dict ->
+            {Clusterings, NewAttribs};
+        list ->
+            Clusterings
+    end.
+
 %% @spec run_cluster_default() -> proplist()
 %%
 %% @doc Returns the default options of {@link run_cluster/2}.
 run_cluster_default() ->
     [{initcentroids, undefined},
-     {stoppingcriteria, {unchanged, 10}}].
-
-set_selfusage(Attribs) ->
-    Rows = cl_matrix:rows(Attribs),
-    Cols = cl_matrix:cols(Attribs),
-    lists:foldl(fun(Row, Attribs2) ->
-                    Attribs3 =
-                        case lists:member(Row, Cols) of
-                            true ->
-                                Attribs;
-                            false ->
-                                cl_matrix:add_col(Row, Attribs2)
-                        end,
-                    cl_matrix:set(Row, Row, 1, Attribs3)
-                end,
-                Attribs ,Rows).
+     {stoppingcriteria, {unchanged, 10}},
+     {format, list},
+     {k, 3}].
 
 stopping_fun_iterations(Number, _StopRec) ->
     {Number == 0, Number-1}.
 
 %% @spec stopping_fun_unchanged(integer(), stop_rec()) -> {bool(), integer()}
 %%
-%% @doc TODO
-stopping_fun_unchanged(0, _StopRec) -> 
+%% @doc Represents the unchanged stopping criteria, which means that the
+%% algorithm runs until the criteria is true.
+stopping_fun_unchanged(0, _StopRec) ->
     {true, 0};
-stopping_fun_unchanged(MaxNumber, 
+stopping_fun_unchanged(MaxNumber,
                        #stop_rec{clusterlist=[NewClusters, PrevClusters | _],
                                  entities=Entities}) ->
     {compare_clusters(PrevClusters, NewClusters, Entities), MaxNumber-1};
@@ -141,8 +158,7 @@ stopping_fun_unchanged(MaxNumber, _StopRec)->
     {false, MaxNumber}.
 
 %% @spec do([centroid()], matrix(), dist_fun(), merge_fun(), stopping_fun(),
-%%          term(), [entity()], [clusters()]) -> {[clusters()], term()}
-%%
+%%          term(), [entity()], [clusters()]) -> {[clusters()], term(), matrix()}
 %%
 %% @doc Executes the core of the K-means algorithm according to the
 %% `StoppingFun'.
@@ -150,13 +166,12 @@ do(Centroids, Attribs, DistFun, MergeFun, StoppingFun, Acc, Entities,
    ClusterList) ->
 
     Clusters = calc_clusters(Centroids, Attribs, DistFun, Entities),
-    StopRec = #stop_rec{clusterlist=ClusterList, entities=Entities}, 
-    {Stop, Acc2} = StoppingFun(Acc, StopRec),
     ClusterList2 = [Clusters | ClusterList],
+    StopRec = #stop_rec{clusterlist=ClusterList2, entities=Entities},
+    {Stop, Acc2} = StoppingFun(Acc, StopRec),
     case Stop of
         true ->
-
-            {ClusterList2, Acc2};
+            {ClusterList2, Acc2, Attribs};
         false ->
             {NewCentroids, NewAttribs} =
                 calc_centroids(Attribs, transform_ets(Clusters), MergeFun),
@@ -170,21 +185,22 @@ do(Centroids, Attribs, DistFun, MergeFun, StoppingFun, Acc, Entities,
 compare_clusters(PrevClusters, NewClusters, Entities) ->
     Assignments = ets:new(assignments, []),
     Result =
-    lists:foldl(fun (Entity, true) ->
-                        %% The accumulator is true when the centroids match so far.
-                        [{_, Centroid1}] = ets:lookup(PrevClusters, Entity),
-                        [{_, Centroid2}] = ets:lookup(NewClusters, Entity),
-                        case ets:lookup(Assignments, Centroid1) of
-                            [] ->
-                                ets:insert(Assignments, {Centroid1, Centroid2});
-                            [{_, Something}] ->
-                                Something == Centroid2
-                        end;
-                    (_Entity, false) ->
-                        %% If we found a bad match, the ets tables shouldn't be
-                        %% examined any longer.
-                        false
-                end, true, Entities),
+        lists:foldl(
+          fun (Entity, true) ->
+                  %% The accumulator is true when the centroids match so far.
+                  [{_, Centroid1}] = ets:lookup(PrevClusters, Entity),
+                  [{_, Centroid2}] = ets:lookup(NewClusters, Entity),
+                  case ets:lookup(Assignments, Centroid1) of
+                      [] ->
+                          ets:insert(Assignments, {Centroid1, Centroid2});
+                      [{_, Something}] ->
+                          Something == Centroid2
+                  end;
+              (_Entity, false) ->
+                  %% If we found a bad match, the ets tables shouldn't be
+                  %% examined any longer.
+                  false
+          end, true, Entities),
     ets:delete(Assignments),
     Result.
 

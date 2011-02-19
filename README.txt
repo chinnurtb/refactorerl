@@ -1,7 +1,7 @@
-RefactorErl 0.6
+RefactorErl 0.6.1
 
 This is a prototype release from the development of RefactorErl, a
-refactoring tool for Erlang programs. It contains 15 refactoring steps, and
+refactoring tool for Erlang programs. It contains 22 refactoring steps, and
 an analyser component that is capable of clustering modules.
 
 To get it working, do the following:
@@ -18,7 +18,7 @@ To get it working, do the following:
 2. Edit your ~/.emacs file and add the following lines (changing "/path/to"
    to the real path):
 
-   (add-to-list 'load-path "/path/to/refactorerl-0.6/lib/refactorerl/emacs")
+   (add-to-list 'load-path "/path/to/refactorerl-0.6.1/lib/refactorerl/emacs")
    (require 'refactorerl)
 
 3. (Re)Start Emacs, and use `M-x customize-group' to customize the group
@@ -35,6 +35,3 @@ To get it working, do the following:
    placing the following line in your ~/.emacs file:
 
      (add-hook 'erlang-mode-hook 'refactorerl-mode)
-
-If you have questions, suggestions, or bug reports, feel free to contact the
-authors at erlang@plc.inf.elte.hu.

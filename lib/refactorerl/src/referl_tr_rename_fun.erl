@@ -22,16 +22,13 @@
 
 %%% @doc This module implements the rename function refactoring.
 %%%
-%%% The name is an important property of a function. While its actual value does
-%%% not influence the semantics of the program, it is a key point in the
-%%% readability of the code, and because Erlang programs mainly consist of
-%%% functions, their names play an often underestimated role in software
-%%% development and support. It is worth the effort to try to choose them well,
-%%% and to correct misleading names even when they are user throughout the code.
-%%% This transformation helps in the latter case.
+%%% == Parameters ==
+%%% <ul>
+%%% <li>The function to be renamed (see {@link referl_args:function/1})</li>
+%%% <li>The new name of the function (see {@link referl_args:name/1})</li>
+%%% </ul>
 %%%
-%%% Side conditions
-%%%
+%%% == Conditions of applicability ==
 %%% <ul>
 %%% <li> There must be no function with the given name and the same arity as the
 %%% function to be renamed among the functions in the module,
@@ -42,8 +39,8 @@
 %%% <li>When there are multiple overloaded versions of the function, there must
 %%% be no call to the function that creates the list of arguments dynamically.
 %%% </li></ul>
-%%% Transformation steps and compensations
 %%%
+%%% == Transformation steps and compensations ==
 %%% <ol>
 %%%  <li>The name label of the function is changed at every branch of the
 %%%  definition to the new one.</li>
@@ -57,31 +54,18 @@
 %%%  changed in that module to contain the new name instead of the old one.</li>
 %%% </ol>
 %%%
-%%% Implementation status
-%%%
+%%% == Implementation status ==
 %%% <ul>
 %%%   <li>All the transformation steps are implemented.</li>
 %%%   <li >The transformation does not takes into account
 %%%   the dynamic function calls. </li>
 %%% </ul>
 %%%
-%%% Implementation details
-%%%
-%%% <ul>
-%%% <li>The transformation first checks the side conditions, then performs the
-%%% refactoring if all the side conditions hold.</li>
-%%% <li>The transformation is implemented is a recursive manner. </li>
-%%% <li>It starts with the function's semantic node, visits the nodes that may
-%%% contain a token that refers to that function's name
-%%% and changes those tokens.</li>
-%%% </ul>
-%%%
-%%%
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 %%% @author Atilla Erdodi <erdodi@elte.hu>
 
 -module(referl_tr_rename_fun).
--vsn("$Rev: 2641 $ ").
+-vsn("$Rev: 3014 $ ").
 -include("refactorerl.hrl").
 
 %% Callbacks

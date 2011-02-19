@@ -24,7 +24,12 @@
 %%% with its bound value in that region where the variable is
 %%% visible. The variable can be left out where its value is not used.
 
-%%% Conditions of applicability
+%%% == Parameters ==
+%%% <ul>
+%%% <li>A variable (see {@link referl_args:variable/1}).</li>
+%%% </ul>
+
+%%% == Conditions of applicability ==
 %%% <ul>
 %%% <li>The variable has exactly one binding occurrence on the left hand side of
 %%%   a pattern matching expression, and not a part of a compound pattern.</li>
@@ -33,7 +38,7 @@
 %%%   every occurrence of the variable to be eliminated.</li>
 %%% </li>
 
-%%% Rules of the transformation
+%%% == Transformation steps and compensations ==
 %%% <ol>
 %%% <li>Substitute every occurrence of the variable with the expression
 %%%   bound to it at its binding occurrence, with parentheses around the
@@ -42,11 +47,14 @@
 %%%   discarded, remove the whole match expression. Otherwise, replace the match
 %%%   expression with its right hand side.</li>
 %%% </ol>
-%%%
+
+%%% == Implementation status ==
+%%% This refactoring is fully implemented.
+
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(referl_tr_elim_var).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 2996 $").
 -include("refactorerl.hrl").
 
 %% Callbacks

@@ -51,6 +51,9 @@
 %%%  <tr><td>`function'</td> <td>{@type atom()}</td></tr>
 %%%  <tr><td>`funlist'</td>
 %%%                    <td>{@type [{Fun::atom(), Arity::integer()@}]}</td></tr>
+%%%  <tr><td>`macname'</td>    <td>{@type atom()|string()}</td></tr>
+%%%  <tr><td>`macro'</td>    <td>{@type atom()|string()}</td></tr>
+%%%  <tr><td>`maclist'</td><td>{@type [atom()|string()]}</td></tr>
 %%%  <tr><td>`module'</td>   <td>{@type atom()}</td></tr>
 %%%  <tr><td>`name'</td>     <td>{@type atom()|string()}</td></tr>
 %%%  <tr><td>`number'</td>   <td>{@type number()}</td></tr>
@@ -59,6 +62,8 @@
 %%%  <tr><td>`position'</td> <td>{@type integer()}</td><td>Positive</td></tr>
 %%%  <tr><td>`posrange'</td><td>{@type {Begin::integer(),End::integer()@}}</td>
 %%%                                       <td>1 &lt;= Begin &lt;= End</td></tr>
+%%%  <tr><td>`record'</td><td>{@type atom()}</td></tr>
+%%%  <tr><td>`recfield'</td><td>{@type atom()}</td></tr>
 %%%  <tr><td>`reclist'</td><td>{@type [atom()]}</td></tr>
 %%%  <tr><td>`text'</td>     <td>{@type string()|atom()}</td></tr>
 %%%  <tr><td>`varname'</td>  <td>{@type string()}</td>
@@ -68,12 +73,13 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_args).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 2959 $").
 
 -export([string/1, string/3, integer/1, integer/3, name/1, atom/3]).
 -export([function/1, variable/1, module/1, file/1, expression/1,
-         functions/1, record/1, record_field/1, records/1]).
--export([varname/1, filename/1]).
+         functions/1, record/1, record_field/1, records/1,
+         macro/1, macros/1]).
+-export([varname/1, filename/1, macname/1, macuse/1]).
 -export([expr_range/1, order/1]).
 -export([error_text/2]).
 
@@ -133,9 +139,12 @@ intval(Key) ->
 atom(Key, Desc, Args) ->
     call_arg(Args, Desc, [{atomval(Key), [Key]}]).
 
+%% Note: since `erl_scan:string/1` identifies `spec` as a category in itself
+%%       and not as an atom, it is dealt with as a unique case.
 atomval(Key) ->
     fun
         (Atom) when is_atom(Atom) -> Atom;
+        ("spec") -> spec;
         (Str) when is_list(Str) ->
             case erl_scan:string(Str) of
                 {ok, [{atom, _, Atom}], _} -> Atom;
@@ -211,12 +220,83 @@ funsbyname(File, Funs) ->
                   ?RefError(fun_not_found, [Fun, Arity])) ||
         {Fun, Arity} <- Funs].
 
+%% @spec macro(arglist()) -> node()
+%% @doc Returns the source macro node. This value is specified in the
+%% argument list with
+%% <ul>
+%%  <li>`file' and `macro' keys, or</li>
+%%  <li>`file' and `position' keys.</li>
+%% </ul>
+macro(Args) ->
+    call_arg(Args, "Macro",
+             [{fun macbyname/2, [file, macro]},
+              {fun macbypos/2, [file, position]}]).
+
+macbyname(File, Macro) ->
+    ?Query:exec1(
+       ?Query:seq([?File:find(File),
+                   ?Macro:find(Macro)]),
+       ?RefError(mac_not_found, [Macro])).
+
+macbypos(File, Pos) ->
+    T= ?Query:exec1(
+         ?Query:seq([?File:find(File),
+                     ?File:token(Pos)]),
+         ?RefError(pos_bad_type, [mac, Pos])),
+    case ?Query:exec([T], [{llex,back},mref]) of
+        [Macro] -> Macro;
+        []      -> ?Query:exec1([T], ?Query:seq([
+                     [{{flex,back}, {type, '==', macro}}] ]),
+                   ?RefError(pos_bad_type, [mac, Pos]))
+    end.
+
+%% @spec macuse(arglist()) -> node()
+%% @doc Returns the source macro use node. This value is specified in the
+%% argument list with `file' and `position' keys.
+macuse(Args) ->
+    call_arg(Args, "Macro",
+             [{fun macusebypos/2, [file, position]}]).
+
+macusebypos(File, Pos) ->
+    P= ?Query:exec1(
+         ?Query:seq([?File:find(File),
+                     ?File:token(Pos),
+                     [{llex,back}]]),
+         ?RefError(pos_bad_type, [mac, Pos])),
+    case ?Query:exec([P], [mref]) of
+        [_] -> P;
+        []  -> throw(?RefError(pos_bad_type, [mac, Pos]))
+    end.
+
+%% @spec macros(arglist()) -> [node()]
+%% @doc Returns the source macro node list. This value is specified with
+%% `file' and `maclist' keys in the argument list.
+macros(Args) ->
+    call_arg(Args, "Macro list",
+             [{fun macsbyname/2, [file, maclist]}]).
+
+macsbyname(File, Macs) ->
+    F = ?Query:exec1(?File:find(File), ?RefError(file_not_present, [File])),
+    [?Query:exec1(F, ?File:macro(Mac),
+                  ?RefError(mac_not_found, [Mac])) || Mac <- Macs].
+
 %% @spec record(arglist()) -> node()
-%% @doc Returns the source record node. This value is specified with
-%% `file' and `position' keys in the argument list.
+%% @doc Returns the source record node. This value is specified in the
+%% argument list with
+%% <ul>
+%%  <li>`file' and `record' keys, or</li>
+%%  <li>`file' and `position' keys.</li>
+%% </ul>
 record(Args) ->
     call_arg(Args, "Record",
-             [{fun recbypos/2, [file, position]}]).
+             [{fun recbyname/2, [file, record]},
+              {fun recbypos/2,  [file, position]}]).
+
+recbyname(File, Record) ->
+    ?Query:exec1(
+       ?Query:seq([?File:find(File),
+                   ?Rec:find(Record)]),
+       ?RefError(rec_not_found, [Record])).
 
 recbypos(File, Pos) ->
     Expr = ?Query:exec1(
@@ -234,11 +314,25 @@ recbypos(File, Pos) ->
     end.
 
 %% @spec record_field(arglist()) -> node()
-%% @doc Returns the source record field node. This value is specified
-%% with `file' and `position' keys in the argument list.
+%% @doc Returns the source record field node. This value is
+%% specified in the argument list with
+%% <ul>
+%%  <li>`file', `record' and `recfield' keys, or</li>
+%%  <li>`file' and `position' keys.</li>
+%% </ul>
+
 record_field(Args) ->
     call_arg(Args, "Record field",
-             [{fun recfieldbypos/2, [file, position]}]).
+             [{fun recfieldbyname/3, [file, record, recfield]},
+              {fun recfieldbypos/2,  [file, position]}]).
+
+recfieldbyname(File, Record, Field) ->
+    Rec = ?Query:exec1(
+             ?Query:seq([?File:find(File),
+                         ?Rec:find(Record)]),
+             ?RefError(rec_not_found, [Record])),
+    ?Query:exec1(Rec, ?Rec:field(Field),
+             ?RefError(recfld_not_found, [Record,Field])).
 
 recfieldbypos(File, Pos) ->
     Expr = ?Query:exec1(
@@ -277,7 +371,7 @@ varbypos(File, Pos) ->
                    ?File:token(Pos),
                    ?Token:expr(),
                    ?Expr:variables()]),
-       ?RefError(bad_var, [])).
+       ?RefError(pos_bad_type, ['variable',Pos])).
 
 %% @spec varname(arglist()) -> string()
 %% @doc Returns the target variable name. This value is specified with
@@ -328,6 +422,16 @@ filename(Args) ->
 filestr(Name) ->
     Name.
 
+%% @spec macname(arglist()) -> string()|macro()
+%% @doc Returns the target macro name. This value is specified with
+%% a `macname' key in the argument list.
+macname(Args) ->
+    call_arg(Args, "Target macro name",
+             [{fun macrostr/1, [macname]}]).
+
+macrostr(Name) when is_atom(Name) orelse is_list(Name) ->
+    Name.
+
 %% @spec module(arglist()) -> node()
 %% @doc Returns the source module node. This value is specified in the
 %% argument list with
@@ -346,8 +450,13 @@ modbyname(Mod) ->
        ?Mod:find(Mod),
        ?RefError(mod_not_found, [Mod])).
 
-modbypos(_File, _Pos) ->
-    throw(not_implemented).
+modbypos(File, Pos) ->
+    ?Query:exec1(
+       ?Query:seq( [?File:find(File),
+                    ?File:token(Pos),
+                    ?Token:expr(),
+                    [modref] ]),
+       ?RefError(pos_bad_type, [module, Pos])).
 
 modbyfile(File) ->
     ?Query:exec1(

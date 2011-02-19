@@ -103,44 +103,72 @@ visible(Name, Ary)->
 %% =============================================================================
 %% Module related transformations
 
-
-%% @spec add_import(Mod, Fun) -> ok
-%% @doc This function can add a new function `Fun' into an arbitrary
-%%      import list in the module `Mod'. (actually creates a new import
-%%      list for the function `Fun').
+%% @spec add_import(To, What) -> ok
+%%       To   = node(#file{}) | node(#module{}) | node(#form{})
+%%       What = node(#fun{}) | [node(#fun{})]
+%% @doc This function can add a new function or a list of functions to
+%%      - an existing import list,
+%%          in case all the functions belong to the same module as the import
+%%              list, 
+%%          functions already present in the import list won't be added again;
+%%      - a file or a module, 
+%%          in case all the functions belong to the same module,
+%%          in this case a new import list will be created and added to the
+%%              file or the module.
 %% This function uses `ESG' queries!  The `ESG:close/0' has to be used
 %% after the transformation ends. (or use it in a new esg `batch')
-%% If the function exists in the import list, the transformation will fail.
-add_import(Mod, Fun)->
-    FunMod = ?Query:exec1(Fun, ?Fun:module(), mod_not_found),
 
-    ModName = name(FunMod),
+add_import(To, Fun) when not is_list(Fun)->
+    add_import(To, [Fun]);
 
-    File = ?Query:exec1(Mod, file(), []),
-    ModExpr = ?Syn:create(#expr{kind=atom, value=ModName},
-                          [atom_to_list(ModName)]),
- 
-
-    %Minus   = create_lex(minus, "-"),
-    %NewName = create_lex(atom, "import"),
-    ImportForm = ?Syn:create(#form{type=attrib, tag=import},
-                         ["-","import",
-                          %{flex, Minus},
-                          %{flex, NewName},
-                          {attr, ModExpr},     
-                          {attr, create_list(
-                                   ?Fun:name(Fun),?Fun:arity(Fun))}]),
-    ?File:add_form(File, ImportForm),
+add_import(To, FunList) ->
+    case ?Syn:node_type(To) of
+        file   ->
+            add_import_form(To, FunList);
+        module ->
+            [File] = ?Query:exec(To, ?Mod:file()),
+            add_import_form(File, FunList);
+        form   ->
+            add_import_items(To, FunList)
+    end,
     ok.
 
-%% @private
-create_list(Name, Arity) ->
-    ?Syn:create(#expr{kind=cons},
-     [{sub,[ ?Syn:create(#expr{kind=list},
-                            [{sub, [create_import_item(Name, Arity)]}])]}]).
 
+add_import_form(File, FunList)->
+    [Mod] = ?Query:exec(hd(FunList), ?Fun:module()),
+    check_imports(Mod, FunList),
 
-%% @private
+    ModName = ?Mod:name(Mod),
+    ModExpr = ?Syn:create(#expr{kind=atom, value=ModName},
+                          [atom_to_list(ModName)]),
+
+    NewImportItems = [ create_import_item(?Fun:name(Fun), ?Fun:arity(Fun)) || 
+                         Fun <- lists:usort(FunList) ],
+
+    List = ?Syn:create(#expr{kind=cons},
+                       [{sub,[ ?Syn:create(#expr{kind=list},
+                                           [{sub,NewImportItems }])]}]),
+
+    ImportForm = ?Syn:create(#form{type=attrib, tag=import},
+                             ["-","import", {attr, ModExpr}, {attr, List}]),
+    
+    ?File:add_form(File, ImportForm).
+
+add_import_items(Form, FunList)->
+    [Mod] = ?Query:exec(Form, [{attr,1},modref]),
+    check_imports(Mod, FunList),
+    
+    List = hd(?Query:exec(Form, [{attr,2},{sub,1}])),
+
+    OldFuns = ?Query:exec(List, ?Query:seq([ ?Expr:children(),
+                                             ?Expr:function() ])),
+    NewFuns = (lists:usort(FunList) -- OldFuns),
+
+    NewImportItems = [ create_import_item(?Fun:name(Fun), ?Fun:arity(Fun)) ||
+                         Fun <- NewFuns ],
+
+    ?Syn:replace(List, {sub,length(OldFuns)+1,length(NewFuns)}, NewImportItems).
+
 create_import_item(Name, Arity) ->
     CName  = ?Syn:create(#expr{kind=atom, value=Name},
                                 [atom_to_list(Name)]),
@@ -149,6 +177,16 @@ create_import_item(Name, Arity) ->
     ?Syn:create(#expr{kind=infix_expr, value='/'},
                                    [{sub, [CName, CArity]}]).
 
+%% All funs should come from module `Mod'.
+check_imports(Mod, FunList) ->
+    lists:map(
+      fun(Fun) ->
+              ?Check( [Mod] == ?Query:exec(Fun,?Fun:module()),
+                      ?RefError(
+                         fun_not_found,
+                         [ ?Mod:name(Mod),?Fun:name(Fun),?Fun:arity(Fun) ]))
+      end,
+      FunList).
 
 %% @spec del_import(Mod, Fun) -> ok
 %% @doc Removes `Fun' from the export list wich contains
@@ -160,12 +198,12 @@ del_import(Mod, Fun)->
     Form = ?Query:exec1(Expr, ?Expr:attrib_form(), form_not_found),
     ParList = ?Query:exec1(Expr,?Expr:parent(),parent_list_not_found),
     case ?Query:exec1(Form,?Form:module(),module_not_found) of
-	Mod -> case length(?Query:exec(ParList,?Expr:children())) of
+        Mod -> case length(?Query:exec(ParList,?Expr:children())) of
                 1 -> ?File:del_form(Form);
                 _ -> ?Syn:replace(ParList,{node, Expr},[])
 
               end,
               ok;
-	 _ -> ok
+         _ -> ok
 
     end.

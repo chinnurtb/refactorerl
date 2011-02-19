@@ -24,7 +24,7 @@
 %%% @author Kornel Horvath <kornel@inf.elte.hu>
 
 -module(referl_misc).
--vsn("$Rev: 2621 $").
+-vsn("$Rev: 2943 $").
 
 -include("refactorerl.hrl").
 
@@ -45,12 +45,17 @@
          separate_interval/3,
          join/1, join/2, flatjoin/2, flatsort/1,
          group_list/1, partfold/3, partfold/4,
-         list_find/2, list_member/2, list_compare/2, list_compare/3,
-         list_contains/2, list_substract/3,
+         list_find/2,list_member/2,
+         list_compare/2, list_compare/3, list_compareL/1, list_compareL/2,
+         list_contains/2, list_substract/3, list_cnt/1, 
+         list_swap/3, list_move/4,
          common_prefix/2]).
 
 %% Operations on special lists
--export([funlist_text/1, fun_text/1, add_article/1]).
+-export([funlist_text/1, fun_text/1, recfld_text/1, add_article/1]).
+
+%% Property lists
+-export([proplist_merge_def/2, proplist_validate/2]).
 
 %% Error signalling.
 -export([format/2]).
@@ -66,6 +71,9 @@
          string_strs/2, string_length/1, string_length/2, string_EOLs/0,
          string_lines/1, string_lines/2, string_split/5, string_replace/4,
          string_trim/1, string_trim/2, string_trim/3]).
+% ETS
+-export([ets_keys/1]).
+
 
 
 %%% ============================================================================
@@ -108,7 +116,16 @@ text_index_list(List) ->
 
 
 %% @spec intersect([Elem], [Elem]) -> [Elem]
-%% @doc Returns the intersection of the lists.
+%% @doc Returns the intersection of the lists. Keep oiginal order of elements
+%%      in the first list. If there are more same element in the first list 
+%%      than in the second list the elements which are closer to the tail will
+%%      be kept in the intersection.
+%%
+%% Exapmle:
+%% ```
+%% > intersect([1,2,3,4,2,5], [4,2]).
+%% [4,2]
+%% '''
 intersect(L1, L2) -> L1 -- (L1 -- L2).
 
 
@@ -216,14 +233,58 @@ fun_text([Mod, Name, Arity]) ->
     [atom_to_list(Mod), ":", fun_text([Name, Arity])].
 
 
+%% @spec recfld_text(recfld()) -> [string()]
+%% @doc Converts the function signature into a printable format.
+recfld_text([Record, Field]) ->
+    [atom_to_list(Record), ".", atom_to_list(Field)].
+
+
 %% Adds the appropriate article to a string.
 %% Special cases (e.g. "a European") are not accounted for.
 add_article(Text = [Ch1|_])
-    when Ch1 =:= $a, Ch1 =:= $e, Ch1 =:= $i, Ch1 =:= $o, Ch1 =:= $u,
-         Ch1 =:= $A, Ch1 =:= $E, Ch1 =:= $I, Ch1 =:= $O, Ch1 =:= $U ->
+    when Ch1 =:= $a; Ch1 =:= $e; Ch1 =:= $i; Ch1 =:= $o; Ch1 =:= $u;
+         Ch1 =:= $A; Ch1 =:= $E; Ch1 =:= $I; Ch1 =:= $O; Ch1 =:= $U ->
     ["an ", Text];
 add_article(Text) ->
     ["a ", Text].
+
+
+
+%%% ============================================================================
+%%% Property lists
+
+    
+%% @spec proplist_merge_def(List::proplist(), DefList::proplist()) ->
+%%           proplist()
+%% @doc  Add missing key value pair from `DefList' to `List'.
+proplist_merge_def(List, DefList) when is_list(List), is_list(DefList) ->
+    List ++ ?MISC:list_substract(DefList, List,
+        fun({Type,_},{Type,_}) -> true; ({_,_},{_,_}) -> false end).
+
+
+%% @spec proplist_validate(List::proplist(), ValidatorList::ValidatorProplist) ->
+%%           WrongPairs::proplist()
+%%       ValidatorProplist = [{Key::atom(),
+%%                             ValidatorFun::((Value::term()) -> boolean())}]
+%% @doc  Validate the values of keys in the `List' by the validator functions
+%%       given in `ValidatorList'.
+proplist_validate(List,ValidatorList) when is_list(List),
+        is_list(ValidatorList) ->
+    lists:reverse(lists:foldl(
+        fun({Key,Value}, Wrongs) ->
+            case proplists:get_value(Key, ValidatorList) of
+                Fun when is_function(Fun) ->
+                    case Fun(Value) of
+                        true -> Wrongs;
+                        _    -> [{Key,Value}|Wrongs]
+                    end;
+                undefined -> [{Key,Value}|Wrongs]
+            end
+        end,
+        [],
+        List)).
+
+
 
 %%% ============================================================================
 %%% Error signalling
@@ -447,19 +508,69 @@ list_member(Pred, List) ->
     0/=element(1,list_find(Pred,List)).
 
 
-%% @spec list_compare(List1::[term()], List2::[trem()]) ->
-%%            {CommonPrefix::[term()], Tail1::[term()], Tail2::[term()]}
+%% @spec list_compareL(ListOfLists::[[term()]]) ->
+%%           {CommonPrefix::[term()], ListOfTails::[[term()]]}
 %% @doc  Compare lists elements with `==' operator and return the same prefix
 %%       and the different tails.
+%%
+%% Example:
+%% ```
+%% > list_compareL(["Hello World!", "Hello Mars!", Hello Jupiter!"]).
+%% {"Hello ", ["World!", "Mars!", "Jupiter!"]}
+%% '''
+%% @see  list_compare/2
+%% @see  list_compare/3
+list_compareL([]) -> {[], []};
+list_compareL([List|Lists]) when is_list(List) ->
+    list_compareL(fun(X,Y) -> X==Y end, [List|Lists]).
+
+
+%% @spec list_compareL(EquFun::((ListElem1::term(),ListOfLists::term())->bool()), 
+%%               ListOfLists::[[term()]]) ->
+%%           {CommonPrefix::[term()], ListOfTails::[[term()]]}
+%% @doc  Compare the lists in the `ListOfLists' and give back the common prefix
+%%       and the remain tail for all lists. `EquFun' function will be used to 
+%%       compare the elements in the lists of `ListOfLists'.
+%%
+%% Example:
+%% ```
+%% > list_compareL(fun(Ch1, Ch2) -> Ch1==Ch2 end, 
+%%                ["Hello World!", "Hello Mars!", Hello Jupiter!"]).
+%% {"Hello ", ["World!", "Mars!", "Jupiter!"]}
+%% '''
+%% @see  list_compare/3
+list_compareL(EquFun, [List|Lists]) when is_function(EquFun) ->
+    Common = lists:foldl(
+        fun(L, AccList) -> element(1, list_compare(EquFun, L, AccList)) end, 
+        List, Lists),
+    RevTails = lists:foldl(
+        fun(L, AccTails) -> 
+            [element(2, list_compare(EquFun, L, Common)) |AccTails] 
+        end,
+        [],
+        [List|Lists]),
+    {Common, lists:reverse(RevTails)}.
+
+
+%% @spec list_compare(List1::[term()], List2::[trem()]) ->
+%%           {CommonPrefix::[term()], Tail1::[term()], Tail2::[term()]}
+%% @doc  Compare lists elements with `==' operator and return the same prefix
+%%       and the different tails.
+%% Example:
+%% ```
+%% > list_compare("Hello World!", "Hello Mars!").
+%% {"Hello ", "World!", "Mars!"}
+%% '''
 %% @see  list_compare/3
 list_compare(List1, List2) when is_list(List1), is_list(List2) ->
     list_compare(fun(X,Y) -> X==Y end, List1, List2).
 
-%% @spec list_compare(EquFun::((ListElem1::term(), ListElem2::term()) -> bool()),
+
+%% @spec list_compare(EquFun::((ListElem1::term(),ListElem2::term()) -> bool()),
 %%                List1::[term()], List2::[trem()]) ->
 %%            {CommonPrefix::[term()], Tail1::[term()], Tail2::[term()]}
-%% @doc  Compare lists elements with `EquFun' function and return the same prefix
-%%       and the different tails.
+%% @doc  Compare lists elements with `EquFun' function and return the same 
+%%       prefix and the different tails.
 %%
 %% Example:
 %% ```
@@ -478,7 +589,7 @@ list_compare_(EquFun, Tail1=[X|Xs], Tail2=[Y|Ys], Common) ->
         _    -> {lists:reverse(Common), Tail1, Tail2}
     end.
 
-
+    
 %% @spec list_contains(List::list(), PossibleSubLists::[list()]) ->
 %%           RealSubLists::[list()]
 %% @doc  Find the real sublist of `List' from `PossibleSubLists'.
@@ -504,6 +615,55 @@ list_substract_([X|Xs], Ys,  EquFun, Zs) ->
             NewYs = lists:sublist(Ys,N-1) ++ lists:nthtail(N,Ys),
             list_substract_(Xs, NewYs, EquFun, Zs)
     end.
+
+
+%% @spec list_cnt(List::[term()]) -> [{term(), Count::integer()}]
+%% @doc  Return a sorted list of elments of `List' where same elements are 
+%%       present only once. The elements are zipped into a tuple with their
+%%       frequency.
+list_cnt(List) when is_list(List) ->
+    dict:to_list(lists:foldl(fun(Elem,D) -> dict:update_counter(Elem,1,D) end, 
+                             dict:new(), List)).
+
+
+%% @spec list_swap(Elem1::term(), Elem2::term(), List::[term()]) -> 
+%%           NewList::[term()]
+%% @doc Swap `Elem1' and `Elem2' at all refernece in `List'.
+list_swap(Elem1, Elem2, List) when Elem1=/=Elem2, is_list(List) ->
+    lists:map(
+        fun(E) when E==Elem1 -> Elem2; 
+        (E) when E==Elem2 -> Elem1; 
+        (E) -> E 
+        end, 
+        List).
+
+
+%% @spec list_move(SrcElem::term(), DstElem::term(), Mode, List::[term()]) ->
+%%           NewList::[term()]
+%%      Mode = before | after
+%% @doc Move the first occurence of `SrcElem' before/after the first occurence 
+%%      of `DstElem'. Technically it works the following way: erase the first 
+%%      occurence of `SrcElem' from `List' and replace the first occurence 
+%%      of `DstElem' to `SrcElem, DstElem' or `DstElem, SrcElem' sequence.
+list_move(SrcElem,DstElem,before, List) when SrcElem=/=DstElem, is_list(List) ->
+    list_move_(SrcElem, DstElem, fun(Id) -> Id end, List);
+list_move(SrcElem,DstElem,'after',List) when SrcElem=/=DstElem, is_list(List) ->
+    list_move_(SrcElem, DstElem, fun lists:reverse/1, List).
+    
+list_move_(SrcElem, DstElem, DirFun, List) ->
+    % Reverse list until find source and destination also
+    {RevList1, _, Cnt1} = partfold(
+        fun(Elem, {RevList, Ctrls, Cnt}) when Elem==SrcElem -> 
+            {hd(Ctrls), {RevList, tl(Ctrls), Cnt+1}};
+        (Elem, {RevList, Ctrls, Cnt}) when Elem==DstElem -> 
+            {hd(Ctrls), {DirFun([DstElem,SrcElem])++RevList, tl(Ctrls), Cnt+1}};
+        (Elem, {RevList, Ctrls, Cnt}) -> 
+            {next, {[Elem|RevList], Ctrls, Cnt+1}}
+        end,
+        {[], [next,stop], 0},
+        List),
+    % Concat modified reverse head with the tail
+    lists:reverse(RevList1) ++ lists:nthtail(Cnt1, List).
 
 
 
@@ -733,5 +893,19 @@ string_trim(String, Mode, TrimChrs) ->
                                     lists:reverse(String1)));
         _ -> String1
     end.
+
+
+
+%%% ----------------------------------------------------------------------------
+%%% ETS functions
+
+%% @spec ets_keys(EtsTableID::integer()) -> [term()]
+%% @doc  Returns the keys of the ETS table identified by `EtsTableID'.
+%%       If the type ot the ETS table is `ordered_set' than list is also
+%%       ordered. In other cases the order is undefined it depending on the
+%%       storage order.
+ets_keys(EtsTableID) ->
+    ets:select(EtsTableID,
+        [{'_', [], [{element,ets:info(EtsTableID,keypos),'$_'}]}]).
 
 

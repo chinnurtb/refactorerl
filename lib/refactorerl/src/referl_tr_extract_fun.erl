@@ -29,7 +29,15 @@
 %%% outside of the expression(s), but the value of which is used by the
 %%% expression(s). The extracted function will not be exported from the module.
 %%%
-%%% Conditions of applicability
+%%% == Parameters ==
+%%% <ul>
+%%%   <li> A non-empty, continuous sequence of expressions
+%%%        (see {@link referl_args:expr_range/1}). </li>
+%%%   <li> The name of the function to introduce
+%%%        (see {@link referl_args:name/1}). </li>
+%%% </ul>
+%%%
+%%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li> The name of the function to be introduced should not conflict with
 %%%   another function, either defined in the same module, imported from
@@ -51,7 +59,7 @@
 %%%   </li>
 %%% </ul>
 %%%
-%%% Rules of the transformation
+%%% == Rules of the transformation ==
 %%% <ol>
 %%%   <li> Collect all variables that the selected sequence of expressions
 %%%   depends on.</li>
@@ -71,10 +79,13 @@
 %%%   function.</li>
 %%% </ol>
 %%%
+%%% == Implementation status ==
+%%% The transformation is fully implemented.
+%%%
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_tr_extract_fun).
--vsn("$Rev: 2611 $").
+-vsn("$Rev: 2964 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -128,13 +139,22 @@ eliminate_begin_end(Exprs) ->
 %%% Checks
 
 %% Note: the expression list is never empty, guaranteed by `?Args:expr_range/1'.
-check_expr_link([Expr1|Rest])->
+check_expr_link(E = [Expr1|Rest])->
     case ?Syn:parent(Expr1) of
         [{body, Par}] ->
             ?Check(Rest =:= [] orelse ?Expr:kind(Expr1) =/= filter,
                    ?RefError(bad_kind, filter)),
             {body, Par};
         [{sub, Par}]  ->
+            ParKind = ?Expr:kind(Par),
+            ParVal = ?Expr:value(Par),
+            Index = ?Syn:index(Par, sub, Expr1),
+            ?Check(ParKind =/= application orelse
+                   length(E) =/= 1 orelse Index =/= 1,
+                   ?RefError(bad_kind, 'application name')),
+            ?Check((ParKind =/= infix_expr orelse ParVal =/= ':') orelse
+                   length(E) =/= 1,
+                   ?RefError(bad_kind, 'module qualifier')),
             ?Check(Rest =:= [], ?RefErr0r(bad_range)),
             {sub, Par};
         [{pattern, _Par}] -> throw(?RefError(bad_kind, pattern));

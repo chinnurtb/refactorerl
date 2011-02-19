@@ -46,7 +46,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_fun).
--vsn("$Rev: 2520 $").
+-vsn("$Rev: 2693 $").
 -behaviour(referl_esg).
 
 %% Callback exports
@@ -167,7 +167,7 @@ insert(App, #expr{kind = Kind}, sub, _, #expr{})
   when Kind =:= application orelse Kind =:= implicit_fun ->
     anal_app(App);
 
-insert(FunRef, #expr{kind=infix_expr, value=':'}, sub, _, #expr{kind=atom}) ->
+insert(FunRef, #expr{type=expr, kind=infix_expr, value=':'}, sub, _, #expr{kind=atom}) ->
     %% only atom?
     [App] = ?Graph:path(FunRef, [{sub, back}]),
     anal_app(App);

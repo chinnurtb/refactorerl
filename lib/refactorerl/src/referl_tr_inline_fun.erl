@@ -20,13 +20,17 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @author Istvan Bozo <bozo_i@inf.elte.hu>
-
 %%% @doc This module implements the inline function refactoring. The inline
 %%% function refactoring step substitutes the selected application with the
 %%% corresponding function body and executes the required compensations.
 %%%
-%%% Conditions of applicability
+%%%
+%%% == Parameters ==
+%%% <ul>
+%%% <li> An expression (see {@link referl_args:expression/1}).</li>
+%%% </ul> 
+%%%
+%%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li>Applying the inline function must not cause variable name
 %%%   conflicts. A variable name conflict arises when the same variable name
@@ -48,7 +52,7 @@
 %%%   </ul></li>
 %%% </ul>
 %%%
-%%% Rules of the transformation
+%%% == Transformation steps and compensations == 
 %%% <ol>
 %%%   <li>In the refactoring step the functions application to be inlined have
 %%%   to be marked.</li>
@@ -102,9 +106,14 @@
 %%%     which are used in the copied body(ies).</li>
 %%%   </ul></li>
 %%% </ol>
+%%%
+%%% == Implementation status ==
+%%% The transformation is fully implemented.
+%%%
+%%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(referl_tr_inline_fun).
--vsn("$Rev: 2619 $").
+-vsn("$Rev: 3025 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -113,6 +122,7 @@
 %%% ============================================================================
 %%% Errors
 
+%%% @private
 error_text(var_name_collision, CollVars) ->
     ["Variable names would collide: ", ?MISC:separated_text(CollVars)];
 error_text(local_apps, [FunModuleName, LocalApps]) ->
@@ -670,7 +680,7 @@ get_data_about_app(Mod, Node)->
                 {true, false} ->
                     ModName = ?Mod:name(FunObjMod),
                     {exported, {ModName, Name, Arity}};
-                {false, true} ->
+                {_, true} ->
                     ModName = ?Mod:name(FunObjMod),
                     {imported, {ModName, Name, Arity}}
             end;

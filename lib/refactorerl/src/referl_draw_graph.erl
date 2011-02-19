@@ -24,7 +24,7 @@
 
 
 -module(referl_draw_graph).
--vsn("$Rev: 2497 $").
+-vsn("$Rev: 2914 $").
 
 -include("refactorerl.hrl").
 -include("referl_schema.hrl").
@@ -50,12 +50,12 @@ draw_graph(File, Filter) ->
 
 %% @spec draw_graph_tooltip(File :: string(), Filter :: atom()) -> ok | string()
 %% @doc  Draws the whole graph to File with edge filtering.
-%%       Fill `tooltip' attributes with the data of the nodes. You can use 
+%%       Fill `tooltip' attributes with the data of the nodes. You can use
 %%       this cool feature if you convert the dot file into svg.
 draw_graph_tooltip(File, Filter) ->
     draw_graph(File, Filter, true).
 
-%% @spec draw_graph(File :: string(), Filter :: atom(), ToolTip::boolean()) 
+%% @spec draw_graph(File :: string(), Filter :: atom(), ToolTip::boolean())
 %%           -> ok | string()
 %% @doc  Draws the whole graph to File with edge filtering.
 %%       If `ToolTip' is `true' the `tooltip' attribute will contain the data of
@@ -183,22 +183,19 @@ filters(not_lex) -> [fun not_lex/2].
 all_links(_, _)       -> true.
 is_form(_, To)        -> To == form.
 
-% todo Miert nem mukodik az also?
 is_lex_link(_, To) -> lists:member(To, [elex, flex, clex]).
-%is_lex_link(From, To) -> schema_has(?LEXICAL_SCHEMA, From, To).
 
 is_syn_link(From, To) -> schema_has(?SYNTAX_SCHEMA, From, To).
 
 
-% todo
-% is_ctx_link es is_sem_link is hasonloan egysoroskent lenne jo
-% az elemzo modulokbol kinyerve az altaluk szolgaltatott semakat
+%% todo Would be more elegant if the analyser modules supplied this information.
 is_ctx_link(clause, scope) -> true;
 is_ctx_link(clause, visib) -> true;
 is_ctx_link(expr, clause)  -> true;
 is_ctx_link(expr, sup)     -> true;
 is_ctx_link(_,_)           -> false.
 
+%% todo Would be more elegant if the analyser modules supplied this information.
 is_sem_link(file, Tag)   -> Tag == moddef;
 is_sem_link(form, Tag)   -> Tag == fundef;
 is_sem_link(clause, Tag) -> lists:member(Tag, [modctx, vardef, varvis]);
@@ -246,16 +243,27 @@ boxed_shape(Top, Index, Bottom) ->
                 [   escape_text(Top)
                 ,   escape_text(Index)
                 ] )
-        ,   escape_text(Bottom)
+        ,   bottom_shape(Bottom)
         ] ).
 
+
+bottom_shape({Bottom, undefined}) ->
+    escape_text(Bottom);
+bottom_shape({Bottom, Bottom}) ->
+    escape_text(Bottom);
+bottom_shape({Part1, Part2}) ->
+    record_component(
+        [   escape_text(Part1),
+            escape_text(Part2) ] );
+bottom_shape(Bottom) ->
+    escape_text(Bottom).
 
 
 record_component(Texts) ->
     "{" ++ ?MISC:join(Texts, "|") ++ "}".
 
 
-nodestyle(#lex{}) ->  "color=steelblue, style=filled, ";
+nodestyle(#lex{}) ->  "color=lightsteelblue1, style=filled, ";
 nodestyle(_)      ->  "".
 
 
@@ -331,7 +339,7 @@ explab(Type, Kind, Val) ->
     V = value_text(Val, Kind),
     if
         V =:= unknown     -> {Type, Kind};
-        true              -> {Type, V}
+        true              -> {Type, {Kind, V}}
     end.
 
 
@@ -350,12 +358,7 @@ value_text(        _, _)           -> unknown.
 
 
 
-% todo
-% Idealis esetben ez ugy megy, hogy az elemzo modulok visszaadjak a semajukat
-% es azt, milyen szinnel akarjak a sajat eleiket rajzolni.
-% Plusz van eleve a ?LEXICAL_SCHEMA es a ?SYNTAX_SCHEMA.
-% Ezzel a color/1 egy par soros fuggveny lesz.
-
+%% todo It would be nice if the colours were returned by the analyser modules.
 color(moddef) -> red;
 color(modref) -> red;
 color(module) -> red;
@@ -406,7 +409,7 @@ color(_) -> black.
 %% @spec tooltipStr(Node::node(), Data::tuple()) -> string()
 %% @doc  Write the properties of the `Node' into a string. This text used as
 %%  graphviz dot attribute for alt text in SVG format.
-%%  String format: 
+%%  String format:
 %%  `, URL="1", tooltip="propKey1=propValue1&#13;&#10;...propKeyN=propValueN"'
 tooltipStr(Node, Data) ->
     RevProps = lists:reverse([{node,Node}|
@@ -415,12 +418,12 @@ tooltipStr(Node, Data) ->
     LastStr0 = ?MISC:format("~p=~p", [LastKey,LastValue]),
     LastStr  = ?MISC:string_replace(LastStr0, ["\""], "&quot;", 0),
     PropStr = lists:foldl(
-        fun({K,V},StrEndAcc) -> 
+        fun({K,V},StrEndAcc) ->
             KV0 = ?MISC:format("~p=~p&#13;&#10;", [K,V]),
             KV  = ?MISC:string_replace(KV0, ["\""], "&quot;", 0),
             KV++StrEndAcc
         end,
-        LastStr, 
+        LastStr,
         tl(RevProps)),
     ?MISC:format(", URL=\"1\", tooltip=\"~s\"", [PropStr]).
 

@@ -21,16 +21,19 @@
 %%% Processes
 
 %% Graph storage server process name
--define(GRAPH_SERVER,   graph_server).
+-define(GRAPH_SERVER, graph_server).
 
 %% Semantical analyser server process name
--define(ESG_SERVER,     esg_server).
+-define(ESG_SERVER, esg_server).
 
 %% Event manager name for user interface messages
--define(UI_MSG_SERVER,  ui_message_server).
+-define(UI_MSG_SERVER, ui_message_server).
 
 %% Transformation server
--define(TRANSFORM_SERVER,   transform_server).
+-define(TRANSFORM_SERVER, transform_server).
+
+%% Lexical scanner server
+-define(SCANNER_SERVER, scanner_server).
 
 %%% ===========================================================================
 %%% Modules
@@ -70,7 +73,7 @@
 
 
 %% Syntax tree construction and information
--define(Scanner,        referl_syntax_scanner).
+-define(Scanner,        referl_scanner).
 -define(Parser,         referl_syntax_parser).
 -define(Nodes,          referl_syntax_nodes).
 

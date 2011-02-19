@@ -21,7 +21,7 @@
 %%% macros. Macros are represented with the form that defines them.
 
 -module(referl_macro).
--vsn("$Rev: 2390 $").
+-vsn("$Rev: 2943 $").
 -include("refactorerl.hrl").
 
 %% =============================================================================
@@ -31,7 +31,7 @@
 -export([name/1]).
 
 %% Queries
--export([file/0, macros/0, records/0, references/0]).
+-export([file/0, find/1, macros/0, records/0, references/0]).
 
 
 %% =============================================================================
@@ -50,6 +50,12 @@ name(Macro) ->
 %% @doc The result query returns the file that defines the macro.
 file() ->
     ?Form:file().
+
+%% @spec find(string()) -> query(#file{}, #form{})
+%% @doc The result query returns the macro with name `Name'
+find(Name) ->
+    [{form,{{type, '==', macro}, 'and',
+            {tag,  '==', Name}}}].
 
 %% @spec macros() -> query(#form{}, #form{})
 %% @doc The result query returns all macros used in the body of the macro.

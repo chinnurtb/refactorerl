@@ -24,7 +24,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(referl_fileman).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 2904 $").
 
 -export([add_file/1, add_form/3, add_text/3, drop_file/1, save_file/1]).
 -export([save_file/3]).
@@ -43,18 +43,19 @@
 %% errors). Note that during preprocessing, every included file will also be
 %% added to the graph.
 add_file(Name) ->
-    case ?Graph:path(?Graph:root(), ?File:find(Name)) of
+    Name1 = ?File:abs_path(Name),    
+    case ?Graph:path(?Graph:root(), ?File:find(Name1)) of
         [F] ->
             add_file_result(F);
         [] ->
-            case store_file_tokens(Name) of
+            case store_file_tokens(Name1) of
                 {error, Reason} ->
                     {error, Reason};
                 {File, Tokens} ->
                     ?Graph:mklink(File, incl, File),
                     process_forms(File, Tokens, last),
                     add_file_result(File)
-            end
+            end 
     end.
 
 add_file_result(File) ->
@@ -333,14 +334,19 @@ process_form(header, {tokens, Tokens}) ->
 %%
 %% @doc Parses `Tokens' and returns the result, the root form of the tree.
 parse(Tokens) ->
-    TokenData =[{Type, 1, Data} || Data={#token{type=Type}, _} <- Tokens],
+    TokenData = 
+        [{Type, 1, Data} 
+            || Data={#token{type = Type}, _} <- Tokens],
     case ?Parser:parse(TokenData) of
-        {error, {Ln, Mod, Msg}} ->
-            error_logger:info_msg("Parser message: ~s~n",
-                                  [Mod:format_error(Msg)]),
+        {error, {_Ln, Mod, Msg}} ->
             Error = lists:flatten(
-                      io_lib:format("Parse error: ~s",
-                                    [Mod:format_error(Msg)])),
-            ?ESG:create(#form{type=error, tag={Ln, Error}});
+                     io_lib:format("Parse error:~s",
+                                     [Mod:format_error(Msg)])),
+            error_logger:info_msg("Parser message: ~s~n",
+                                     [Mod:format_error(Msg)]),
+
+            Form = ?ESG:create(#form{type=error, tag={1, Error}}),
+            [?ESG:insert(Form, flex, N)|| {_, N} <- Tokens],
+            Form;
         {ok, Result} -> Result
     end.

@@ -20,15 +20,25 @@
 %%% @doc Record properties and record based queries
 
 -module(referl_record).
--vsn("$Rev: 2390 $").
+-vsn("$Rev: 2943 $").
 -include("refactorerl.hrl").
 
 %% =============================================================================
 %% Exports
 
--export([name/1, file/0, form/0]).
+-export([find/1, field/1, name/1, file/0, form/0]).
 
 %% =============================================================================
+
+%% @spec find(atom()) -> query(#file{}, #record{})
+%% @doc The result query returns the record with name `Name'
+find(Name) ->
+    [{record,{name, '==', Name}}].
+
+%% @spec field(atom()) -> query(#record{}, node())
+%% @doc The result query returns the record's field `Field'
+field(Field) ->
+    [{field, {name, '==', Field}}].
 
 %% @spec name(node(#record{})) -> atom()
 %% @doc The name of the record object

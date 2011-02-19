@@ -24,7 +24,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_print).
--vsn("$Rev: 2663 $").
+-vsn("$Rev: 2813 $").
 
 -export([print_clusterings/1, print_clusterings/2,
          print_clustering/1, print_clustering/2,
@@ -151,7 +151,7 @@ print_clustering(Clustering) ->
 %%         The default value:
 %% ```
 %% ["Interface functions:", nl, interface_funs,
-%%  "Entities:", nl, entitites, nl]
+%%  "Entities:", nl, entities, nl]
 %% '''</li>
 %% </ul>
 print_clustering(Clustering, Options) ->

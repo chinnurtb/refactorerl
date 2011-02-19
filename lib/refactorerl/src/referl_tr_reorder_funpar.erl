@@ -17,35 +17,32 @@
 %%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
 %%% Loránd University. All Rights Reserved.
 
-%%% ============================================================================
-%%% Module information
-
-%%% @doc This module implements the `Reorder Function Parameters' refactoring.
+%%% @doc The order of a function's arguments is a small, aesthetic aspect 
+%%%      of a program. Swapping arguments can improve the readability of the
+%%%      program, and it can be used as a preparation for another refactoring,
+%%%      eg. to create a tuple from arguments that aren't next to each other.
 %%%
-%%% This refactoring can be carried out in almost every case without any 
-%%% problems, only dynamic function calls put limits to its applicability.
-%%% Within the bounds of static analysis, every parameter reordering can 
-%%% be compensated at the place of function calls.
+%%% <ul>
+%%%  <li>A module (see {@link referl_args:order/1}). The new order of the
+%%%      function arguments, a list of integer numbers that specifies which
+%%%      parameter goes where. For example, the list `3,2,1' means that the
+%%%      third parameter will be the first, the first parameter will be the
+%%%      last and the second parameter remains in the same place. The list
+%%%      must have the same length as the arity of the function.</li>
+%%%  <li>A module (see {@link referl_args:function/1}).The function to be
+%%%      modified. Currently it can be specified with aposition anywhere in
+%%%      the function definition.</li>
+%%% </ul>
 %%%
-%%% Parameters
-%%%
-%%% The function to be modified. Currently it can be specified with a
-%%% position anywhere in the function definition.
-%%%
-%%% The new order of the function arguments, a list of integer numbers that
-%%% specifies which parameter goes where. For example, the list `3,2,1' means
-%%% that the third parameter will be the first, the first parameter will be the
-%%% last and the second parameter remains in the same place. The list must have
-%%% the same length as the arity of the function.
-%%%
-%%% Conditions of applicability
-%%%
-%%% When a function application has an argument with side effects,
+%%% == Conditions of applicability ==
+%%% <ul>
+%%% <li>When a function application has an argument with side effects,
 %%% the transformation may only be carried out after a warning that 
 %%% the order of side effects most probably will change, which may
-%%% change the way the program works.
-%%%
-%%% Transformation steps and compensations
+%%% change the way the program works.</li>
+%%% </ul>
+%%% 
+%%% == Transformation steps and compensations ==
 %%%
 %%%<ul>
 %%% <li>Change the order of patterns in every clause's parameter list in the
@@ -67,7 +64,8 @@
 %%%  elements in the list according to the given new order.
 %%% </li>
 %%% </ul>
-%%% Implementation status
+%%% 
+%%% == Implementation status ==
 %%%
 %%% Currently, this transformation can handle implicit function calls.
 %%% These implicit calls are expanded automatically before the arguments 
@@ -79,11 +77,11 @@
 %%% a function call and its arguments. When the tool is able to detect 
 %%% this dynamic calls, the transformation can take care of these problems 
 %%% automatically.
-
+%%% 
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(referl_tr_reorder_funpar).
--vsn("$Rev: 2607 $ ").
+-vsn("$Rev: 2968 $ ").
 
 -include("refactorerl.hrl").
 

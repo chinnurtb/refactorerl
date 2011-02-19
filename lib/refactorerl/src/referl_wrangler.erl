@@ -17,16 +17,88 @@
 %%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
 %%% Loránd University. All Rights Reserved.
 
-%%% @doc This module provides functions to call Wrangler easier.
+%%% @doc This module provides functions to call functionalities from
+%%% Wrangler.
 %%%
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
+%%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_wrangler).
--vsn("$Rev: 2146 $").
+-vsn("$Rev: 3020 $").
 
+-export([run_dup/1, test/0]).
 -export([rename_function/5]).
 
 -include("refactorerl.hrl").
+
+%%---------------------------------------------------------------------------
+%% Duplicated Code Detection
+
+-define(Get(T, A), proplists:get_value(T, A)).
+
+%% @private
+test()->
+    try run_dup([{dirs,["/home/melinda/test"]},{token,2},{clone,1}])
+    catch 
+        throw:Reason -> io:format(Reason)
+    end.
+
+%% @spec run_dup(Args::proplist()) -> [clone()]
+%% @doc Args should contain: 
+%%     {dirs, [string()], {token, integer()}, {clone, integer()}}
+%% Where `token' is the minimum number of tokens in a code clone, and 
+%% `clone' is the minimum number of appearance time in a clone in the file.
+%%
+%% `clone()::[{File::string(), Start::{integer(),integer()}, 
+%% End::{integer(), integer()}}]'
+run_dup(Args)->
+    Dirs = ?Get(dirs, Args),
+    MinTok = integer_to_list(?Get(token, Args)),
+    MinCl = integer_to_list(?Get(clone, Args)),
+    referl_mapping_server:start(),
+    case Dirs of
+        [] -> D = get_files();
+        _ -> D = FileNames = refac_util:expand_files(Dirs, ".erl"),
+             [referl_fileman:add_file(File) || File <- FileNames]
+    end, 
+    Result = 
+        try refac_duplicated_code:duplicated_code(D,MinTok,MinCl,8,refactorerl)
+        catch
+            throw:Error -> Error;
+            _E1:_E2 -> 
+                case D of 
+                    [] -> {error, "There are no files in the database"};
+                    _ -> {error, "Wrangler failed to perform this refactoring"}
+                end
+        end,
+    case Result of
+       {error, Reason} -> 
+           io:format("Error: ~p ~n", [Reason]), [];
+       {ok, []} -> 
+           io:format("Wrangler did not find duplicated code freagments ~n"), [];
+       {ok, List} -> 
+%%             [[io:format("Duplicated nodes: ~w ~n", 
+%%                        [[ets:lookup(ids,Id)||Id <- Ids]]) || 
+%%               {_, _, Ids} <- Clones ]|| {Clones, _, _} <- List],
+%% io:format("~nResultList ~p ~n", [List]),
+           result(List)
+    end,
+    referl_mapping_server:stop().
+
+
+result(L)->
+    [[{File, {L1, C1}, {L2, C2}}|| 
+      {{File, L1, C1}, {File, L2, C2}, _Ids} <- Clones ] || 
+       {Clones, _, _} <- L].
+
+
+get_files()->
+    lists:usort([?File:path(File) || 
+                 File <- ?Graph:path(?Graph:root(), [file])]).
+  
+%%---------------------------------------------------------------------------
+%% Rename Function
+
 
 leader(W) ->
     Self = self(),
@@ -73,3 +145,4 @@ rename_function(FileName, {Line, Col}, NewFunName, Dirs, Output) ->
     Result = redirect_output(RenamerFun, W),
     cl_out:close(C),
     Result.
+

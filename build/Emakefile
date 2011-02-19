@@ -1,2 +1,2 @@
-{'leex.erl', [nowarn_unused_vars,nowarn_unused_function]}.
+%% This is an -*- Erlang -*- makefile
 {'*', []}.

@@ -102,7 +102,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(referl_transform).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 2944 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
@@ -398,6 +398,7 @@ handle_exit(Result, Pid, #state{question=QT, answer=AT, wait=WT,
         {abort, Error} -> ?UI:message(status, "~s", [?Error:error_text(Error)]);
         {error, Error} -> ?UI:message(error, "~p", [Error])
     end,
+    ?UI:message(trfinished,ok),
     StRes = notify_wait(WT, Result),
     ets:match_delete(QT, {'_', '_', Pid}),
     ets:match_delete(AT, {{Pid, '_'}, '_'}),

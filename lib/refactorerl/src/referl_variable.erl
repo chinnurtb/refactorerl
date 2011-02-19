@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_variable).
--vsn("$Rev: 2610 $").
+-vsn("$Rev: 2696 $").
 
 -export([name/1]).
 -export([valid_name/1]).
@@ -41,6 +41,7 @@ name(Var) ->
 %% @spec valid_name(string()) -> bool() 
 %% @doc  Check the `NameStr' string is represent a legal variable name.
 %% @see  referl_misc:string_char_type/1
+valid_name("_") -> false;
 valid_name(NameStr)  when is_list(NameStr) ->
     Str = lists:flatten(NameStr),
     is_legal_name_(Str) andalso 

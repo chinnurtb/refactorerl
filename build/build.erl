@@ -24,7 +24,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(build).
--vsn("$Rev: 2077 $").
+-vsn("$Rev: 2716 $").
 
 -export([start/0, start/1, start/2]).
 -export([cmp/0, cmp/1, rel/0, rel/1, doc/0, build/3]).
@@ -33,14 +33,12 @@
 %%%%% File defines
 
 -define(SYNTAX_FILE,   "referl_syntax.xml").
--define(SCANNER_FILE,  "referl_syntax_scanner.xrl").
+-define(SCANNER_FILE,  filename:join(["..","priv","erlang.lex"])).
 -define(PARSER_FILE,   "referl_syntax_parser.yrl").
--define(SYNTAX_HEADER, filename:join(   [   ".."
-                                        ,   "include"
-                                        ,   "referl_syntax.hrl"]) ).
+-define(SYNTAX_HEADER, filename:join(["..", "include", "referl_syntax.hrl"])).
 -define(NODE_FILE,     "referl_syntax_nodes.erl").
 
--define(SCANNER_OUT_FILE,  "referl_syntax_scanner.erl").
+-define(SCANNER_OUT_FILE,  filename:join(["..","priv","erlang.lex.tab"])).
 -define(PARSER_OUT_FILE,   "referl_syntax_parser.erl").
 
 -define(RELEASE_FILE,      "refactorerl.rel").
@@ -155,43 +153,52 @@ refresh_builder(BaseDir) ->
 %%%%% =========================================================================
 %%%%% Build scanner, parser etc.
 
+-record(make, {input, output, make}).
+
 build_parser(_Opts) ->
-    Procs   = [ ?SCANNER_FILE, ?PARSER_FILE ],
-    Creates = [ ?SYNTAX_FILE, ?SYNTAX_HEADER, ?NODE_FILE ],
-    Outs    = [ ?SCANNER_OUT_FILE, ?PARSER_OUT_FILE ],
+    build_parser(
+      [#make{input  = [?SYNTAX_FILE, module_time(build_parser)],
+             output = [?SCANNER_FILE, ?PARSER_FILE, ?NODE_FILE, ?SYNTAX_HEADER],
+             make   = fun () ->
+                              build_parser:build(?SYNTAX_FILE,
+                                                 ?SCANNER_FILE,
+                                                 ?PARSER_FILE,
+                                                 ?NODE_FILE,
+                                                 ?SYNTAX_HEADER)
+                      end},
+       #make{input  = [?SCANNER_FILE, module_time(lexgen)],
+             output = [?SCANNER_OUT_FILE],
+             make   = fun () ->
+                              call_maker(fun lexgen:file/2,
+                                         ?SCANNER_FILE,
+                                         lexgen_error)
+                      end},
+       #make{input  = [?PARSER_FILE],
+             output = [?PARSER_OUT_FILE],
+             make   = fun () ->
+                              call_maker(fun yecc:file/2,
+                                         ?PARSER_FILE,
+                                         yecc_error)
+                      end}],
+      _Opts).
 
-    [ STime, PTime, SynTime, SynHTime, NodeTime, ScOutTime, PrOutTime ]
-        = [ file_mtime(File) || File <- Procs ++ Creates ++ Outs ],
-    BuilderTime = module_time(build_parser),
-    Build =
-        [ build || BeLess <- [STime, PTime, SynHTime, NodeTime]
-                 , BeMore <- [SynTime, BuilderTime]
-                 , BeMore > BeLess ],
-    if
-        SynTime =:= 0 ->
-            Force = false,
-            throw(no_syntax_file);
-        Build /= [] ->
-            Force = true,
-            build_parser:build(Procs ++ Creates);
-        true ->
-            Force = false
-    end,
+build_parser(ToMake, _Opts) ->
+    lists:foreach(
+      fun (#make{input=Inp, output=Out, make=Make}) ->
+              InpTime = lists:max([file_mtime(F) || F <- Inp]),
+              OutTime = lists:min([file_mtime(F) || F <- Out]),
+              if
+                  InpTime > OutTime -> Make();
+                  true              -> ok
+              end
+      end,
+      ToMake).
 
-    create_file(Force, STime, ScOutTime,
-                fun leex:file/2, ?SCANNER_FILE, leex_error),
-    create_file(Force, PTime, PrOutTime,
-                fun yecc:file/2, ?PARSER_FILE, yecc_error).
-
-create_file(Force, Time, OutTime, Process, File, Error) ->
-    if
-        Force; Time > OutTime ->
-            case Process(File, [verbose]) of
-                error -> throw(Error);
-                _     -> ok
-            end;
-        true ->
-            ok
+call_maker(Fun, File, Error) ->
+    case Fun(File, [verbose]) of
+        error -> throw(Error);
+        {error, Reason} -> throw({Error, Reason});
+        _ -> ok
     end.
 
 
@@ -222,6 +229,7 @@ build_release(BaseDir) ->
     systools:make_script("refactorerl").
 
 
+file_mtime(Time) when is_integer(Time) -> Time;
 file_mtime(File) ->
     case filelib:last_modified(File) of
         0 -> 0;

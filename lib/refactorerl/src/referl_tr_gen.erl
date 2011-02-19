@@ -28,8 +28,15 @@
 %%% and the actual parameter at all call site becomes the selected part
 %%% with the corresponing compensation.
 %%%
+%%% == Parameters ==
+%%% <ul>
+%%%   <li> A non-empty, continuous sequence of expressions
+%%%        (see {@link referl_args:expr_range/1}). </li>
+%%%   <li> The name of the variable to add to the parameters
+%%%        (see {@link referl_args:varname/1}). </li>
+%%% </ul>
 %%%
-%%% Conditions of applicability
+%%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li>The name of the function with its arity increased by one should not
 %%%   conflict with another function, either defined in the same module,
@@ -51,7 +58,7 @@
 %%%   definition, and are not part of macro application parameters.</li>
 %%% </ul>
 %%%
-%%% Rules of the transformation
+%%% == Rules of the transformation ==
 %%% <ol>
 %%%   <li>If the selected expression does not contain any variables:
 %%%     <ul>
@@ -104,10 +111,13 @@
 %%%   call of function.</li>
 %%% </ol>
 %%%
+%%% == Implementation status ==
+%%% The transformation is fully implemented.
+%%%
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_tr_gen).
--vsn("$Rev: 2663 $").
+-vsn("$Rev: 2964 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -123,6 +133,7 @@ error_text(side_eff, []) ->
 error_text(guard_var, []) ->
     "It is impossible to macth against the formal and actual parameters" ++
     " (compound data structures)".
+
 %%% ============================================================================
 %%% Callbacks
 
@@ -210,6 +221,15 @@ check_expr_link(Exprs)->
                    ?RefError(bad_kind, filter)),
             {body, Par};
         [{sub, Par}]  ->
+            ParKind = ?Expr:kind(Par),
+            ParVal = ?Expr:value(Par),
+            Index = ?Syn:index(Par, sub, hd(Exprs)),
+            ?Check(ParKind =/= application orelse
+                   length(Exprs) =/= 1 orelse Index =/= 1,
+                   ?RefError(bad_kind, 'application name')),
+            ?Check((ParKind =/= infix_expr orelse ParVal =/= ':') orelse
+                   length(Exprs) =/= 1,
+                   ?RefError(bad_kind, 'module qualifier')),
             ?Check(length(Exprs) =:= 1, ?RefErr0r(bad_range)),
             {sub, Par};
         [{pattern, _Par}] -> throw(?RefError(bad_kind, pattern));

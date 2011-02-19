@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_expression).
--vsn("$Rev: 2609 $").
+-vsn("$Rev: 2931 $").
 
 -export([type/1, kind/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
@@ -389,12 +389,12 @@ side_effect(Expr)->
     Funs      = ?Query:exec(Expr, ?Expr:functions()),
     DirtyFunc = [Fun || Fun <- Funs, ?Fun:dirty(Fun)],
     UnKnown   = [Fun || Fun <- Funs, ?Fun:dirty(Fun) == unknown],
-    case {length(SideEffs) /= 0, length(UnKnown) /=0, length(DirtyFunc) /= 0} of
+    case {SideEffs =/= [], UnKnown =/= [], DirtyFunc =/= []} of
         {true, _, _} -> true;
         {_, true, _} -> true;
-    %% egyenlore ha nem tudjuk eldonteni, hogy van-e mellekhatasa, akkor ugy
-    %% tekintunk ra mintha lenne, kesobb esetleg meg lehet kerdezni a 
-    %% felhasznalaot, hogy szerinte van-e
+    %% when we can not determine whether the expression has a side-effect,
+    %% we handle this as it has
+    %% TODO: ask the user wheather it has a side-effect
         {_, _, true} -> true;
         {_, _,    _} -> false
     end.

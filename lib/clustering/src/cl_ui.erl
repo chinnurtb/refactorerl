@@ -24,7 +24,7 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(cl_ui).
--vsn("$Rev: 1899 $").
+-vsn("$Rev: 2811 $").
 -include_lib("stdlib/include/qlc.hrl").
 -export([run/1,cl_options/1]).
 -export([prepare/1,refresh/0]).
@@ -60,15 +60,14 @@ run({Opt, Alg, CreateDb})->
                                      <- lists:zip(Opts, Terms)],
     OptionName  = [Name || {Name, _} <- cl_options_in(Alg)],
     FOpt        = lists:zip(OptionName,Options),
-    FinalOpt    = [{alg, Alg}]++FOpt,
-    Clustering  = cl_interface:run_cluster([{log_output, null}]++FinalOpt),
-     cl_db:update(deps),
-    Fitt_Num    = [cl_fitness:fitness(ClusterNum,FinalOpt) ||
-                                          ClusterNum <- Clustering],
+    FinalOpt    = [{alg, Alg}, {entity_type, module}]++FOpt,
+    Clusterings = cl_interface:run_cluster([{log_output, null}]++FinalOpt),
+    Fitt_Num    = cl_interface:fitness([{clusterings, Clusterings},
+                                        {fitness_options, FinalOpt}]),
     case CreateDb of t ->
       case table_handler() of
          {table, _} ->
-              store_result(FinalOpt, Fitt_Num, Clustering);
+              store_result(FinalOpt, Fitt_Num, Clusterings);
          _ -> throw({error, cl_ui_crashed})
       end;
       [] -> ok
@@ -79,7 +78,7 @@ run({Opt, Alg, CreateDb})->
        _           -> undefined
     end,
     VClustering = [[Lista,fn,Number]
-          || {Lista,Number}<-lists:zip(Clustering,Fitt_Num)],
+          || {Lista,Number}<-lists:zip(Clusterings,Fitt_Num)],
     {[Algorithm]++VClustering, Fitt_Num}.
 
 %%% @spec cl_options_in(Alg::atom()) -> OptionList::list()
