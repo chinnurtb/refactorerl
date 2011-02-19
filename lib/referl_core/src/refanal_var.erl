@@ -26,7 +26,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refanal_var).
--vsn("$Rev: 4970 $ ").
+-vsn("$Rev: 5575 $ ").
 -behaviour(refcore_anal).
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
@@ -97,6 +97,11 @@ del_link(Node, #clause{})->
     [?Graph:rmlink(Node, varvis, Var)  || Var   <- ?Graph:path(Node, [varvis])];
 %% [{scope, clause}, {visib, expr}, {vardef, variable}, {varvis, variable}]
 del_link(Node, #expr{})->
+    Vars = ?Graph:path(Node, [varref]) ++ ?Graph:path(Node, [varbind]),
+    [[?Graph:rmlink(Cl,  varvis,   Var) 
+        || Cl  <- ?Graph:path(Var, [{varvis, back}])] || Var <- Vars],
+    [[?Graph:rmlink(Cl,  vardef,   Var)
+        || Cl  <- ?Graph:path(Var, [{vardef, back}])] || Var <- Vars],
     [?Graph:rmlink(Node, varref,   Var) || Var <- ?Graph:path(Node, [varref])],
     [?Graph:rmlink(Node, varbind,  Var) || Var <- ?Graph:path(Node, [varbind])],
     [?Graph:rmlink(Var,  varintro, Node)

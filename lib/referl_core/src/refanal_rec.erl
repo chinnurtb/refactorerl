@@ -29,6 +29,9 @@
 
 -include("core.hrl").
 
+%% TODO: do not use this header here
+-define(Token, reflib_token).
+
 %%% @private
 schema() ->
     [{field,  record_info(fields, field), []},
@@ -55,31 +58,31 @@ insert(Parent, _Pre, {Tag, Child}, _Post) ->
             File = parent_file(Parent),
             walk(fun add_del/4, [{Child, File}], add_ref);
         #form{} -> ok;
-        #clause{} -> 
+        #clause{} ->
             File = parent_file(Parent),
             walk(fun add_del/4, [{Child, File}], add_ref);
-        #expr{type=T, value = RName} when T == record_update orelse 
-                                          T == record_expr -> 
+        #expr{type=T, value = RName} when T == record_update orelse
+                                          T == record_expr ->
             File = file(Parent, ?Anal:data(Parent)),
-            walk(fun add_del/4, [{Child, {File, RName}}], add_ref);  
+            walk(fun add_del/4, [{Child, {File, RName}}], add_ref);
         #expr{type=record_index, value = RName} ->
             File = file(Parent, ?Anal:data(Parent)),
             #expr{value = FName} = ?Anal:data(Child),
             ?NodeSync:add_ref(field, {ref, Child}, {{File, RName}, FName});
         #expr{type=record_access, value = RName} ->
             File = file(Parent, ?Anal:data(Parent)),
-            case ?Anal:data(Child) of 
+            case ?Anal:data(Child) of
                 #expr{type=atom, value=FName} ->
                     ?NodeSync:add_ref(field, {ref,Child}, {{File,RName},FName});
-                _ -> 
+                _ ->
                     walk(fun add_del/4, [{Child, File}], add_ref)
             end;
         #expr{type=field_list} ->
             Rec = ?Anal:parent(Parent),
             %% TODO eliminate: #expr{value = Name} = ?Anal:data(Rec),
             [Lex] = ?Graph:path(Rec, [{elex,2}]),
-            RName = ((?Graph:data(Lex))#lex.data)#token.value,
-            %% TODO          
+            RName = ?Token:get_value(Lex),
+            %% TODO
             File = file(Parent, ?Anal:data(Parent)),
             walk(fun add_del/4, [{Child, {File, RName}}], add_ref);
         #expr{} ->
@@ -99,7 +102,7 @@ add_del(Dir, #form{type=record, tag=Name}, Form, File)->
     [{Field, {File, Name}} || {_, Field} <- Children];
 add_del(_Dir, #form{type=func}, Form, File) ->
     [{Cl, File} || {funcl, Cl} <- ?Anal:children(Form)];
-add_del(_Dir, #form{}, _Form, _File) -> 
+add_del(_Dir, #form{}, _Form, _File) ->
     [];
 
 add_del(_Dir, #clause{}, Clause, File) ->
@@ -153,35 +156,35 @@ remove(Parent, _Pre, {Tag, Child}, _Post) ->
         #form{type=func} when Tag == funcl ->
             File = parent_file(Parent),
             walk(fun add_del/4, [{Child, File}], del_ref);
-        #form{} -> 
+        #form{} ->
              ok;
 
         #clause{} ->
             File = parent_file(Parent),
             walk(fun add_del/4, [{Child, File}], del_ref);
 
-        #expr{type=T, value = RName} when T == record_update orelse 
-                                           T == record_expr -> 
+        #expr{type=T, value = RName} when T == record_update orelse
+                                           T == record_expr ->
             File = file(Parent, ?Anal:data(Parent)),
-            walk(fun add_del/4, [{Child, {File, RName}}], del_ref);  
+            walk(fun add_del/4, [{Child, {File, RName}}], del_ref);
         #expr{type=record_index, value = RName} ->
             File = file(Parent, ?Anal:data(Parent)),
             #expr{value = FName} = ?Anal:data(Child),
             ?NodeSync:del_ref(field, {ref, Child}, {{File, RName}, FName});
         #expr{type=record_access, value = RName} ->
             File = file(Parent, ?Anal:data(Parent)),
-            case ?Anal:data(Child) of 
+            case ?Anal:data(Child) of
                 #expr{type=atom, value=FName} ->
                     ?NodeSync:del_ref(field, {ref,Child}, {{File,RName},FName});
-                _ -> 
+                _ ->
                     walk(fun add_del/4, [{Child, File}], del_ref)
             end;
         #expr{type=field_list} ->
             Rec = ?Anal:parent(Parent),
             %% TODO eliminate: #expr{value = Name} = ?Anal:data(Rec),
             [Lex] = ?Graph:path(Rec, [{elex,2}]),
-            RName = ((?Graph:data(Lex))#lex.data)#token.value,
-            %% TODO          
+            RName = ?Token:get_value(Lex),
+            %% TODO
             File = file(Parent, ?Anal:data(Parent)),
             walk(fun add_del/4, [{Child, {File, RName}}], del_ref);
         #expr{} ->
@@ -200,12 +203,7 @@ update(Form, #form{type=record, tag=Name})->
     File = ?Anal:parent(Form),
     ?NodeSync:move_refs(rec, [def], Form, {File, Name}),
     [Lex] = ?Graph:path(Form, [{flex, 4}]),
-    LexData = ?ESG:data(Lex),
-    Token = LexData#lex.data,
-    ?Graph:update(Lex, 
-                  LexData#lex{data = Token#token{value = Name, 
-                                                 text = io_lib:write(Name)}}),
-
+    ?Syn:update_lex_with_text(Lex, Name),
     ok;
 update(_,_) -> ok.
 
@@ -224,9 +222,9 @@ parent_file(Node) ->
         file -> P;
         _    -> parent_file(P)
     end.
-    
+
 file(Expr, #expr{role=attr})->
-    [File] = ?Graph:path(Expr, [top, {texpr, back}, {tattr, back}, 
+    [File] = ?Graph:path(Expr, [top, {texpr, back}, {tattr, back},
                                   {form, back}, {incl, back}]) ++
              ?Graph:path(Expr, [top, {eattr, back}, {form, back}]),
     File;
@@ -248,8 +246,8 @@ file(TypE, #typexp{}) ->
 
 %% get_funcl(Expr) ->
 %%     [FunCl] = ?Graph:path(Expr, [top, {body, back}, functx]) ++
-%%               ?Graph:path(Expr, [top, {guard, back}, functx]) ++  
-%%               ?Graph:path(Expr, [top, {pattern, back}, functx]), %% ++ 
+%%               ?Graph:path(Expr, [top, {guard, back}, functx]) ++
+%%               ?Graph:path(Expr, [top, {pattern, back}, functx]), %% ++
 %% %%    ?Graph:path(Expr, [top, {name, back}, functx]),
 %%     FunCl.
 

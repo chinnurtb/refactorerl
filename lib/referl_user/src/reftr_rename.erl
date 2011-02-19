@@ -120,8 +120,13 @@ prepare(Args) ->
 
             _ -> throw(?RefErr0r(bad_kind))
         end,
-    NewArgs = transform_args(?Args:string(Args), RenameMod, Args),
-    RenameMod:prepare(NewArgs).
+    case proplists:get_value(ask_missing, Args) of
+        false ->
+            NewArgs = transform_args(?Args:string(Args), RenameMod, Args),
+            RenameMod:prepare(NewArgs);
+        _ ->
+            RenameMod:prepare(Args)
+    end.
 
 %% Transforms the non-interactive string representation to appropriate properties.
 transform_args(String, reftr_rename_var, Args) ->

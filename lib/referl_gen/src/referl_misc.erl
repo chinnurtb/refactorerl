@@ -25,7 +25,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_misc).
--vsn("$Rev: 5455 $ ").
+-vsn("$Rev: 5576 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -75,7 +75,7 @@
          string_replace/4,
          string_trim/1, string_trim/2, string_trim/3, strip/1,
          string_lines/1, string_lines/2, string_split/5, lines/1,
-         dos2unix/1]).
+         dos2unix/1, canonical_filename/1]).
 
 %% Text queries
 -export([string_char_type/1, string_is_letter/1, escape/1,
@@ -557,7 +557,7 @@ pcopy(Keys,Prop)->
            end,
     lists:flatmap(Copy, Keys).
 
-%% @doc Deletes keys from a proplist.
+%% @doc Deletes keys from a proplist
 %% @spec ([Key],[{Key,Value}]) -> [{Key,Value}]
 %% @equiv [KV || KV={K,_V}<-Prop, not lists:member(K,Delete)]
 pdel(Delete,Prop) ->
@@ -1286,6 +1286,27 @@ dos2unix(Str) ->
     lists:reverse(L).
 
 
+%% @doc Returns the canonical name of the file, which does not contain ".."
+%% in the path. Should work for both Unix and Windows (and mixed) style paths.
+canonical_filename(Filename) ->
+    canonical_filename2(filename:absname(Filename)).
+
+canonical_filename2(Filename) ->
+    RmBackSlash = elim_up_dir(Filename, [$\\, $\\]),
+    RmFwdSlash  = elim_up_dir(RmBackSlash, "/"),
+    case RmFwdSlash of
+        Filename -> Filename;
+        Shorter  -> canonical_filename2(Shorter)
+    end.
+
+%% @doc Eliminates a "/../dir/" section from the path.
+%% `Sep' is the path separator, which has to expand to one regexp character.
+elim_up_dir(Filename, Sep) ->
+    re:replace(Filename,
+               "[^" ++ Sep ++ "]+" ++ Sep ++ "[.][.]" ++ Sep ++ "?", "",
+               [{return, list}]).
+
+
 %% @doc manual hard-coded fusion optimization of the below said
 %% @equiv string_linecol(dos2unix(binary_to_list(B)),P)
 %% @spec (binary(),natural()) -> {natural(),natural()}
@@ -1318,7 +1339,7 @@ integer_to_list(N,P) ->
     end.
 
 is_erl(F)->
-    nomatch /= re:run(F, "\\.[eE][rR][lL]$", [{capture,first}]).
+    nomatch /= re:run(F, "\\.[eEhH][rR][lL]$", [{capture,first}]).
 %    lists:suffix(".erl",File).
 
 is_beam(F)->

@@ -76,6 +76,69 @@ transform({Kind, Updates}) ->
 			 [{pattern, [{atom, OrigName}], [], [{atom, NewName}]},
 			  {pattern, [{var, VarName}], [], [{var, VarName}]}]}}]};
 
+		 {rename, {mfa, Appl, Mod, Fun, Param, ModName, OrigName,
+			   NewName, VarFun}} ->
+		     {Appl,
+		      [{app,
+			{{infix_expr, ':'},
+			 copy(Mod),
+			 {'case', {tuple, [copy(Mod), copy(Fun)]},
+			  [{pattern,
+			    [{tuple, [{atom, ModName}, {atom, OrigName}]}],
+			    [],
+			    [{atom, NewName}]},
+			   {pattern, [{var, VarFun}], [], [{var, VarFun}]}]}},
+			[copy(P) || P <- Param]}]};
+
+		 {rename, {mfa, Appl, Mod, Fun, Param, ModName, OrigName,
+			   NewName, VarMod, VarFun}} ->
+		     {Appl,
+		      [{match_expr, {var, VarMod}, copy(Mod)},
+		       {app,
+			{{var, VarMod}, ':',
+			 {'case', {tuple, [{var, VarMod}, copy(Fun)]},
+			  [{pattern,
+			    [{tuple, [{atom, ModName}, {atom, OrigName}]}],
+			    [],
+			    [{atom, NewName}]},
+			   {pattern, [{var, VarFun}], [], [{var, VarFun}]}]}},
+			[copy(P) || P <- Param]}]};
+
+		 {rename, {apply, Appl, Mod, Fun, Param, ModName, OrigName,
+			   NewName, VarFun}} ->
+		     {Appl,
+		      [{app,
+			{atom, apply},
+			[copy(Mod),
+			 {'case', {tuple, [copy(Mod), copy(Fun)]},
+			  [{pattern,
+			    [{tuple, [{atom, ModName}, {atom, OrigName}]}],
+			    [],
+			    [{atom, NewName}]},
+			   {pattern,
+			    [{tuple, [{joker, []}, {var, VarFun}]}],
+			    [],
+			    [{var, VarFun}]}]},
+			 {list, [copy(P) || P <- Param]}]}]};
+		 
+		 {rename, {apply, Appl, Mod, Fun, Param, ModName, OrigName,
+			   NewName, VarMod, VarFun}} ->
+		     {Appl,
+		      [{match_expr, {var, VarMod}, copy(Mod)},
+		       {app,
+			{atom, apply},
+			[{var, VarMod},
+			 {'case', {tuple, [{var, VarMod}, copy(Fun)]},
+			  [{pattern,
+			    [{tuple, [{atom, ModName}, {atom, OrigName}]}],
+			    [],
+			    [{atom, NewName}]},
+			   {pattern,
+			    [{tuple, [{joker, []}, {var, VarFun}]}],
+			    [],
+			    [{var, VarFun}]}]},
+			 {list, [copy(P) || P <- Param]}]}]};
+		  
 		 {move, {mfa, Appl, Mod, OrigMod, NewMod, Fun,
 			 TransFun, _, Param, VarMod, VarFun, _}} ->
 		     {Appl,
@@ -91,6 +154,7 @@ transform({Kind, Updates}) ->
 			    [{atom, NewMod}]},
 			   {guard, {atom, true}, [{var, VarMod}]}]}},
 			':', {var, VarFun}}, [copy(P) || P <- Param]}]};
+		 
 		 {move, {apply, Appl, Mod, OrigMod, NewMod, Fun,
 			 TransFun, Arity, Param, VarMod, VarFun, VarParam}} ->
 		     {Appl,
@@ -116,12 +180,11 @@ transform({Kind, Updates}) ->
 
 		 {param, {apply, Appl, Param, Mod, Fun, MName, FName, FArity,
 			  VarMod, VarFun, VarParam, Transf, VarTrans}} ->
-		     ChildParam = ?Query:exec([Param], ?Expr:children()),
 		     NewParam =
 			 case Transf of
-			     {tuple,   TParam} -> comp_tuple_apply(TParam, ChildParam, VarTrans);
-			     {int_rec, TParam} -> comp_rec_apply(TParam, ChildParam, VarTrans);
-			     {reord,   TParam} -> comp_reord_apply(TParam, ChildParam, VarTrans)
+			     {tuple,   TParam} -> comp_tuple_apply(TParam, VarParam, VarTrans);
+			     {int_rec, TParam} -> comp_rec_apply(TParam, VarParam, VarTrans);
+			     {reord,   TParam} -> comp_reord_apply(TParam, VarParam, VarTrans)
 			 end,
 		     {Appl,
 		      [{match_expr, {var, VarMod}, copy(Mod)},
@@ -130,14 +193,16 @@ transform({Kind, Updates}) ->
 		       {app, {atom, apply},
 			[{var, VarMod},
 			 {var, VarFun},
-			 {'if',
-			  [{guard,
-			    {{paren, {{var, VarMod}, '==', {atom, MName}}}, 'andalso',
-			     {{paren, {{var, VarFun}, '==', {atom, FName}}}, 'andalso',
-			      {paren, {{app, {atom, length}, [{var, VarParam}]}, '==',
-			       {integer, FArity}}}}},
-			    NewParam},
-			   {guard, {atom, true}, [{var, VarParam}]}]}]}]};
+			 {'case', {tuple,
+				   [{var, VarMod},
+				    {var, VarFun},
+				    {app, {atom, length}, [{var, VarParam}]}]},
+			  [{pattern,
+			    [{tuple, [{atom, MName}, {atom, FName}, {integer, FArity}]}],
+			    [],
+			    [NewParam]},
+			   {pattern,
+			    [{joker, []}], [], [{var, VarParam}]}]}]}]};
 		 
 		 {param, {mfa, Appl, Param, Mod, Fun, MName, FName, _,
 			  VarMod, VarFun, _, Transf, _}} ->
@@ -149,17 +214,19 @@ transform({Kind, Updates}) ->
 			 end,
 		     {Appl,
 		      [{match_expr, {var, VarMod}, copy(Mod)},
-		       {'case', copy(Fun),
+		       {match_expr, {var, VarFun}, copy(Fun)},
+		       {'case', {tuple, [{var, VarMod}, {var, VarFun}]},
 			[{pattern, 
-			  [{atom, FName}],
-			  {{var, VarMod}, '==', {atom, MName}},
-			  [{app, {{var, VarMod}, ':', {atom, FName}}, NewParam}]},
+			  [{tuple, [{atom, MName}, {atom, FName}]}],
+			  [],
+			  [{app, {{atom, MName}, ':', {atom, FName}}, NewParam}]},
 			 {pattern,
-			  [{var, VarFun}],
+			  [{joker, []}],
 			  [],
 			  [{app, {{var, VarMod}, ':', {var, VarFun}},
 			    [copy(P) || P <- Param]}]}]}]}
 	     end,
+	 
 	 replace(Node, Graph)
      end || Update <- Updates].
 
@@ -222,22 +289,22 @@ collect_param(Def, TKind, TParam) ->
 	 VarMod   = ?Var:new_varname(DCall, "Mod"),
 	 VarFun   = ?Var:new_varname(DCall, "Fun", [VarMod]),
 	 VarParam = ?Var:new_varname(DCall, "Fun", [VarMod, VarFun]),
-	 VarTrans = create_var(DCall, case TKind of
-					  int_rec ->
-					      {_, Fields} = TParam,
-					      length(Fields);
-					  _       -> FArity
-				      end, [VarMod, VarFun, VarParam]),
+	 VarTrans = gen_var(DCall, case TKind of
+				       int_rec ->
+					   {_, Fields} = TParam,
+					   length(Fields);
+				       _       -> FArity
+				   end, [VarMod, VarFun, VarParam]),
 	 
 	 {CType, DCall, Param, Mod, Fun, MName, FName, FArity,
 	  VarMod, VarFun, VarParam, {TKind, TParam}, VarTrans}
      end || DCall <- DynFunCalls].
 
-create_var(_, 0, _) ->
+gen_var(_, 0, _) ->
     [];
-create_var(Node, Count, Buffer) ->
+gen_var(Node, Count, Buffer) ->
     Var = ?Var:new_varname(Node, "Var", Buffer),
-    [Var | create_var(Node, Count - 1, [Var|Buffer])].
+    [Var | gen_var(Node, Count - 1, [Var|Buffer])].
 
 collect_rename(Def, NewName, Edge) ->
     OrigName =
@@ -250,40 +317,91 @@ collect_rename(Def, NewName, Edge) ->
 	    1 -> ?Query:seq(?Mod:locals(), ?Query:all(dynfun_call(), ambdyn_call()));
 	    2 -> ?Query:all(dynfun_call(), ambdyn_call())
 	end,
-    DynFunCalls = ?Query:exec(Def, Route),
 
+    DynFunCalls = lists:usort(?Query:exec(Def, Route)),
+    ModName     =
+	case Edge of
+	    1 -> OrigName;
+	    2 -> ?Mod:name(hd(?Query:exec(Def, ?Fun:module())))
+	end,
+    
     [begin
-	 [Fun] = funcall_parameter(DCall, Edge),
-	 
-	 Source = [Node || Node <- ?Dataflow:reach([Fun], [back]),
+	 [TransParam] = funcall_parameter(DCall, Edge),
+	 [Mod]        = funcall_parameter(DCall, 1),
+
+	 Source = [Node || Node <- ?Dataflow:reach([TransParam], [back]),
 			   ?Expr:type(Node) == atom
 			       andalso ?Expr:value(Node) == OrigName],
-	 case Source of
-	     [] ->
-		 VarName = ?Var:new_varname(Fun, "Var"),
-		 {Fun, OrigName, NewName, VarName};
-	     [Start] ->
+
+	 VarName     = ?Var:new_varname(TransParam, "Var"),
+	 FunCallType = get_funcall_type(DCall),
+	 Param       =
+	     case FunCallType of
+		 apply -> ?Query:exec(DCall, ?Query:seq([{esub, 2}], [{esub, 3}]));
+		 mfa   -> ?Query:exec(DCall, ?Query:seq([{esub, 2}], ?Expr:children()))
+	     end,
+	 
+	 case {Source, Edge, ?Expr:type(Mod)} of
+	     {[], 2, atom} ->
+		 {TransParam, OrigName, NewName, VarName};
+	     
+	     {[], 2, variable} ->
+		 {FunCallType, DCall, Mod, TransParam, Param, ModName, OrigName,
+		  NewName, VarName};
+	     
+	     {[], 2, _} ->
+		 VarMod = ?Var:new_varname(TransParam, "Var", [VarName]),
+		 {FunCallType, DCall, Mod, TransParam, Param,  ModName, OrigName,
+		  NewName, VarMod, VarName};
+	     
+	     {[],  _, _} ->
+		 {TransParam, OrigName, NewName, VarName};
+	     
+	     {[Start], _, ModType} ->
 		 Flow = [Node || Node <- ?Dataflow:reach([Start], [{back, false}]),
 				 ?Expr:type(Node) == variable],
-		 case has_dity_usage(Flow) of
-		     false ->
+		 VarName = ?Var:new_varname(TransParam, "Var"),
+		 
+		 case {has_dity_usage(Flow), Edge, ModType} of
+		     {false, 2, atom} ->
 			 {Start, {atom, NewName}};
-		     _ ->
-			 VarName = ?Var:new_varname(Fun, "Var"),
-			 {Fun, OrigName, NewName, VarName}
+		     
+		     {true, 2, atom} ->
+			 {TransParam, OrigName, NewName, VarName};
+		     
+		     {_, 2, variable} ->
+			 {FunCallType, DCall, Mod, TransParam, Param, ModName,
+			  OrigName, NewName, VarName};
+		     
+		     {_, 2, _} ->
+			 VarMod = ?Var:new_varname(TransParam, "Var", [VarName]),
+			 {FunCallType, DCall, Mod, TransParam, Param,  ModName,
+			  OrigName, NewName, VarMod, VarName};
+		     
+		     {false, _, _} ->
+			 {Start, {atom, NewName}};
+		     
+		     {true, _, _} ->
+			 VarName = ?Var:new_varname(TransParam, "Var"),
+			 {TransParam, OrigName, NewName, VarName}
 		 end
 	 end
      end || DCall <- DynFunCalls].
 
-funcall_parameter(DCall, Edge) ->
-    [Node] = ?Query:exec(DCall, [{esub, 1}]),
-    
+funcall_parameter(DCall, Edge) ->   
     Route =
-	case ?Expr:value(Node) of
+	case get_funcall_type(DCall) of
 	    apply -> ?Query:seq([{esub, 2}], [{esub, Edge}]);
 	    _     -> ?Query:seq([{esub, 1}], [{esub, Edge}])
 	end,
     ?Query:exec(DCall, Route).
+
+get_funcall_type(DCall) ->
+    [FunCall] = ?Query:exec(DCall, [{esub, 1}]),
+    case ?Expr:value(FunCall) of
+	apply -> apply;
+	_     -> mfa
+    end.
 
 has_dity_usage([]) ->
     false;
@@ -301,11 +419,11 @@ has_dity_usage([Node|Rest]) ->
 	    false
     end orelse has_dity_usage(Rest).
 
-comp_tuple_apply({IdxFrom, IdxLen}, Param, VarTrans) ->
+comp_tuple_apply({IdxFrom, IdxLen}, VarParam, VarTrans) ->
     NewParam = comp_tuple(VarTrans, 1, IdxFrom, IdxLen),
     [{match_expr,
-     {cons, {list, [{var, Var} || Var <- VarTrans]}},
-     {cons, {list, [copy(P) || P <- Param]}}},
+      {cons, {list, [{var, Var} || Var <- VarTrans]}},
+      {var, VarParam}},
     {cons, {list, NewParam}}].
 
 comp_tuple([Var|RestVar], Cnt, IdxFrom, IdxLen) when Cnt == IdxFrom ->
@@ -333,10 +451,10 @@ comp_tuple_mfa(RestVar, 0, Buffer) ->
 comp_tuple_mfa([Var|RestVar], Cnt, Buffer) ->
     comp_tuple_mfa(RestVar, Cnt - 1, Buffer ++ [copy(Var)]).
 
-comp_rec_apply({RName, RFields}, Param, VarTrans) ->
+comp_rec_apply({RName, RFields}, VarParam, VarTrans) ->
     [{match_expr,
       {cons, {list, [{tuple, [{var, Var} || Var <- VarTrans]}]}},
-      {cons, {list, [{tuple, [copy(P) || P <- Param]}]}}},
+      {var, VarParam}},
       {{record_expr, RName},
        lists:zipwith(
 	 fun (RF, Var) ->
@@ -350,10 +468,10 @@ comp_rec_mfa({RName, RFields}, Param) ->
 		{{record_field, RF}, copy(P)}
 	end, RFields, ?Query:exec(Param, ?Expr:children()))}].
 
-comp_reord_apply(TParam, Param, VarTrans) ->
+comp_reord_apply(TParam, VarParam, VarTrans) ->
     [{match_expr,
       {cons, {list, [{var, Var} || Var <- VarTrans]}},
-      {cons, {list, [copy(P) || P <- Param]}}},
+      {var, VarParam}},
      {cons, {list, [{var, lists:nth(N, VarTrans)} || N <- TParam]}}].
 
 comp_reord_mfa(TParam, Param) ->

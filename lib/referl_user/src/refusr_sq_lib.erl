@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq_lib).
--vsn("$Rev: 5463 $ ").
+-vsn("$Rev: 5601 $ ").
 
 -include("user.hrl").
 
@@ -82,14 +82,15 @@ init_sel(Params,  '@def') ->
 
     Type = case Entity of
                []     -> none;
-               [Node] -> case ?Syn:node_type(Node) of
-                             form     -> macro;
-                             variable -> variable;
-                             field    -> field;
-                             record   -> record;
-                             module   -> file;
-                             func     -> function
-                         end
+               %todo: can the elements of the list be of different types?
+               [Node|_] -> case ?Syn:node_type(Node) of
+                               form     -> macro;
+                               variable -> variable;
+                               field    -> field;
+                               record   -> record;
+                               module   -> file;
+                               func     -> function
+                           end
            end,
     {Type, Entity};
 
@@ -172,8 +173,13 @@ entites() ->
 
          #property{
             name = [name],
-            type = string,
+            type = atom,
             func = fun(File) -> file_prop(name, File) end},
+
+         #property{
+            name = [filename],
+            type = string,
+            func = fun(File) -> file_prop(filename, File) end},
 
          #property{
             name = [dir, directory],
@@ -203,7 +209,7 @@ entites() ->
             func = fun(File) -> file_metrics(char_of_code, File, true) end},
 
          #property{
-            name = [number_of_fun, num_of_fun,
+            name = [number_of_fun, num_of_fun, num_of_funs,
                     num_of_functions, number_of_functions],
             type = int,
             func = fun(File) -> file_metrics(number_of_fun, File, false) end}, 
@@ -615,8 +621,8 @@ entites() ->
             func = fun(Fun) -> fun_metrics(no_space_after_comma, Fun) end},
         
          #property{
-            name = [is_tail_recursive],
-            type = int,
+            name = [is_tail_recursive, is_tail_rec],
+            type = atom,
             func = fun(Fun) -> fun_metrics(is_tail_recursive, Fun) end}
           
         ]},
@@ -690,7 +696,7 @@ entites() ->
         properties =
         [#property{
             name = [name],
-            type = string,
+            type = atom,
             func = fun ?Rec:name/1}
         ]},
 
@@ -821,7 +827,8 @@ entites() ->
             type = function,
             func = fun(Expr) ->
                            ?Query:exec(Expr,
-                                       ?Query:seq([?Expr:deep_sub(),
+                                       ?Query:seq([?Expr:top(),
+                                                   ?Expr:deep_sub(),
                                                    ?Query:all([[dynfuneref],
                                                                [ambfuneref]])]))
                    end},
@@ -852,8 +859,9 @@ entites() ->
             func = fun(Expr) ->
                            case ?Expr:type(Expr) of
                                application ->
-                                   [_|Xs] = ?Query:exec(Expr, ?Expr:children()),
-                                   Xs;
+                                   ?Query:exec(Expr, 
+                                               ?Query:seq(?Expr:child(2), 
+                                                          ?Expr:children()));
                                match_expr ->
                                    ?Query:exec(Expr, ?Expr:child(2));
                                cons ->
@@ -1034,15 +1042,28 @@ file_is_module(File) ->
         file -> ?File:type(File) == module
     end.
 
-file_prop(name, File) ->
-    case file_is_module(File) of
-        true ->
-            [ModuleNode] = mod(File),
-            io_lib:write_atom(?Mod:name(ModuleNode));
-        false ->
-            Path = ?File:path(File),
-            string:substr(Path, string:rstr(Path, "/")+1)
+file_prop(filename, File) ->
+    case file(File) of
+        [] -> %todo: lehet mas mint module node?
+            %io_lib:write_atom(?Mod:name(File));
+            "";
+        [FileNode] ->
+            Path = ?File:path(FileNode),
+            string:substr(Path, string:rchr(Path, $/)+1)
     end;
+
+file_prop(name, File) ->
+    case mod(File) of
+        [ModuleNode] ->
+            ?Mod:name(ModuleNode);
+        [] ->
+            Path = ?File:path(File),
+            Pos1 = string:rchr(Path, $/),
+            Pos2 = string:rchr(Path, $.),
+            Name = string:substr(Path, Pos1+1, Pos2-Pos1-1),
+            list_to_atom(Name)
+    end;
+
 file_prop(Prop, File) ->
     case file(File) of
         [] -> io_lib:write_atom(?Mod:name(File));
@@ -1053,19 +1074,6 @@ file_prop(Prop, File) ->
                 dir -> string:substr(Path, 1, string:rstr(Path, "/"))
             end
     end.
-
-%% file_prop(Prop, File) ->
-%%     case ?Syn:node_type(File) of
-%%         module ->
-%%             io_lib:write_atom(?Mod:name(File));
-%%         file ->
-%%             Path = ?File:path(File),
-%%             case Prop of
-%%                 path -> Path;
-%%                 name -> string:substr(Path, string:rstr(Path, "/")+1);
-%%                 dir -> string:substr(Path, 1, string:rstr(Path, "/"))
-%%             end
-%%     end.
 
 
 mod(Node) ->
@@ -1133,9 +1141,29 @@ file_metrics(Name, File, true) ->
         [] -> 0;
         _  -> file_metrics(Name, File, false)
     end.
-
+           
 fun_metrics(Name, Fun) ->
     case ?Query:exec(Fun, ?Fun:definition()) of
-        []       -> 0;
-        [_FunDef] -> ?Metrics:metric({Name, function, Fun})
+        [] -> 
+            case Name of
+                is_tail_recursive -> 
+                    unknown;
+                _ -> 
+                    0
+            end;
+        [_FunDef] -> 
+            Result = ?Metrics:metric({Name, function, Fun}),
+            case Name of
+                is_tail_recursive ->
+                    int_to_atom(Result);
+                _ ->
+                    Result
+            end
+    end. 
+
+int_to_atom(Int) ->
+    case Int of
+        -1 -> non_rec;
+        0 -> non_tail_rec;
+        1 -> tail_rec
     end.

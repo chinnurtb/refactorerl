@@ -26,12 +26,14 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_distfun).
--vsn("$Rev: 5049 $").
+-vsn("$Rev: 5569 $").
 
 -include("cluster.hrl").
 
 %% =============================================================================
 %% Exports
+
+-compile({no_auto_import, [min/2, max/2]}).
 
 -export([euclidian/4, jaccard/4, sorensen_dice/4, sorensen_dice2/4,
          ochiai/4, correlation/4, call_sum/4, call_cnt/4,
@@ -322,7 +324,7 @@ call_fun_cnt(Fun1, Attr1, Fun2, Attr2) ->
     lexgr_dist([min(Call12, Call21), SameRec, Call12 + Call21]). %, Similar]).
 
 %% @spec call_fun_wgt(float()) -> dist_fun()
-%% @doc Generate a distance function from the given Weight with the 
+%% @doc Generate a distance function from the given Weight with the
 %%      result of `pow_size_fun_gen(Weight)'
 call_fun_wgt(Weight) ->
     SizeFun = pow_size_fun_gen(Weight),
@@ -333,9 +335,9 @@ call_fun_wgt(Weight) ->
     end.
 
 
-%% @spec generate_antigravity(DistFun::dist_fun(), AntigravityFun::size_fun()) 
+%% @spec generate_antigravity(DistFun::dist_fun(), AntigravityFun::size_fun())
 %%           -> NewDistFun::dist_fun()
-%% @doc  Generate a distance function from `DistFun' with the `AntigravityFun' 
+%% @doc  Generate a distance function from `DistFun' with the `AntigravityFun'
 %%       as antigravity factor.
 generate_antigravity(DistFun, SizeFun) ->
     fun(Fun1, Attr1, Fun2, Attr2) ->
@@ -353,7 +355,7 @@ generate_fun_common_refs(Weight) ->
     generate_antigravity(fun fun_common_refs/4, pow_size_fun_gen(Weight)).
 
 
-%% @spec fun_common_refs(_Fun1::entity(), Attr1::attrLst(), 
+%% @spec fun_common_refs(_Fun1::entity(), Attr1::attrLst(),
 %%                       _Fun2::entity(), Attr2::attrLst()) -> Distance::float()
 %% @doc  Distance of two group/cluster from a clasterings. `Fun1' and `Fun2' are
 %%       identifiers of clusters. `Attr1' and `Attr2' are rows from attribute
@@ -374,44 +376,44 @@ fun_common_refs(_Fun1, Attr1, _Fun2, Attr2) ->
     %CommonFunCnt = [min(W,get_value(F,Attr2,0))||{F=#fun_attr{},W}<-Attr1,W>0],
     % Number of common used macros
     % ---
-    % Calc distance with the following priority: 
+    % Calc distance with the following priority:
     lexgr_dist([min(Call1from2,Call2from1), CommonRecCnt, Call1from2+Call2from1,
                 CommonFunCnt]).
 
 
-%% @spec count_objects_refs(Objects::[Object], 
+%% @spec count_objects_refs(Objects::[Object],
 %%               RefList::[{Object, UsageCount::integer()}]) ->
 %%           TotalUsageCount::integer()
 %%       Object = term()
-%% @doc  Count usages of the `Objects' in `RefList'. Wrapper function to 
+%% @doc  Count usages of the `Objects' in `RefList'. Wrapper function to
 %%       {@link count_objects_refs/3} with `fun(A,B) -> A+B end' as `AddFun'.
 %% @see  count_objects_refs/3
 count_objects_refs(Objects, RefList) ->
     count_objects_refs(Objects, RefList, fun(A, B) -> A+B end).
 
-%% @spec count_objects_refs1(Objects::[Object], 
+%% @spec count_objects_refs1(Objects::[Object],
 %%               RefList::[{Object, UsageCount::integer()}]) ->
 %%           DiffObjUsageCount::integer()
 %%       Object = term()
-%% @doc  Count how many different objects from `Objects' are used in 
-%%       `RefList'. Wrapper function to {@link count_objects_refs/3} with 
-%%       `fun(A,0)->A; (A,B) when B<0 -> A-1; (A,B)->A+1 end' as `AddFun'. 
-%%       The number of usage of an object is irrelevant. Every object usage 
+%% @doc  Count how many different objects from `Objects' are used in
+%%       `RefList'. Wrapper function to {@link count_objects_refs/3} with
+%%       `fun(A,0)->A; (A,B) when B<0 -> A-1; (A,B)->A+1 end' as `AddFun'.
+%%       The number of usage of an object is irrelevant. Every object usage
 %%       counted as one usage.
 %% @see  count_objects_refs/3
 count_objects_refs1(Objects, RefList) ->
-    count_objects_refs(Objects, RefList, 
+    count_objects_refs(Objects, RefList,
                        fun(A,0)->A; (A,B) when B<0 -> A-1; (A,_B)->A+1 end).
 
-%% @spec count_objects_refs(Objects::[Object], 
+%% @spec count_objects_refs(Objects::[Object],
 %%               RefList::[{Object, UsageCount::integer()}], AddFun) ->
 %%           TotalUsageCount::integer()
 %%       Object = term()
 %%       AddFun = ((OpLeft::integer(), OpRight::integer()) -> integer())
-%% @doc  Count usages of the `Objects' in `RefList'. `Object' contain several 
-%%       object. The elements in `RefList' describe an how many times an object 
-%%       is used. 
-%%       The `AddFun' summation two integer. If the number of usage is 
+%% @doc  Count usages of the `Objects' in `RefList'. `Object' contain several
+%%       object. The elements in `RefList' describe an how many times an object
+%%       is used.
+%%       The `AddFun' summation two integer. If the number of usage is
 %%       irrelevant than you can use the `fun(A,_) -> A+1 end' function to count
 %%       how many object are used from the `Object'.
 count_objects_refs(Objects, RefList, AddFun) ->
@@ -419,7 +421,7 @@ count_objects_refs(Objects, RefList, AddFun) ->
         fun(Object, Count) -> AddFun(Count, get_value(Object, RefList, 0)) end,
         0, Objects).
 
-%% @private    
+%% @private
 used_records(Attr) ->
     lists:usort([R || {R=#rec_attr{}, W} <- Attr, W>0]).
 

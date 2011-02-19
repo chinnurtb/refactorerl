@@ -24,7 +24,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(refcore_fileman).
--vsn("$Rev: 5134 $"). % for emacs"
+-vsn("$Rev: 5622 $"). % for emacs"
 
 %% Client interface
 -export([add_file/1, add_file/2, drop_file/1, drop_file/2, save_file/1]).
@@ -103,6 +103,7 @@ add_file(Path, Opts) ->
     Update = proplists:get_value(update, Opts, false),
     Progress = proplists:get_value(progress, Opts, none),
     ?Call({add_file, Path, Update, Progress}).
+
 
 %% @spec add_form(node(), integer() | last, [node()]) -> ok
 %%
@@ -197,8 +198,14 @@ terminate(_, _) ->
 code_change(_, S, _) ->
     {ok, S}.
 
-handle({add_file, Path, Update, Progress}) ->
-    handle_add_file(Path, Update, Progress);
+handle({add_file, Info, Update, Progress}) ->
+    Info2 =
+        case Info of
+            {New, Path} when is_list(Path) -> {New, ?MISC:canonical_filename(Path)};
+            Path  when is_list(Path)       -> ?MISC:canonical_filename(Path);
+            _                              -> Info
+        end,
+    handle_add_file(Info2, Update, Progress);
 handle({add_form, File, Index, Tokens}) ->
     handle_add_form(File, Index, Tokens);
 handle({drop_form, File, Form}) ->
@@ -236,16 +243,12 @@ handle_add_file({New, File}, Update, Progress) ->
             add_new_file(File, Progress)
     end;
 handle_add_file(Path, Update, Progress) ->
-    case ?Graph:path(?Graph:root(), [{file, {path, '==', Path}}]) of
-        [File] ->
-            case Update of
-                true  -> disk_update(File, Progress);
-                false -> {file, File};
-                graph -> graph_update(File, Progress) % Internal use only
-            end;
-        [] ->
-            add_new_file(Path, Progress)
-    end.
+    Info =
+        case ?Graph:path(?Graph:root(), [{file, {path, '==', Path}}]) of
+            [File] -> {none, File};
+            []     -> {new, Path}
+        end,
+    handle_add_file(Info, Update, Progress).
 
 handle_add_form(File, Index, Tokens) ->
     {Forms, Actions} = hold_prefix(File, Index, [{ins, input_tokens(Tokens)}]),
@@ -282,8 +285,9 @@ handle_save_file(File) ->
         {ok, Dev} ->
             Text =
                 [begin
-                     FormText = ?Syn:tree_text(Form),
+                     FormText = ?Syn:flat_text(Form),
                      set_form_hash(Form, form_hash(FormText)),
+                     set_form_length_int(Form, length(FormText), linecol(FormText)),
                      FormText
                  end || Form <- real_forms(File)],
             io:put_chars(Dev, orig_text(Eol, Text)),
@@ -336,24 +340,15 @@ convert_backup_str(BStr) ->
 %%                                          {file, node()}|{error, string()}
 %% @doc Adds file from `Path' into the graph, assuming that it is not in the
 %% graph yet.
-add_new_file(Path, Progress) when is_list(Path) ->
+add_new_file(Info, Progress) ->
     try
-        {Text, EOL} = file_text(Path),
-        File = create_file_node(Path, EOL),
-        %%?Graph:update(File, (?Graph:data(File))#file{eol=EOL}),
-        update(File, [],
-               [{ins, store_tokens(F)} || F <- tokenize(Text)],
-               Progress),
-        ?ESG:finalize(),
-        file_status(File)
-    catch
-        {error, Error} ->
-            {error, Error}
-    end;
-add_new_file(File, Progress) ->
-    try
-        {Text, EOL} = file_text((?Graph:data(File))#file.path),
-        %%File = create_file_node(Path, EOL),
+        case Info of
+            Path when is_list(Path) ->
+                {Text, EOL} = file_text(Path),
+                File = create_file_node(Path, EOL);
+            File ->
+                {Text, EOL} = file_text((?Graph:data(File))#file.path)
+        end,
         ?Graph:update(File, (?Graph:data(File))#file{eol=EOL}),
         update(File, [],
                [{ins, store_tokens(F)} || F <- tokenize(Text)],
@@ -419,9 +414,50 @@ file_status(File) ->
 %% should be done.
 
 update(File, _Forms, Actions, Progress) ->
+    ALs = [action_length(Action) || Action <- Actions],
+    {Lengths, TotalLength} = lists:mapfoldl(fun(X, S) -> {X + S, X + S} end, 0, ALs),
     #file{type=FileType, path=Path} = ?Graph:data(File),
+    Now = os:timestamp(),
     update(Actions, 1, start, File, FileType,
-           progress_start(Progress, Path, act_count(Actions))).
+           progress_start(Progress, Now, Path, Lengths, TotalLength, act_count(Actions))).
+
+action_length({ins, {_, [{    #token{type='-'}},
+                         {    #token{type=atom,text="include"}},
+                         {    #token{type='('}},
+                         {Inc=#token{type=string}},
+                         {    #token{type=')'}},
+                         {    #token{type=stop}}]}}) ->
+    IncludeFile = ?Token:get_value(Inc),
+    incfile_length(IncludeFile);
+action_length({ins, {_, Tokens}}) ->
+    lists:sum([length(Text) || {#token{text=Text}, _} <- Tokens]);
+action_length(_) ->
+    0.
+
+incfile_length(IncFile) ->
+    {ok, Contents} = epp_dodger:parse_file(IncFile),
+    SubLens = [incfile_length(SubInc)
+                || {tree,attribute,
+                    {attr,_,[],none},
+                    {attribute,{atom,_,include},[{string,_,SubInc}]}} <- Contents
+                    % not file_is_loaded(SubInc)
+                    ],
+    file_length(IncFile) + lists:sum(SubLens).
+
+file_length(FileName) ->
+    case filelib:is_file(FileName) of
+        false ->
+            0;
+        true ->
+            {ok, Binary} = file:read_file(FileName),
+            binary_length(Binary)
+    end.
+
+binary_length(Binary) ->
+    binary_length(Binary, 0).
+
+binary_length(<<>>, N) -> N;
+binary_length(<<_, Rest/binary>>, N) -> binary_length(<<Rest>>, N + 1).
 
 act_count(Actions)              -> act_count(Actions, 0).
 act_count([{ins, _} | Tail], N) -> act_count(Tail, N+1);
@@ -441,7 +477,7 @@ update([{del, Form} | ATail], Index, PSt, File, FT, P) ->
 update([{ins, {Hash, Input}} | ATail], Index, PSt, File, FT, P) ->
     {NewForms, PSt1} = ?PreProc:preprocess(Input, File, PSt),
     NewFormIdxs = ?MISC:index_list(NewForms, Index),
-    [add_form_at(FT, File, Hash, Index0, ProcessedTokens)
+    [add_form_at(FT, File, Hash, Index0, ProcessedTokens, Input)
         || {ProcessedTokens, Index0} <- NewFormIdxs],
     update(ATail, Index + length(NewForms), PSt1, File, FT, progress_step(P));
 update([], _Index, _PSt, _File, _FT, _P) ->
@@ -449,9 +485,10 @@ update([], _Index, _PSt, _File, _FT, _P) ->
     ok.
 
 %% Parses and adds the form at `Index' to the file.
-add_form_at(FT, File, Hash, Index, ProcessedTokens) ->
+add_form_at(FT, File, Hash, Index, ProcessedTokens, Input) ->
     Form = parse_form(FT, ProcessedTokens),
     set_form_hash(Form, Hash),
+    set_form_length(Form, ProcessedTokens, Input),
     ?ESG:insert(File, {form, Index}, Form).
 
 dep_forms(Form) ->
@@ -562,6 +599,47 @@ form_hash(Tokens = [#token{}|_]) ->
 form_hash(Text) ->
     erlang:phash2(lists:flatten(Text)).
 
+set_form_length_int(Form, Length, LineCol) ->
+    ?Graph:update(Form, (?ESG:data(Form))#form{length=Length, linecol=LineCol}).
+
+set_form_length(_Form, {vtokens, _, _, _}, _Input) ->
+    ok;
+set_form_length(Form, _, Input) ->
+    Length = lists:sum([token_length(Token) || {Token, _} <- Input]),
+    set_form_length_int(Form, Length, linecol(Input)).
+
+linecol(Text) when is_list(Text) ->
+    {newline_count(Text), last_line_length(Text)};
+linecol(Input) ->
+    RevTokens = lists:reverse(Input),
+    {NoNLs, NLs = [NL|_]} = lists:splitwith(fun(T) -> not has_newline(T) end, RevTokens),
+    LineCnt = lists:sum([newline_count(Token) || {Token, _} <- NLs]),
+    LastLineLen = last_line_length(tokens_to_text(NoNLs ++ [NL])),
+    LastLineLen = length(lists:takewhile(fun(Ch) -> Ch /= $\n end, tokens_to_text(NoNLs ++ [NL]))),
+    {LineCnt, LastLineLen}.
+
+tokens_to_text(Tokens) ->
+    [token_to_text(Token) || Token <- Tokens].
+
+token_to_text({_, #token{prews=Pre, text=Text, postws=Post}}) ->
+    Pre ++ Text ++ Post.
+
+last_line_length(Text) ->
+    length(lists:takewhile(fun(Ch) -> Ch /= $\n end, Text)).
+
+newline_count(Text) when is_list(Text) ->
+    lists:sum([1 || Ch <- Text, Ch == $\n]);
+newline_count(#token{prews=Pre, text=Text, postws=Post}) ->
+    newline_count(Pre) ++ newline_count(Text) ++ newline_count(Post).
+
+has_newline(Text) when is_list(Text) ->
+    lists:member($\n, Text);
+has_newline(#token{prews=Pre, text=Text, postws=Post}) ->
+    has_newline(Pre) orelse has_newline(Text) orelse has_newline(Post).
+
+
+token_length(#token{prews=Pre, text=Text, postws=Post}) ->
+    length(Pre) + length(Text) + length(Post).
 
 set_form_hash(Form, Hash) ->
     case ?ESG:data(Form) of
@@ -810,17 +888,31 @@ parse(Tokens) ->
 %%% ============================================================================
 %%% Progress reporter
 
--record(progress, {op, file, count, max}).
+-record(progress, {op, starttime, file, max, lengths, count=1, totallen}).
 
-progress_start(Op, Path, Max) ->
-    #progress{op=Op, file=Path, count=0, max=Max}.
+progress_start(Op, Now, Path, Lengths, TotalLength, Max) ->
+    #progress{op=Op, starttime = Now, file=Path, lengths=Lengths, totallen=TotalLength, max=Max}.
 
 progress_step(Progress) -> progress_step(Progress, 1).
 
-progress_step(Progress=#progress{op=Op, file=File, count=Count, max=Max}, N)
-  when is_function(Op, 3) ->
-    C = Count+N,
-    Op(File, C, Max),
-    Progress#progress{count=C};
+progress_step(Progress=#progress{op=Op, starttime=Start, count=Count, file=File, lengths=[Length|RestLs], totallen=TLen, max=Max}, N)
+  when is_function(Op, 5) ->
+    KBps =
+        case sec_diff(Start, os:timestamp()) of
+            0   -> 0;
+            Sec -> Length / 1024 / Sec
+        end,
+    Percent =
+        case {Max, TLen} of
+            {0, _} -> 1;
+            {_, 0} -> 1;
+            _      -> Length / TLen
+        end,
+    Op(File, Percent, Count, Max, KBps),
+    Progress#progress{lengths=RestLs, count=Count+N};
 progress_step(Progress=#progress{op=none}, _) ->
     Progress.
+
+%% todo Move to ?MISC.
+sec_diff({MgS1, S1, MiS1}, {MgS2, S2, MiS2}) ->
+    (MgS2 - MgS1) * 1000000 + S2 - S1 + (MiS2 - MiS1) / 1000000.

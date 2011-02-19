@@ -115,7 +115,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(reflib_transform).
--vsn("$Rev: 5455 $").
+-vsn("$Rev: 5594 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
@@ -172,8 +172,6 @@ error_text(exit, [Reason]) ->
     ["Transform exited: ", io_lib:print(Reason)];
 error_text(error, [Error]) ->
     ["Transform internal error: ", io_lib:print(Error)];
-error_text(exception, [Error]) ->
-    ["Transform internal error exception (", io_lib:print(Error), ")"];
 error_text(running, []) ->
     ["A transform or query is already running.",
      " Close all interaction dialogs and try again later."];
@@ -571,13 +569,14 @@ do_transform(_MCB, Mod, Args) ->
         throw:Error ->
             gen_server:cast(?TRANSFORM_SERVER, {finish, self(), {abort,Error}});
         error:Error ->
-            gen_server:cast(?TRANSFORM_SERVER, {finish, self(), {error,Error}}),
+            Trace = erlang:get_stacktrace(),
+            gen_server:cast(?TRANSFORM_SERVER, {finish, self(), {error,{Error, Trace}}}),
             error_logger:error_msg(
               "** A runtime error occurred in ~p~n"
               "** Arguments: ~p~n"
               "** Reason: ~p~n"
               "** Stack:~n     ~p~n",
-              [Mod, Args, Error, erlang:get_stacktrace()])
+              [Mod, Args, Error, Trace])
     end.
 
 run(Transform) ->

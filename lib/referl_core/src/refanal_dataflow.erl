@@ -27,7 +27,7 @@
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
 
--export([reach/2]).
+-export([reach/2, reach/3]).
 
 -export([back_nodes/1, forw_tags/0, back_tags/0]).
 
@@ -618,15 +618,21 @@ safe_link(Dir, Elem1, Link, Elem2) ->
 %%  <dd>Expressions in the result set cannot return values independent of the
 %%      source set.</dd>
 %% </dl>
-
 reach(From, Opts) ->
+    reach(From, Opts, false).
+
+%% @spec reach([node()], [Opt], bool()) -> [node()]
+%%       Opt = back | {back, bool()} |
+%%             safe | {safe, bool()}
+reach(From, Opts, Compact) ->
     Dir =
         case proplists:get_value(back, Opts, false) of
             true  -> back;
             false -> forw
         end,
     Init = set_addl(From, set_new()),
-    Reach = walk1(fun(Node, Set) -> flow_step(Node, Dir, Set) end, Init, Init),
+    {Reach, EReach} = walk3(fun(Node, Set) -> flow_step(Node, Dir, Set) end, 
+                             Init, Init, set_new()),
     Result = 
         case proplists:get_value(safe, Opts, false) of
             false ->
@@ -640,7 +646,10 @@ reach(From, Opts) ->
               ?Syn:class(Node) == expr andalso 
               reflib_expression:role(Node) =/= undefined 
           end,
-    lists:filter(Fun, Result).
+    case Compact of
+        true  -> lists:filter(Fun, EReach);
+        false -> lists:filter(Fun, Result)
+    end.
 
 is_strict(Node, Reach, Dir) ->
     lists:all(fun not_dep/1, edges(Node, rev(Dir)))
@@ -672,35 +681,52 @@ safe_step(Node, Safe, Dir) ->
 walk1(NextF, Work, Set) ->
     case set_select(Work) of
         empty ->
-%io:format("empty: ~p~n", [Set]),
             Set;
         {Sel, Rest} ->
             New = [N || N <- NextF(Sel, Set), not set_has(N, Set)],
-%io:format("not empty, New: ~p~n", [New]),
             walk1(NextF, set_addl(New, Rest), set_addl(New, Set))
     end.
 
 walk2(NextF, Work, Set, Orig) ->
     case set_select(Work) of
         empty ->
-%io:format("empty: ~p~n", [Set]),
             Set;
         {Sel, Rest} ->
             New = [N || N <- NextF(Sel, Set), not set_has(N, Set), 
                                               not set_has(N, Orig)],
-%io:format("not empty, New: ~p~n", [New]),
             walk2(NextF, set_addl(New, Rest), set_addl(New, Set), 
                   set_addl(New, Orig))
+    end.
+
+walk3(NextF, Work, Set, EndSet) ->
+    case set_select(Work) of
+        empty ->
+            {Set, EndSet};
+        {Sel, Rest} ->
+            Next = NextF(Sel, Set),
+            New  = [N || N <- Next, not set_has(N, Set)],
+            case Next of
+                [] -> walk3(NextF, set_addl(New, Rest), 
+                            set_addl(New, Set), set_addl([Sel], EndSet));
+                [Fret] ->
+                    case {reflib_expression:role(Fret), NextF(Fret, Set)} of
+                        {undefined, []} ->
+                            walk3(NextF, set_addl(New, Rest), 
+                                  set_addl(New, Set), set_addl([Sel], EndSet));
+                        _ -> walk3(NextF, set_addl(New, Rest), 
+                                   set_addl(New, Set), EndSet)
+                    end;
+                _  -> walk3(NextF, set_addl(New, Rest), 
+                            set_addl(New, Set), EndSet)
+            end
     end.
 
 flow_step(Node, Dir, Set) ->
     lists:flatmap(fun (N) -> flow_step1(N, Dir, Set) end, edges(Node, Dir)).
 
 flow_step1({_, flow, Next}, _, _) ->
-%io:format("flow: ~p~n", [Next]),
     [Next];
 flow_step1({_Orig, {cons, Ind}, Comp}, Dir=forw, Set) ->
-%io:format("cons: ~p~n", [Comp]),
     [Next || Reach <- walk2(fun(Node, NewSet) -> 
                                 flow_step(Node, forw, set_addl(NewSet, Set)) 
                             end, [Comp], [Comp], Set),
@@ -708,7 +734,6 @@ flow_step1({_Orig, {cons, Ind}, Comp}, Dir=forw, Set) ->
              {_, {sel, I}, Next} <- edges(Reach, Dir),
              I =:= Ind];
 flow_step1({_Orig, {sel, Ind}, Comp}, Dir=back, Set) ->
-%io:format("sel: ~p~n", [Comp]),
     [Next || Reach <- walk2(fun(Node, NewSet) -> 
                                 flow_step(Node, back, set_addl(NewSet, Set))
                             end, [Comp], [Comp], Set),
@@ -716,7 +741,6 @@ flow_step1({_Orig, {sel, Ind}, Comp}, Dir=back, Set) ->
              {_, {cons, I}, Next} <- edges(Reach, Dir),
              I =:= Ind];
 flow_step1(_A, _B, _C) ->
-%io:format("A: ~p, B: ~p~n", [A, B]),
     [].
 
 edges(Node, forw) ->

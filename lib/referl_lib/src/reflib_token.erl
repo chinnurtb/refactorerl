@@ -28,7 +28,9 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(reflib_token).
--vsn("$Rev: 5356 $ ").
+-vsn("$Rev: 5622 $ ").
+
+-export([get_value/1]).
 
 %% Properties
 -export([pos/1, pos/2, text/1, data/1, type/1, is_virtual/1]).
@@ -127,7 +129,49 @@ map_pos(File,Tokens)->
 %% Use lists:usort/1 if in doubt.
 %% @spec (#file{},[#token{}],scalar|linecol) ->
 %%  [{#token{},{integer(),integer()}}]
+map_pos(File,Tokens,linecol) ->
+    map_pos_file_or_form(File, Tokens, linecol);
+
 map_pos(File,Tokens,PosType) ->
+    Form2Tokens = ets:new(form2tokens, [bag]),
+    Form2Pos    = ets:new(form2pos, [bag]),
+    put_form_positions(File, Form2Pos),
+    try
+        [ets:insert(Form2Tokens, {f2t, token2form(Token), Token}) || Token <- Tokens],
+        map_pos_form(ets:tab2list(Form2Tokens), Form2Pos, PosType)
+    after
+        ets:delete(Form2Tokens),
+        ets:delete(Form2Pos)
+    end.
+
+put_form_positions(File, Form2Pos) ->
+    Forms = ?Query:exec(File, ?File:forms()),
+    lists:foldl(
+        fun(Form, {Pos, LineCol}) ->
+            ets:insert(Form2Pos, {f2p, Form, Pos}),
+            #form{length=FLen, linecol=FLineCol} = ?ESG:data(Form),
+            {adjust(Pos, FLen, scalar), adjust(LineCol, FLineCol, linecol)}
+        end, {0, {0, 0}}, Forms).
+
+map_pos_form([], _Form2Pos, _PosType) ->
+    [];
+map_pos_form([{f2t, Form, Token}|Rest], Form2Pos, PosType) ->
+    {F2Tokens, Rest2} = lists:splitwith(fun({f2t, F, _}) -> F == Form end, Rest),
+    Tokens = [Token | [T || {f2t, _, T} <- F2Tokens]],
+    [{f2p, Form, FPos}] = ets:match_object(Form2Pos, {f2p, Form, '_'}),
+
+    MappedPos = map_pos_file_or_form(Form, Tokens, PosType),
+    Adjusted = [{T, {adjust(Pos1, FPos, PosType), adjust(Pos2, FPos, PosType)}} || {T, {Pos1, Pos2}} <- MappedPos],
+    Adjusted ++ map_pos_form(Rest2, Form2Pos, PosType).
+
+adjust(Pos, FPos, scalar) ->
+    Pos + FPos;
+adjust({0, Col}, {FLine, FCol}, linecol) ->
+    {FLine, FCol + Col};
+adjust({Line, Col}, {FLine, _FCol}, linecol) ->
+    {Line + FLine, Col}.
+
+map_pos_file_or_form(Form, Tokens, PosType) ->
     TokenSet = sets:from_list(Tokens),
     InitAcc = {length(Tokens),[]},
     {_,Result} =
@@ -147,8 +191,12 @@ map_pos(File,Tokens,PosType) ->
                                    {next,Acc2}
                            end
                    end
-           end, InitAcc, File, none, PosType),
+           end, InitAcc, Form, none, PosType),
     Result.
+
+token2form(Token) ->
+    [{file, _}, {form, Form}|_] = ?Syn:root_path(Token),
+    Form.
 
 
 %% ============================================================================
@@ -331,11 +379,19 @@ ws2mask(both) -> [true, true,true].
 %%% ----------------------------------------------------------------------------
 %%% Token data generation
 
+%% todo Move this to the appropriate place, maybe even another module.
+get_value(#token{type=Type, text=Text}) ->
+    value(Type, ?MISC:strip(Text));
+get_value(#lex{data=Token}) ->
+    get_value(Token);
+get_value(TokenNode) ->
+    get_value(?Graph:data(TokenNode)).
+
 %% @spec build(atom(), string()) -> #token{}
 %% @doc Creates lexical element data. The text of the element is given in
 %% `Text', and it is turned into a token of type `Type'.
 build(Type, Text) ->
-    #token{type=Type, text=Text, value=value(Type, ?MISC:strip(Text))}.
+    #token{type=Type, text=Text}.
 
 
 value(variable, Text) ->

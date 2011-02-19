@@ -106,15 +106,10 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 % @todo :wishlist factor down to smaller modules
-% @todo merge with ui branch features
 % @todo expand the comments at the top to reflect added features
 % @todo generated function and menu help from spec and doc tags
 % @todo support for filename suffixes for add/drop
-% @todo asynchronous handling option
-% @todo :wishlist supplement filelist output with status
 % @todo :wishlist better parameter checking (Name, Pos, ...)!
-% @todo :wishlist remove guards from exported functions
-%       and signal errors verbosely
 % @todo :wishlist verbose commenting with edoc tags
 % @todo :wishlist spec tags
 % @todo :wishlist research alternatives like
@@ -124,7 +119,7 @@
 %
 
 -module(ri).
--vsn("$Rev: 5507 $ ").
+-vsn("$Rev: 5623 $ ").
 
 -export([help/0, h/0, h/1]).
 
@@ -146,7 +141,7 @@
          delenv_h/0]).
 
 -export([elimvar/2,extfun/3, expfun/2, genfun/3,
-         inlfun/2, inlmac/2, intrec/4, intmac/3,
+         inlfun/2, inlmac/2, intrec/4,
          merge/3,  movfun/3, movrec/3, movmac/3,
          reorder/3,renfld/4, renfun/3,
          renhrl/2, renrec/3, renmac/3,
@@ -156,7 +151,7 @@
 -export([lsl/0]).
 
 -export([elimvar_h/0,extfun_h/0, expfun_h/0, genfun_h/0,
-         inlfun_h/0, inlmac_h/0, intrec_h/0, intmac_h/0,
+         inlfun_h/0, inlmac_h/0, intrec_h/0,
          merge_h/0,  movfun_h/0, movrec_h/0, movmac_h/0,
          reorder_h/0,renfld_h/0, renfun_h/0,
          renhrl_h/0, renrec_h/0, renmac_h/0,
@@ -178,6 +173,8 @@
 
 -export([modsave/1, modload/1]).
 
+-export([draw_dep/2, print_dep/2]).
+
 % @private only for internal use!
 -export([global_printer_process/0, get_constrained/3, ui_loop/1]).
 
@@ -197,7 +194,13 @@ ui(NameArgs)->
 ui_loop(ReqID) ->
     receive
         {ReqID, reply, R} ->
-            R;
+            case R of
+                {error, {_Code, Msg}} ->
+                    message("Error: " ++ Msg),
+                    error;
+                _ ->
+                    R
+            end;
 
         {ReqID, progress, {add, File, 1, Max}} ->
             message2(io_lib:format("loading: ~s (~p forms)~n~4w|",
@@ -207,18 +210,11 @@ ui_loop(ReqID) ->
             message2(io_lib:format("dropping: ~s (~p forms)~n~4w|",
                    [File, Max, 1])),
             ?MODULE:ui_loop(ReqID);
-%        {ReqID, progress, {add, File, N, _Max}} when N rem 10 =:= 0 ->
-%            message2(io_lib:format("(~p)", [N div 10])),
-%            ?MODULE:ui_loop(ReqID);
-        {ReqID, progress, {AD, _File, N, _Max}} when (AD==add) orelse (AD==drop) ->
-            case N rem 15 of
-                0 -> message2(io_lib:format("~4w|~n",[N]));
-                _ -> message2(io_lib:format("~4w|",[N]))
-            end,
+        {ReqID, progress, {add, File, Percent, FormCount, FormMax, KBps}} ->
+            print_progress(File, Percent, FormCount, FormMax, KBps),
             ?MODULE:ui_loop(ReqID);
-        {ReqID, AD, [_File|Files]} when (AD==add) orelse (AD==drop) ->
-            message("done|"),
-            [message(" + " ++ File) || File <- Files],
+        {ReqID, progress, {drop, File, _Percent, FormCount, FormMax, KBps}} ->
+            print_progress(File, FormCount/FormMax, FormCount, FormMax, KBps),
             ?MODULE:ui_loop(ReqID);
 
         {ReqID, question, {QID,Questions}} ->
@@ -249,6 +245,32 @@ ui_loop(ReqID) ->
             ?d(Ui_loop),
             ?MODULE:ui_loop(ReqID)
     end.
+
+print_progress(File, Percent, FormCnt, FormMax, KBps) ->
+    PrgMax       = 30,
+    Mark         = $\>,
+    KBpsTxt      = ?MISC:format("~5.2f kB/s", [KBps]),
+    KBpsLen      = length(KBpsTxt),
+    MarkCnt      = round(Percent*PrgMax),
+    PrgWidth     = PrgMax - 1 - KBpsLen,
+    PrgWidthTxt  = integer_to_list(PrgWidth),
+    FormFNameTxt = ?MISC:format("[~4w/~4w] ~s",
+                                [FormCnt, FormMax, filename:basename(File)]),
+    case PrgWidth < MarkCnt of
+        false ->
+            MarkCntTxt = integer_to_list(MarkCnt),
+            io:format("\r|~-" ++ PrgWidthTxt ++ "." ++ MarkCntTxt ++ "c ~s| ~s",
+                      [Mark, KBpsTxt, FormFNameTxt]);
+        true ->
+            MarkCntTxt = integer_to_list(MarkCnt - 1 - KBpsLen),
+            io:format("\r|~s ~-" ++ PrgWidthTxt ++ "." ++ MarkCntTxt ++ "c| ~s",
+                      [KBpsTxt, Mark, FormFNameTxt])
+    end,
+    case Percent == 1 of
+        true  -> io:put_chars("\n");
+        false -> ok
+    end.
+
 
 interactive(Questions)->
     Formats = lists:usort([ hd(?MISC:pgetu([format],Q)) || Q <- Questions ]),
@@ -281,7 +303,7 @@ answer1(ReqID, QID, Answers, _Questions=[Question|Qs]) ->
         case Format of
             textbox ->
                 get_constrained(
-                  " "++Text++": ",
+                  " "++Text++" ",
                   "",
                   fun(X)->{ok, X}end);
             T when T==yesno; T==checkbox -> % TODO: spank interaction developer
@@ -371,7 +393,7 @@ answer_box(ReqID, QID, Questions, Type) ->
                                     end
                             end
                         end || {I, Q} <- NumQ],
-                        A2 = End(A),
+                    A2 = End(A),
                     {ok, A2};
                   false ->
                     {error, incorrect}
@@ -477,14 +499,14 @@ global_printer_process()->
                 [_,[true],_,_]->
                     message("modified "++File);
                 [_,_,[true],_]->
-                    message("added "++File);
+                    ok;
                 [_,_,[false],_]->
                     message("dropped "++File);
                 _->
                     ?d({debug, M})
              end || {File,Prop} <- Changes],
             ?MODULE:global_printer_process();
-        M={global, _, _} ->
+        _M={global, _, _} ->
 %            GlobPrnt = M,
 %            ?d(GlobPrnt),
             ?MODULE:global_printer_process();
@@ -675,48 +697,64 @@ extfun_h() ->
 
 %% @doc Extract function refactoring
 extfun(File, Range, Name)
-  when is_atom(Name) ->
-    transformr(extract_fun, File, Range, [{name, Name}]).
+  when is_atom(Name), (is_atom(File) or is_list(File)),
+        (is_list(Range) or is_tuple(Range)) ->
+    transformr(extract_fun, File, Range, [{name, Name}]);
+extfun(_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()}, atom())"),
+    usage.
 % ri:extfun(mod_or_file,"A+B",f).
 
-intmac_h() ->
-    message("intmac(ModFile,Range_of_body,NewMac)").
-
-%% @doc Introduce macro refactoring
-intmac(File, Range, Name) ->
-    transformr(introduce_macro, File, Range, [{name, Name}]).
-% ri:intmac(mod_or_file,"A+B",m).
 
 merge_h() ->
     message("merge(ModFile,Range_of_expression,NewVar)").
 
 %% @doc Merge common subexpressions refactoring
-merge(File, Range, Varname=[C|_]) when is_integer(C) ->
-    transformr(merge, File, Range, [{varname, Varname}]).
+merge(File, Range, Varname=[C|_]) when is_integer(C),
+        (is_atom(File) or is_list(File)),
+        (is_list(Range) or is_tuple(Range)) ->
+    transformr(merge, File, Range, [{varname, Varname}]);
+merge(_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()}, string())"),
+    usage.
+
 % ri:merge(mod_or_file,"1+2","V").
 
 inlfun_h() ->
     message("inlfun(ModFile,Pos_of_fun_application)").
 
 %% @doc Inline function refactoring
-inlfun(File, Pos) ->
-    transformp(inline_fun, File, Pos, []).
+inlfun(File, Pos) when (is_atom(File) or is_list(File)),
+        (is_list(Pos) or is_tuple(Pos)) ->
+    transformp(inline_fun, File, Pos, []);
+inlfun(_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()})"),
+    usage.
+
 % ri:inlfun(mod_or_file,"f[(]1").
 
 inlmac_h() ->
     message("inlmac(ModFile,Pos_of_macro_use)").
 
 %% @doc Inline macro refactoring
-inlmac(File, Pos) ->
-    transformp(inline_mac, File, Pos, []).
+inlmac(File, Pos) when (is_atom(File) or is_list(File)),
+        (is_list(Pos) or is_tuple(Pos)) ->
+    transformp(inline_mac, File, Pos, []);
+inlmac(_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()})"),
+    usage.
 % ri:inlmac(mod_or_file,"?Mac").
 
 tupfun_h() ->
     message("tupfun(ModFile,Range_of_arguments)").
 
 %% @doc Tuple function arguments refactoring
-tupfun(File, Range) ->
-    transformr(tuple_funpar, File, Range, []).
+tupfun(File, Range) when (is_atom(File) or is_list(File)),
+        (is_list(Range) or is_tuple(Range)) ->
+    transformr(tuple_funpar, File, Range, []);
+tupfun(_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()})"),
+    usage.
 %%@todo :wishlist Begin,End -> name/arity first last
 % ri:tupfun(mod_or_file,"A,B").
 
@@ -730,17 +768,24 @@ reorder_h() ->
 
 %% @doc Reorder function arguments refactoring
 reorder(File, {Fun,Arity}, Order=[I|_])
-  when is_atom(Fun), is_integer(Arity), is_integer(I) ->
+  when (is_atom(File) or is_list(File)), is_atom(Fun), is_integer(Arity), is_integer(I) ->
     transform_catch(reorder_funpar, File,
-              [{function, Fun}, {arity, Arity}, {order, Order}]).
+              [{function, Fun}, {arity, Arity}, {order, Order}]);
+reorder(_,_,_)->
+    message("::(modfile(), {atom(), natural()}, [positive()])"),
+    usage.
 % ri:reorder(mod_or_file,{f,2},[2,1]).
 
 expfun_h() ->
     message("expfun(ModFile,Pos_of_funexpr)").
 
 %% @doc Expand implicit fun expression refactoring
-expfun(File, Pos) ->
-    transformp(expand_funexpr, File, Pos, []).
+expfun(File, Pos) when (is_atom(File) or is_list(File)),
+        (is_list(Pos) or is_tuple(Pos)) ->
+    transformp(expand_funexpr, File, Pos, []);
+expfun(_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()})"),
+    usage.
 % ri:expfun(mod_or_file, "fun g").
 
 movfun_h() ->
@@ -753,47 +798,69 @@ movfun(Source, Target, Fun={A,I})
 % ri:movfun(mod_or_file,b,{f,2}).
 
 %%@todo :wishlist check Funlist
-movfun(Source, Target, Funlist=[{A,I}|_])
-  when is_atom(A), is_integer(I) ->
-    transform2(move_fun, Source, Target, [{funlist, Funlist}]).
+movfun(Source, Target, Funlist=[{A,I}|_]) when
+        (is_atom(Source) or is_list(Source)),
+        (is_atom(Target) or is_list(Target)),
+        is_atom(A), is_integer(I) ->
+    transform2(move_fun, Source, Target, [{funlist, Funlist}]);
+movfun(_,_,_)->
+    message("::(modfile(), modfile(), [{atom(), natural()}])"),
+    usage.
 % ri:movfun(mod_or_file,b,[{f,2},{g,0}]).
 
 movrec_h() ->
     message("movrec(Source,Target,RecordList=[Record|_])").
 
 %% @doc Move record refactoring
-movrec(Source, Target, Rec)
-  when is_atom(Rec) ->
+movrec(Source, Target, Rec) when
+        is_atom(Rec) ->
     movrec(Source, Target, [Rec]);
 % ri:movrec(mod_or_file,b,rec).
 
 %%@todo :wishlist check Reclist
-movrec(Source, Target, Reclist=[A|_])
-  when is_atom(A) ->
-    transform2(move_rec, Source, Target, [{reclist, Reclist}]).
+movrec(Source, Target, Reclist=[A|_]) when
+        (is_atom(Source) or is_list(Source)),
+        (is_atom(Target) or is_list(Target)),
+        is_atom(A) ->
+    transform2(move_rec, Source, Target, [{reclist, Reclist}]);
+movrec(_,_,_)->
+    message("::(modfile(), modfile(), [atom()])"),
+    usage.
 % ri:movrec(mod_or_file,b,[r1,r2]).
 
 movmac_h() ->
     message("movmac(Source,Target,MacroList=[Macro|_])").
 
 %% @doc Move macro refactoring
-movmac(Source, Target, Mac=[C|_])
-  when is_integer(C) ->
+movmac(Source, Target, Mac=[C|_]) when
+        is_integer(C) ->
     movmac(Source, Target, [Mac]);
 % ri:movmac(mod_or_file,b,"Mac").
 
 %%@todo :wishlist check Maclist
-movmac(Source, Target, Maclist=[[C|_]|_])
-  when is_integer(C) ->
-    transform2(move_mac, Source, Target, [{maclist, Maclist}]).
+movmac(Source, Target, Maclist=[[C|_]|_]) when
+        (is_atom(Source) or is_list(Source)),
+        (is_atom(Target) or is_list(Target)),
+        is_integer(C) ->
+    transform2(move_mac, Source, Target, [{maclist, Maclist}]);
+movmac(_,_,_)->
+    message("::(modfile(), modfile(), [string()])"),
+    usage.
 % ri:movmac(mod_or_file,b,["Mac1","Mac2"]).
 
 genfun_h() ->
     message("genfun(ModFile,Range_of_body,NewVar)").
 
 %% @doc Generalize function by new argument refactoring
-genfun(File, Range, Newname) ->
-    transformr(gen, File, Range, [{varname, Newname}]).
+genfun(File, Range, Newname=[C|_]) when
+        (is_atom(File) or is_list(File)),
+        (is_list(Range) or is_tuple(Range)),
+        is_integer(C) ->
+    transformr(gen, File, Range, [{varname, Newname}]);
+genfun(_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()}, string())"),
+    usage.
+
 % ri:genfun(mod_or_file, "[+]\\(2", "Two").
 
 %%Not recommended
@@ -804,61 +871,104 @@ renfun_h() ->
     message("renfun(ModFile,{FunctionName,Arity},NewFun)").
 
 %% @doc Rename function refactoring
-renfun(File, {Fun,Arity}, Newname)
-      when is_atom(Fun), is_integer(Arity), is_atom(Newname) ->
+renfun(File, {Fun,Arity}, Newname) when
+        (is_atom(File) or is_list(File)),
+        is_atom(Fun), is_integer(Arity), is_atom(Newname) ->
     transform_catch(rename_fun, File,
-              [{function, Fun}, {arity, Arity}, {name, Newname}]).
+              [{function, Fun}, {arity, Arity}, {name, Newname}]);
+renfun(_,_,_)->
+    message("::(modfile(), {atom(), natural()}, atom())"),
+    usage.
+
 % ri:renfun(mod_or_file,{f,2},new).
 
 renvar_h() ->
     message("revar(ModFile,Pos_of_variable,NewVar)").
 
 %% @doc Rename variable refactoring
-renvar(File, Pos, Newname=[_|_]) ->
-    transformp(rename_var, File, Pos, [{varname, Newname}]).
+renvar(File, Pos, Newname=[C|_]) when
+        (is_atom(File) or is_list(File)),
+        (is_list(Pos) or is_tuple(Pos)),
+        is_integer(C) ->
+    transformp(rename_var, File, Pos, [{varname, Newname}]);
+renvar(_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()}, string())"),
+    usage.
+
 % ri:renvar(mod_or_file, "X=", "V").
 
 renmod_h() ->
     message("renmod(OldModFile,NewMod)").
 %% @doc Rename module refactoring
-renmod(File, Newname) when is_atom(Newname) ->
-    transform_catch(rename_mod, File, [{name, Newname}]).
+renmod(File, Newname) when
+        (is_atom(File) or is_list(File)),
+        is_atom(Newname) ->
+    transform_catch(rename_mod, File, [{name, Newname}]);
+renmod(_,_)->
+    message("::(modfile(), atom())"),
+    usage.
+
 % ri:renmod(mod_or_file, newmod).
 
 renhrl_h() ->
     message("renhrl(OldHrl,NewHrl)").
 
 %% @doc Rename header refactoring
-renhrl(File, Newname) ->
-    transform_catch(rename_header, File, [{name, Newname}]).
+renhrl(File, Newname=[C|_]) when
+        (is_atom(File) or is_list(File)), % note: can't be an atom...
+        is_integer(C) ->
+    transform_catch(rename_header, File, [{name, Newname}]);
+renhrl(_,_)->
+    message("::(modfile(), string())"),
+    usage.
+
 % ri:renhrl("a.hrl", "b.hrl").
 
 renrec_h() ->
     message("renrec(ModFile,OldRecord,NewRecord)").
 
 %% @doc Rename record refactoring
-renrec(File,Record,NewName)
-      when is_atom(Record), is_atom(NewName) ->
+renrec(File,Record,NewName) when
+        (is_atom(File) or is_list(File)),
+        is_atom(Record), is_atom(NewName) ->
     transform_catch(rename_rec, File,
-              [{record, Record}, {name, NewName}]).
+              [{record, Record}, {name, NewName}]);
+renrec(_,_,_)->
+    message("::(modfile(), atom(), atom())"),
+    usage.
+
+
 % ri:renrec(mod_or_file,recname,newrecname).
 
 renfld_h() ->
     message("renfld(ModFile,Record,OldField,NewField)").
 
 %% @doc Rename record field refactoring
-renfld(File,Record,Field,NewName)
-      when is_atom(Record), is_atom(Field), is_atom(NewName) ->
+renfld(File,Record,Field,NewName) when
+        (is_atom(File) or is_list(File)),
+        is_atom(Record), is_atom(Field), is_atom(NewName) ->
     transform_catch(rename_recfield, File,
-              [{record,Record}, {recfield,Field}, {name,NewName}]).
+              [{record,Record}, {recfield,Field}, {name,NewName}]);
+renfld(_,_,_,_)->
+    message("::(modfile(), atom(), atom(), atom())"),
+    usage.
+
+
 % ri:renfld(mod_or_file,recname,field1,newfield1).
 
 elimvar_h() ->
     message("elimvar(ModFile,Pos_of_variable)").
 
 %% @doc Eliminate variable by inlining refactoring
-elimvar(File, Pos) ->
-    transformp(elim_var, File, Pos, []).
+elimvar(File, Pos) when
+        (is_atom(File) or is_list(File)),
+        (is_list(Pos) or is_tuple(Pos)) ->
+    transformp(elim_var, File, Pos, []);
+elimvar(_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()})"),
+    usage.
+
+
 % ri:elimvar(mod_or_file,"X=").
 
 %%Not recommended
@@ -870,26 +980,37 @@ intrec_h() ->
 
 %% @doc Introduce record in place of a tuple refactoring
 intrec(File, URange, Newname, AFields=[A|_])
-  when is_atom(A), is_atom(Newname) ->
+  when is_atom(A) ->
     SList = lists:map(fun atom_to_list/1, AFields),
     Fields = string:join(SList," "),
     intrec(File, URange, Newname, Fields);
 % ri:intrec(mod_or_file, "{X,Y}", newrec, [f1, f2]).
 
-intrec(File, Range, Newname, Fields=[C|_])
-  when is_atom(Newname), is_integer(C) ->
+intrec(File, Range, Newname, Fields=[C|_]) when
+        (is_atom(File) or is_list(File)),
+        (is_list(Range) or is_tuple(Range)),
+        is_atom(Newname), is_integer(C) ->
     transformr(introduce_rec, File, Range,
-               [{name,Newname}, {text,Fields}]).
+               [{name,Newname}, {text,Fields}]);
+intrec(_,_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()}, atom(), [atom()])"),
+    usage.
+
+
 % ri:intrec(mod_or_file, "{X,Y}", rec, "f1 f2"]).
 
 renmac_h() ->
     message("renmac(ModFile,OldMacro,NewMacro)").
 
 %% @doc Rename macro refactoring
-renmac(File, Macro, Newname)
-  when (is_atom(Macro) or is_list(Macro)),
-       (is_atom(Newname) or is_list(Newname)) ->
-    transform_catch(rename_mac, File, [{macro,Macro}, {name,Newname}]).
+renmac(File, Macro, Newname) when
+        (is_atom(File) or is_list(File)),
+        (is_atom(Macro) or is_list(Macro)),
+        (is_atom(Newname) or is_list(Newname)) ->
+    transform_catch(rename_mac, File, [{macro,Macro}, {macname,Newname}]);
+renmac(_,_,_)->
+    message("::(modfile(), atom() | string(), atom() | string())"),
+    usage.
 % ri:renmac(mod_or_file,"Macname","NewMecname").
 
 %intimp(File) ->
@@ -918,6 +1039,8 @@ metric_h()->
     message("metric(Query)").
 
 %% @doc Run a metric query
+metric(Query) when is_atom(Query)->
+    metric(atom_to_list(Query));
 metric(Query) when is_list(Query)->
     transform_(metric_query,
                [{querys,Query}],
@@ -925,7 +1048,10 @@ metric(Query) when is_list(Query)->
                    [Result] = ?MISC:pgetu([result],Results),
                    message(Result),
                    ok
-               end).
+               end);
+metric(_)->
+    message("::(atom() | string())"),
+    usage.
 
 cluster_h()->
     message(["cluster()\n"
@@ -958,59 +1084,79 @@ q_h()->
 q(Q) when is_atom(Q)->
     q(atom_to_list(Q));
 q(Q=[C|_]) when is_integer(C)->
-    q_(Q, [], addqnone()).
+    q_(Q, [], addqnone());
+q(_)->
+    message("::(atom() | string())"),
+    usage.
 
 %% @doc Run a semantic query starting from the given file
-q(ModFile,Q) when is_atom(ModFile), is_atom(Q)->
+q(ModFile,Q) when (is_atom(ModFile) or is_list(ModFile)), is_atom(Q)->
     q(ModFile,atom_to_list(Q));
-q(ModFile,Q=[C|_]) when is_atom(ModFile), is_integer(C)->
+q(ModFile,Q=[C|_]) when (is_atom(ModFile) or is_list(ModFile)), is_integer(C)->
     q_(Q,[],addqmod(ModFile));
 
 q(Q, Options=[O|_]) when is_atom(Q), (is_atom(O) orelse is_tuple(O))->
     q(atom_to_list(Q),Options);
 q(Q=[C|_], Options=[O|_]) when is_integer(C), (is_atom(O) orelse is_tuple(O))->
-    q_(Q,Options,addqnone()).
+    q_(Q,Options,addqnone());
+q(_, _)->
+    message("::(modfile() | atom() | string(), atom() | string() | proplist())"),
+    usage.
 
 %% @doc Run a semantic query starting from the given position
 q(ModFile,Pos=[A|_],Q)
-  when is_atom(ModFile), is_integer(A), is_atom(Q)->
+  when (is_atom(ModFile) or is_list(ModFile)), is_integer(A), is_atom(Q)->
     q(ModFile,Pos,atom_to_list(Q));
 q(ModFile,Pos=[A|_],Q=[B|_])
-  when is_atom(ModFile), is_integer(A), is_integer(B)->
+  when (is_atom(ModFile) or is_list(ModFile)), is_integer(A), is_integer(B)->
     q_(Q,[],addqmodpos(ModFile,Pos));
 
 q(ModFile,Q,Options=[O|_])
-  when is_atom(ModFile), is_atom(Q), (is_atom(O) orelse is_tuple(O)) ->
+  when (is_atom(ModFile) or is_list(ModFile)), is_atom(Q), (is_atom(O) orelse is_tuple(O)) ->
     q(ModFile,atom_to_list(Q),Options);
 q(ModFile,Q=[C|_], Options=[O|_])
-  when is_atom(ModFile), is_integer(C), (is_atom(O) orelse is_tuple(O)) ->
-    q_(Q,Options,addqmod(ModFile)).
+  when (is_atom(ModFile) or is_list(ModFile)), is_integer(C), (is_atom(O) orelse is_tuple(O)) ->
+    q_(Q,Options,addqmod(ModFile));
+q(_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()} | atom() | string(), atom() | string() | proplist())"),
+    usage.
 
 %% @doc Run a semantic query starting from the given position with options
-q(ModFile,Pos=[A|_],Q,Options=[O|_])
-  when is_atom(ModFile), is_integer(A), is_atom(Q),
-       (is_atom(O) orelse is_tuple(O)) ->
+q(ModFile,Pos=[A|_],Q,Options=[O|_]) when
+        (is_atom(ModFile) or is_list(ModFile)),
+        is_integer(A), is_atom(Q),
+        (is_atom(O) orelse is_tuple(O)) ->
     q(ModFile,Pos,atom_to_list(Q),Options);
 q(ModFile,Pos=[A|_],Q=[B|_], Options=[O|_])
-  when is_atom(ModFile), is_integer(A), is_integer(B),
+  when (is_atom(ModFile) or is_list(ModFile)), is_integer(A), is_integer(B),
        (is_atom(O) orelse is_tuple(O)) ->
-    q_(Q,Options,addqmodpos(ModFile,Pos)).
+    q_(Q,Options,addqmodpos(ModFile,Pos));
+q(_,_,_,_)->
+    message("::(modfile(), regexp() | {regexp(),index()} |{offset(),offset()}, atom() | string(), proplist())"),
+    usage.
 
 addqnone()->
-    [].
+    fun()->
+        []
+    end.
 
 addqmod(ModFile)->
-    [{file,mod2filec(ModFile)}].
+    fun()->
+        [{file,mod2filec(ModFile)}]
+    end.
 
 addqmodpos(ModFile,Pos)->
-    File = mod2filec(ModFile),
-    [{file,File},
-     {position,to_pos(File,Pos)}].
+    fun()->
+        File = mod2filec(ModFile),
+        [{file,File},
+        {position,to_pos(File,Pos)}]
+    end.
 
-q_(Query=[Ch|_],Options,Start)
-  when is_integer(Ch), is_list(Start) ->
+q_(Query=[Ch|_],Options,StartFun)
+  when is_integer(Ch), is_list(Options), is_function(StartFun,0) ->
     catch_referr(
       fun()->
+              Start = StartFun(),
               DispOpt =
                   [case E of
                        {out,_} ->
@@ -1065,23 +1211,39 @@ cat_h() ->
              "cat(ModFile,FunName,Arity)"]).
 
 %% @doc Display the contents of the given file or module
-cat(ModFile) ->
+cat(ModFile) when
+        (is_atom(ModFile) or is_list(ModFile)) ->
     catch_referr(fun() ->
-        message(?Syn:tree_text(get_filenode(ModFile))) end).
+        message(?Syn:tree_text(get_filenode(ModFile))) end);
+cat(_)->
+    message("::(modfile())"),
+    usage.
 
 %% @doc Display the definition of the given record or macro
-cat(ModFile, {FunName,Arity})->
+cat(ModFile, {FunName,Arity}) when
+        (is_atom(ModFile) or is_list(ModFile)),
+        is_atom(FunName), is_integer(Arity)->
     cat(ModFile, FunName, Arity);
-cat(ModFile, RecMac) ->
+cat(ModFile, RecMac) when
+        (is_atom(ModFile) or is_list(ModFile)),
+        (is_atom(RecMac) or is_list(RecMac)) ->
     catch_referr(fun() ->
         message2(recmactext(ModFile, RecMac))
-    end).
+    end);
+cat(_,_)->
+    message("::(modfile(), {atom(), natural()} | atom() | string())"),
+    usage.
 
 %% @doc Display a function definition
-cat(ModFile, FunName, Arity) ->
+cat(ModFile, FunName, Arity) when
+        (is_atom(ModFile) or is_list(ModFile)),
+        is_atom(FunName), is_integer(Arity)->
     catch_referr(fun() ->
         message2(funtext(ModFile, FunName, Arity))
-    end).
+    end);
+cat(_,_,_)->
+    message("::(modfile(), atom(), natural())"),
+    usage.
 
 %% @private
 recmactext(ModFile,RecMac)->
@@ -1325,10 +1487,11 @@ add(L=[H|_]) when not is_integer(H) ->
 add(X) ->
     catch_referr(
       fun()->
-          add_(X)
+              case add_(X) of
+                  error -> error;
+                  _     -> ok
+              end
       end).
-%  ri:add([a,b]).
-%  ri:add("a.erl").
 
 add_(Mod) when is_atom(Mod) ->
     try
@@ -1350,22 +1513,28 @@ add_(File=[C|_]) when is_integer(C) ->
         false ->
             message("Error: bad file argument given"),
             error
-    end.
+    end;
+add_(_)->
+    message("::(modfile() | [modfile()])"),
+    usage.
 
 add_if_exists(F)->
     filelib:is_regular(F) andalso
         error/=add_(F).
 
-print_files({error,{_,E}}) ->
-    message(E),
+print_files(error) ->
+%print_files({error,{_,E}}) ->
+%    message(E),
     error;
 print_files({ok,Files}) ->
     message(?MISC:any_to_string(Files)). % @todo
 
 %% @private
 add_file(File) ->
-    Added = ui({add_dir,File}),
-    print_files(Added).
+%    Added = ui({add_dir,File}),
+%    print_files(Added).
+    ui({add_dir,File}).
+
 %ri:add([a,b]).
 %ri:add("a.erl").
 
@@ -1380,7 +1549,10 @@ drop(Mod) when is_atom(Mod) ->
         drop(mod2file(Mod,true))
     end);
 drop(File) when is_list(File) ->
-    drop_file(File).
+    drop_file(File);
+drop(_)->
+    message("::(modfile() | [modfile()])"),
+    usage.
 
 %% @private
 drop_file(File) ->
@@ -1423,8 +1595,12 @@ ls() ->
     print_files(Files).
 
 %% @doc Lists includes, records, macros and functions in a file or moule
-ls(ModFile) ->
-    catch_referr(fun() -> ls_(ModFile) end).
+ls(ModFile) when
+        (is_atom(ModFile) or is_list(ModFile))->
+    catch_referr(fun() -> ls_(ModFile) end);
+ls(_)->
+    message("::(modfile())"),
+    usage.
 
 ls_(ModFile) ->
     FN  = get_filenode(ModFile),
@@ -1499,14 +1675,20 @@ svg(Target, Opts) when is_list(Target) ->
     case Res of
         [] -> ok;
         _  -> {error,Res}
-    end.
+    end;
+svg(_, _)->
+    message("::(atom() | string(), proplist())"),
+    usage.
 
 gn_h() ->
     message("gn(TypeAtom,Index)").
 
 %% @doc Prints out data of a graph node (debug)
 gn(TypeAtom,Index) when is_atom(TypeAtom), is_integer(Index) ->
-    message(io_lib:print(?Graph:data({'$gn',TypeAtom,Index}))).
+    message(io_lib:print(?Graph:data({'$gn',TypeAtom,Index})));
+gn(_,_)->
+    message("::(atom(), integer())"),
+    usage.
 
 stop_h()->
     message("stop()").
@@ -1709,7 +1891,7 @@ transform_h()->
 %% @doc transformation helper that catches messages synchronously
 %% exported for debugging purposes
 transform(Refac, Args) when is_atom(Refac), is_list(Args) ->
-    transform_(Refac, Args, fun(_)->result end).
+    transform_(Refac, Args, fun(_)->success end).
 
 %% @doc transformation helper that catches messages synchronously
 transform_(Refac, Args0, Fun) when is_function(Fun,1),
@@ -1928,7 +2110,10 @@ test(Mod) when is_atom(Mod) ->
         [FileName|_] -> reftest_refact:run([{test, [list_to_atom(FileName)]}]);
         []           -> list_files(TestDirFiles);
         FileNames    -> list_files(FileNames)
-    end.
+    end;
+test(_)->
+    message("::(atom() | proplist())"),
+    usage.
 
 %% @doc Runs a specific test case of a transformation.
 %% If the name of the test case is numeric, it can be given as an integer.
@@ -1956,7 +2141,10 @@ test(Mod, Case) when is_atom(Mod), is_atom(Case) ->
             end;
         []         -> list_files(TestDirFiles);
         FileNames  -> list_files(FileNames)
-    end.
+    end;
+test(_,_)->
+    message("::(atom(), atom() | integer())"),
+    usage.
 
 
 %% @doc Lists the files of a directory.
@@ -2100,13 +2288,61 @@ modload(Mod) ->
 
 %% @doc Start yaws with default configuration.
 start_yaws() ->
-    web_helper:start_yaws().
+    catch_referr(fun() -> web_helper:start_yaws() end).
 
 %% @doc Configure and start yaws web server.
 start_yaws(Proplist) ->
-    web_helper:start_yaws(Proplist).
+    catch_referr(fun() -> web_helper:start_yaws(Proplist) end).
 
 %% @doc Stop yaws web server.
 stop_yaws() ->
     web_helper:stop_yaws().
 
+
+%% -----------------------------------------------------------------------------
+
+%% @spec draw_dep(Level, Par) -> any()
+%%           Level = mod | func
+%%           Par =  node() | Name | string()
+%%           Name = Module | Function
+%%           Module = atom()
+%%           Function = string()
+%% @doc Draws out the dependency graph (in either module or function
+%% level) into a dot file. A function can be specified (as
+%% "Module:Function/Arity" or as a graph node) to only look at cycles
+%% touching that fun. `Par' also can be `all' for drawing the whole
+%% graph or `cycles' for only drawing the cycles.
+draw_dep(mod,  Par) -> draw_dep_mod(Par);
+draw_dep(func, Par) -> draw_dep_fun(Par);
+draw_dep(_,      _) -> message("Error: unknown dependency level given.").
+
+%% @spec print_dep(Level, Par) -> any()
+%%           Level = mod | func
+%%           Par =  node() | Name | string()
+%%           Name = Module | Function
+%%           Module = atom()
+%%           Function = string()
+%% @doc Prints out the dependency graph in either module or function
+%% level. A function can be specified (as "Module:Function/Arity" or
+%% as a graph node) to only look at cycles touching that fun. `Par'
+%% also can be `all' for printing the whole graph or `cycles' for only
+%% printing the cycles.
+print_dep(mod,  Par) -> print_dep_mod(Par);
+print_dep(func, Par) -> print_dep_fun(Par);
+print_dep(_,      _) -> message("Error: unknown dependency level given.").
+
+draw_dep_fun("all")    -> refusr_cyclic_fun:draw();
+draw_dep_fun("cycles") -> refusr_cyclic_fun:draw("cycle");
+draw_dep_fun(Node)     -> refusr_cyclic_fun:draw(Node).
+
+draw_dep_mod("all")    -> refusr_cyclic_mod:draw();
+draw_dep_mod("cycles") -> refusr_cyclic_mod:draw("cycle");
+draw_dep_mod(Node)     -> refusr_cyclic_mod:draw(Node).
+
+print_dep_fun("all")    -> refusr_cyclic_fun:check_cycle();
+print_dep_fun("cycles") -> refusr_cyclic_fun:print_cycle();
+print_dep_fun(Node)     -> refusr_cyclic_fun:check_function(Node).
+
+print_dep_mod("all")    -> refusr_cyclic_mod:check_cycle();
+print_dep_mod("cycles") -> refusr_cyclic_mod:print_cycle();
+print_dep_mod(Node)     -> refusr_cyclic_mod:check_module(Node).

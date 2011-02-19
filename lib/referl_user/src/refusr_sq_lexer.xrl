@@ -1,29 +1,46 @@
 Definitions.
 
-WS = [\t\s]
-L  = [a-z]
-U  = [A-Z]
-D  = [0-9]
+Whitespace = [\t\s]
+Lower      = [a-z]
+Upper      = [A-Z]
+Digit      = [0-9]
 
 Rules.
 
-{D}+                    : {token, {int,
-                                   TokenLine,
-                                   list_to_integer(TokenChars)}}.
-({L}|@)({L}|{U}|{D}|_)* : Atom = list_to_atom(TokenChars),
-                          {token, case reserved_word(Atom) of
-                                      true  -> {Atom, TokenLine};
-                                      false -> {atom, TokenLine, Atom}
-                                  end}.
-'[a-zA-Z<>=]*'          : {token, {atom, TokenLine, list_to_atom(erlang:tl(lists:reverse(erlang:tl(TokenChars))))}}.
-\"[^\"]*\"              : String = lists:sublist(TokenChars, 2, TokenLen-2),
-                          {token, {string, TokenLine, String}}.
-[\[\]\.\+\{\}\(\)\:]    : {token, {list_to_atom(TokenChars),
-                                   TokenLine}}.
-(/=|==|\>=|=\<|\<|\>)   : {token, {comparator,
-                                   TokenLine,
-                                   list_to_atom(TokenChars)}}.
-{WS}+                   : skip_token.
+{Digit}+ :
+    {token, {int, TokenLine, list_to_integer(TokenChars)}}.
+
+andalso|\, :
+    {token, {'and', TokenLine}}.
+
+orelse|\; :
+    {token, {'or', TokenLine}}.
+
+({Lower}|@)({Lower}|{Upper}|{Digit}|_|@)* :
+    Atom = list_to_atom(TokenChars),
+    {token, case reserved_word(Atom) of
+                true  -> {Atom, TokenLine};
+                false -> {atom, TokenLine, Atom}
+            end}.
+'[^']*' :
+    Atom = list_to_atom(lists:sublist(TokenChars, 2, TokenLen-2)),
+    {token, case reserved_word(Atom) of
+                true  -> {Atom, TokenLine};
+                false -> {atom, TokenLine, Atom}
+            end}.
+
+\"[^\"]*\" :
+    String = lists:sublist(TokenChars, 2, TokenLen-2),
+    {token, {string, TokenLine, String}}.
+
+[\[\]\.\+\{\}\(\)\:] :
+    {token, {list_to_atom(TokenChars), TokenLine}}.
+
+(/=|==|\>=|=\<|\<|\>) :
+    {token, {comparator, TokenLine, list_to_atom(TokenChars)}}.
+
+{Whitespace}+ :
+    skip_token.
 
 Erlang code.
 

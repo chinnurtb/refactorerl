@@ -58,7 +58,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reftr_rename_mac).
--vsn("$Rev: 5496 $").
+-vsn("$Rev: 5585 $").
 
 %% Callbacks
 -export([prepare/1]).
@@ -132,7 +132,7 @@ replacer_of_macname(Parent, LexWIdx, New) ->
         virtual ->
             replacer_of_macname(NameNode,{orig,1},New);
         _ ->
-            NewNameNodeD = NameNodeD#lex{data=NND#token{value=New,text=New}},
+            NewNameNodeD = NameNodeD#lex{data=NND#token{text=New}},
             case ?Query:exec(NameNode, [{flex,back}]) of
                  []           -> RealParent = Parent;
                  [RealParent] -> ok
@@ -148,4 +148,4 @@ cc_newmacname(NewName, MacNames) ->
     NewName.
 
 cc_error(?RefError(mac_exists,[NewName]), NewName, Macro) ->
-    ?MISC:format("The macro ~p is already used.", [Macro]).
+    ?MISC:format("A macro of name ~p is already present.", [Macro]).

@@ -176,21 +176,21 @@ run(Request, MCB=#msg_cb{})->
     spawn(fun() ->
                   R = exec_req(Request, MCB),
                   case R of
-                    ?NoReply -> ?NoReply;
-                    _ ->
-                        Reply =
-                            case R of
-                                {ok,{abort,E}} ->
-                                    {ok,{abort,{E,?Error:error_text(E)}}};
-                                {ok,_}->
-                                    R;
-                                {error,E} ->
-                                    ?ERR(E);
-                                _ ->
-                                    ?LocalErr(bad_response, [R])
-                            end,
-                        (MCB#msg_cb.unicast)(?T_Reply, Reply)
-                end
+		      ?NoReply -> ?NoReply;
+		      _ ->
+			  Reply =
+			      case R of
+				  {ok,{abort,E}} ->
+				      {ok,{abort,{E,?Error:error_text(E)}}};
+				  {ok,_}->
+				      R;
+				  {error,E} ->
+				      ?ERR(E);
+				  _ ->
+				      ?LocalErr(bad_response, [R])
+			      end,
+			  (MCB#msg_cb.unicast)(?T_Reply, Reply)
+		  end
           end),
     ok.
 
@@ -206,8 +206,10 @@ exec_req(Request, MCB=#msg_cb{}) ->
                     try
                         apply(M, F, Args)
                     catch
-                        error:Error={_,_,_}->
+                        error:Error = {_,_,_} ->
                             {error, Error};
+			throw:Error = {_,_,_} ->
+			    {error, Error};
                         Cl:Error ->
                             {error,?LocalError(exception, [Cl, Error,
                                                   erlang:get_stacktrace()])}

@@ -29,7 +29,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_syntax).
--vsn("$Rev: 5455 $ ").
+-vsn("$Rev: 5585 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -48,7 +48,7 @@
 -export([construct/1, create/2, replace/3, replace/2, copy/1]).
 -export([is_virtual/1]).
 %% Syntax tree manipulation
--export([build/2]).
+-export([build/2, update_lex_with_text/2]).
 %% Graph walk
 -export([walk_graph/4, walk_graph/5]).
 %% Link filtering
@@ -483,6 +483,13 @@ build(Data, Links) ->
         end, lists:flatten(Links)),
     Node.
 
+
+update_lex_with_text(Lex, Text) ->
+    LexData = ?ESG:data(Lex),
+    Token = LexData#lex.data,
+    ?Graph:update(Lex,
+                  LexData#lex{data = Token#token{text = io_lib:write(Text)}}).
+
 %%% ----------------------------------------------------------------------------
 %%% Terse syntactic node creation
 
@@ -848,44 +855,16 @@ collect_tree(Tree, Root) ->
 
 collect_children(Tree, Root) ->
     Data = ?ESG:data(Root),
-    Children = [get_children(Root, Tag) || Tag <- children_tags(Data)],
+    Children = [{Tag, ?ESG:path(Root, [Tag])} || Tag <- children_tags(Data)],
     ets:insert(Tree, {Root, Data, Children}),
     [collect_tree(Tree, Node) || {_, Nodes} <- Children, Node <- Nodes],
     ok.
-
-get_children(Root, Tag) ->
-    case Tag == elex andalso is_module_mac(Root) of
-        true ->
-            Mod = (?ESG:data(Root))#expr.value,
-            Children = [?ESG:create(#lex{type=token,
-                               data=(?Token:build(atom, atom_to_list(Mod)))})];
-        _    ->
-            Nodes = ?ESG:path(Root, [Tag]),
-            Children = [case is_virtual(Node) of
-                true ->
-                    [Token] = ?ESG:path(Node, [orig]),
-                    Token;
-                _   ->
-                    Node
-            end || Node <- Nodes]
-    end,
-    {Tag, Children}.
 
 %% Returns whether the node is a virtual token.
 is_virtual(Node) ->
     ?Graph:class(Node) == lex andalso
     (?ESG:data(Node))#lex.data == virtual andalso
     ?ESG:path(Node, [orig]) =/= [].
-
-is_module_mac(Node) ->
-    Lexes = ?ESG:path(Node, [elex, llex, llex]),
-    if
-        length(Lexes) == 2 ->
-	    [Q, M] = Lexes,
-            ((?ESG:data(Q))#lex.data)#token.type == '?' andalso
-                ((?ESG:data(M))#lex.data)#token.value == "MODULE";
-        true -> false
-    end.
 
 children_tags(#lex{}) -> [llex];
 children_tags(Data) ->
@@ -1208,7 +1187,7 @@ update_attribs(Node, Data, Children, Trf, IsNew) ->
         lists:foldl(
           fun ({{Link, Ind}, Field}, D) ->
                   Token = lists:nth(Ind, [T || {L, T} <- Children, L =:= Link]),
-                  #token{value=Value} = ?Token:data(Token),
+                  Value = ?Token:get_value(Token),
                   setelement(Field, D, Value)
           end,
           Trf(Data),

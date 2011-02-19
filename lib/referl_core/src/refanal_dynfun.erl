@@ -22,7 +22,7 @@
 %%% @author Dániel Horpácsi <daniel_h@inf.elte.hu>
 
 -module(refanal_dynfun).
--vsn("$Rev: 5413 $ ").
+-vsn("$Rev: 5578 $ ").
 -behaviour(refcore_anal).
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
@@ -167,10 +167,11 @@ add_funref(App, Arity, LM, FunInfo) when is_integer(Arity) ->
         L when is_list(L) -> [add_funref(App, Arity, LM, E) || E <- L]
     end.
 
+%% TODO erlang:apply/2
 anal_applycall({erlang, apply, 3}, App, LM) ->
     [_, {esub, ApplyArgs}] = ?Anal:children(App),
     [{esub, ApplyModRef}, {esub, ApplyFunRef}, {esub, ListOfArgs}] = ?Anal:children(ApplyArgs),
-    R =  lookup_atoms(ApplyModRef, ApplyFunRef),
+    R =  lookup_IDs(ApplyModRef, ApplyFunRef),
     Arity = case listcons_length(ListOfArgs) of
                 incalculable -> -1;
                 {I} -> -1*I-1;
@@ -189,15 +190,14 @@ is_atom_expr(Node) -> (?Graph:data(Node))#expr.type == atom.
 is_fun_expr(Node) -> (?Graph:data(Node))#expr.type == implicit_fun.
 atom_value(Node) ->  #expr{type = atom, value = Val} = ?Graph:data(Node), Val.
 
--define(MultRefWarning, ?d("multiple function names recognized")).
+-define(MultRefWarning, ok).
+% -define(MultRefWarning, ?d("multiple function names recognized")).
 
-lookup_funID(N, #expr{type=atom, value=Name}) ->
-    {N, Name};
+lookup_funID(N, #expr{type=atom, value=Name}) -> {N, Name};
 lookup_funID(C, #expr{type=infix_expr, value=':'}) ->
     [{esub, Mod}, {esub, Fun}] = ?Anal:children(C),
-    lookup_atoms(Mod, Fun);
-lookup_funID(N, #expr{}) ->
-    lookup_funexpr_via_dataflow(N);
+    lookup_IDs(Mod, Fun);
+lookup_funID(N, #expr{}) -> lookup_funexpr_via_dataflow(N);
 lookup_funID(_, _) -> {}.
 
 lookup_funexpr_via_dataflow(N) ->
@@ -222,35 +222,31 @@ lookup_funexpr_via_dataflow(N) ->
         case LL of
             [] -> [{}];
             [Node] ->
-                [{dummy, reflib_function:name(Node)}];
+                [{Node, reflib_function:name(Node)}];
             Nodes when is_list(Nodes) ->
                 ?MultRefWarning,
-                [{dummy, reflib_function:name(Node)} || Node <- Nodes]
+                [{Node, reflib_function:name(Node)} || Node <- Nodes]
         end.
 
 
-lookup_atoms(ModRef, FunRef) ->
-    {lookup_atom(ModRef, ?Anal:data(ModRef)),
-     lookup_atom(FunRef, ?Anal:data(FunRef))}.
+lookup_IDs(ModRef, FunRef) -> {lookup_ID(ModRef), lookup_ID(FunRef)}.
 
-lookup_atom(N, #expr{type=atom, value=Name}) ->
-    {N, Name};
-lookup_atom(N, #expr{type=T})
-  when T == variable    ; T == block_expr  ;
-       T == if_expr     ; T == match_expr  ;
-       T == case_expr   ; T == try_expr    ;
-       T == parenthesis ->
-    lookup_atom_via_dataflow(N);
-lookup_atom(_, _) -> {}.
+lookup_ID(Ref) -> lookup_ID(Ref, ?Anal:data(Ref)).
 
-lookup_atom_via_dataflow(N) ->
-    Ns = ?Dataflow:reach([N], [back]),
-    L = [{N2, atom_value(N2)} || N2 <- Ns, N2 /= N,
-                                 ?Graph:class(N2) == expr, is_atom_expr(N2)],
-    case lists:usort(lists:flatten(L)) of
-        [] -> {};
-        [{Node, Atom}] when is_atom(Atom) -> {Node, Atom};
-        [{_Node, Atom} | _] = L when is_atom(Atom) -> ?MultRefWarning, L
+lookup_ID(N, #expr{type=atom, value=Name}) -> {N, Name};
+lookup_ID(N, #expr{})                      -> lookup_ID_via_dataflow(N);
+lookup_ID(_, _)                            -> {}.
+
+lookup_ID_via_dataflow(N) ->
+    Ns = ?Dataflow:reach([N], [back], true),
+    Is_Atom_Expr = fun(M) -> ?Graph:class(M) == expr andalso is_atom_expr(M) end,
+    {Atoms, Rest} = lists:partition(Is_Atom_Expr, Ns),
+
+    length(Atoms) > 1 andalso ?MultRefWarning,
+    case {[{M, atom_value(M)} || M <- Atoms], Rest} of
+        {[], _ } -> {};
+        {L , []} -> L;
+        {L , _ } -> [{}|L]
     end.
 
 %% =============================================================================
@@ -271,17 +267,13 @@ listcons_length(ListExpr, #expr{type=cons}) ->
         [{esub, Head}] ->
             list_length(Head);
         [{esub, Head}, {esub, Tail}] ->
-            case lists:member(Tail, ?Graph:path(ListExpr, [flow])) of 
+            case lists:member(Tail, ?Graph:path(ListExpr, [flow])) of
             %% eliminating infinite loops -- ? should be refined ?
                 true -> sum_lengths(list_length(Head), incalculable);
                 false -> sum_lengths(list_length(Head), listcons_length(Tail))
             end
     end;
-listcons_length(N, #expr{type=T})
-  when T == variable    ; T == block_expr  ;
-       T == if_expr     ; T == match_expr  ;
-       T == case_expr   ; T == try_expr    ;
-       T == parenthesis ->
+listcons_length(N, #expr{}) ->
     Ns = ?Dataflow:reach([N], [back]),
     L = [N2 || N2 <- Ns, N2 /= N,
                ?Graph:class(N2) == expr, is_cons_expr(N2)],

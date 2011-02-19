@@ -81,7 +81,7 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(reftr_reorder_funpar).
--vsn("$Rev: 5508 $ ").
+-vsn("$Rev: 5569 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -113,7 +113,13 @@ prepare(Args) ->
     Arity    = ?Fun:arity(Fun),
 
     ArgsInfo = add_transformation_info(Args, Fun, Arity),
-    NewOrder = ?Args:ask(ArgsInfo, order, fun cc_neworder/2, fun cc_error/3, Arity),
+    NewOrder = 
+        case Arity of
+            2 ->
+                [2, 1];
+            _ ->
+                ?Args:ask(ArgsInfo, order, fun cc_neworder/2, fun cc_error/3, Arity)
+        end,
 
     ImpCalls = ?Query:exec(Fun, ?Fun:implicits()),
     DynFunCalls = ?Dynfun:collect(reord, Fun, NewOrder),

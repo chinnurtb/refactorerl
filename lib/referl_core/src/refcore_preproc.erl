@@ -56,7 +56,10 @@
 %%%      reporting
 
 -module(refcore_preproc).
--vsn("$Rev: 5262 $ ").
+-vsn("$Rev: 5585 $ ").
+
+%% TODO: do not use this header here
+-define(Token, reflib_token).
 
 -export([preprocess/2, preprocess/3, detach/2]).
 
@@ -98,17 +101,19 @@ preprocess(Tokens, File) ->
 preprocess(Tokens, File, start) ->
     preprocess(Tokens, File, [copy]);
 
-preprocess([{#token{type='-'},                T1},
-            {#token{type=atom, value=If},     T2},
-            {#token{type='('},                T3},
-            {#token{type=AtVar, value=Name},  T4},
-            {#token{type=')'},                T5},
-            {#token{type=stop},               T6}], _File, St)
-  when ((If==ifdef) or (If==ifndef)), ((AtVar==atom) or (AtVar==variable)) ->
+preprocess([{      #token{type='-'},                T1},
+            {IfT = #token{type=atom, text=IfTxt},   T2},
+            {      #token{type='('},                T3},
+            {NaT = #token{type=AtVar},              T4},
+            {      #token{type=')'},                T5},
+            {      #token{type=stop},               T6}], _File, St)
+  when ((IfTxt=="ifdef") or (IfTxt=="ifndef")), ((AtVar==atom) or (AtVar==variable)) ->
+    If     = ?Token:get_value(IfT),
+    Name   = ?Token:get_value(NaT),
     TNodes = [T1, T2, T3, T4, T5, T6],
-    Def = ?Graph:path(?Graph:root(),
-                      [{env, {{name, '==', def}, 'and',
-                              {value, '==', macro_name(Name)}}}]),
+    Def    = ?Graph:path(?Graph:root(),
+                         [{env, {{name, '==', def}, 'and',
+                                 {value, '==', macro_name(Name)}}}]),
     {[{form, create_form(lex, If, TNodes)}],
      if
          ((If == ifdef)  and (Def /= [])) or
@@ -120,7 +125,7 @@ preprocess([{#token{type='-'},                T1},
      end};
 
 preprocess([{#token{type='-'},                T1},
-            {#token{type=atom, value=else},   T2},
+            {#token{type=atom, text="else"},  T2},
             {#token{type=stop},               T3}], _File, [StTop|St]) ->
     {[{form, create_form(lex, else, [T1, T2, T3])}],
      case StTop of
@@ -129,7 +134,7 @@ preprocess([{#token{type='-'},                T1},
      end};
 
 preprocess([{#token{type='-'},                T1},
-            {#token{type=atom, value=endif},  T2},
+            {#token{type=atom, text="endif"}, T2},
             {#token{type=stop},               T3}], _File, [_|St]) ->
     {[{form, create_form(lex, endif, [T1, T2, T3])}], St};
 
@@ -148,13 +153,15 @@ preprocess(Form, File, St=[StTop|_]) ->
 %% forms are subject to macro substitution. The ?MODULE macro is created
 %% here when encountering a `-module' attribute. Preprocessor directives are
 %% turned into an analysed form, other forms are returned as token lists.
-form([{#token{type='-'},                        T1},
-      {#token{type=atom,      value=Include},   T2},
-      {#token{type='('},                        T3},
-      {#token{type=string,    value=Filename},  T4},
-      {#token{type=')'},                        T5},
-      {#token{type=stop},                       T6}], File)
-  when Include =:= include; Include =:= include_lib ->
+form([{       #token{type='-'},                        T1},
+      {IncT = #token{type=atom,      text=IncTxt},     T2},
+      {       #token{type='('},                        T3},
+      {FNT  = #token{type=string},                     T4},
+      {       #token{type=')'},                        T5},
+      {       #token{type=stop},                       T6}], File)
+  when IncTxt =:= "include"; IncTxt =:= "include_lib" ->
+    Include = ?Token:get_value(IncT),
+    Filename = ?Token:get_value(FNT),
     TNodes = [T1, T2, T3, T4, T5, T6],
     try
         IncName = find_include(Include, Filename, File),
@@ -164,9 +171,9 @@ form([{#token{type='-'},                        T1},
             [{form, create_form(error, Error, TNodes)}]
     end;
 
-form([{#token{type='-'},                          T1},
-      {#token{type=atom,           value=define}, T2},
-      {#token{type='('},                          T3} | Tail], _File) ->
+form([{#token{type='-'},                 T1},
+      {#token{type=atom, text="define"}, T2},
+      {#token{type='('},                 T3} | Tail], _File) ->
     TNodes = [T1, T2, T3],
     try define(Tail) of
         {Name, Body} ->
@@ -198,8 +205,9 @@ create_form(Type, Tag, Tokens) ->
 
 %% @spec define(formTokens()) -> [node()]
 %% @doc Analyses macro definition, returns the lexical nodes
-define([{#token{type=NameType, value=Name}, T} | Tokens])
+define([{NameT = #token{type=NameType}, T} | Tokens])
   when NameType == atom; NameType == variable ->
+    Name = ?Token:get_value(NameT),
     {macro_name(Name), [T | define(arglist, Tokens, none)]}.
 
 define(arglist, [{#token{type='('}, T1},
@@ -216,7 +224,8 @@ define(arglist, [{#token{type='('},      T} | Tokens], none) ->
 define(arglist, [{#token{type=','},      T} | Tokens], none) ->
     [T | define(body, Tokens, none)];
 
-define(nextarg, [{#token{type=variable}, T} | Tokens], Arg) ->
+define(nextarg, [{#token{type=MacArg}, T} | Tokens], Arg)
+        when MacArg == variable; MacArg == '_' ->
     ?ESG:insert(Arg, llex, T),
     define(argsep, Tokens, Arg);
 
@@ -267,8 +276,9 @@ macro_subst([], _File) ->
 %% @doc Analyses macro substitution. Returns `skip' for not existing macros,
 %% `{done, Result, Rest}' for special macros substituted here, and
 %% `{App, Params, Rest}' for normal macros to be substituted later.
-macro([{#token{type=NameType, value=Name}, N} | Tokens], File, First)
+macro([{NameT = #token{type=NameType}, N} | Tokens], File, First)
   when NameType == atom; NameType == variable ->
+    Name = ?Token:get_value(NameT),
     MacroPath = [{incl, back}, incl, {form, {{type, '==', macro}, 'and',
                                {tag, '==', macro_name(Name)}}}],
     case lists:usort(?Graph:path(File, MacroPath)) of
@@ -295,9 +305,9 @@ macro([{#token{type=NameType, value=Name}, N} | Tokens], File, First)
                     {done,
                      [{if
                            Name == "MODULE" ->
-                               #token{type=atom, value=list_to_atom(ModName)};
+                               #token{type=atom, text=ModName};
                            true ->
-                               #token{type=string, value=ModName}
+                               #token{type=string, text="\"" ++ ModName ++ "\""}
                        end,
                        virtual(none, App)}],
                      Tokens};
@@ -307,12 +317,12 @@ macro([{#token{type=NameType, value=Name}, N} | Tokens], File, First)
             App = macro_app(Name, [First, N]),
             #file{path=Path} = ?Graph:data(File),
             {done,
-             [{#token{type=string, value=Path}, virtual(none, App)}],
+             [{#token{type=string, text="\"" ++ Path ++ "\""}, virtual(none, App)}],
              Tokens};
         [] when Name == "LINE" ->
             App = macro_app(Name, [First, N]),
             {done,
-             [{#token{type=integer, value=42}, virtual(none, App)}],
+             [{#token{type=integer, text=integer_to_list(42)}, virtual(none, App)}],
              Tokens};
         [] ->
             error_logger:warning_msg("Non-local macro ~s in ~s~n",
@@ -397,22 +407,22 @@ substitute(App, Params) ->
     [Def] = ?Graph:path(App, [mref]),
     ArgTokens = [?Graph:data(A) ||
                     A <- ?Graph:path(Def, [{flex, {type, '==', arg}}, llex])],
-    Args = [Var || #lex{data=#token{type=variable, value=Var}} <- ArgTokens],
+    Args = [Var || #lex{data=#token{type=variable, text=Var}} <- ArgTokens],
     Body = ?Graph:path(Def, [{flex, {type, '==', body}}, llex]),
     substitute([{(?Graph:data(N))#lex.data, N} || N <- Body],
                Args, Params, App).
 
 %% @spec substitute(Body::formTokens(), [string()], [formTokens()], node()) ->
 %%          formTokens()
-substitute([{#token{type=variable, value=Arg}, N}|Rest], Args, Params, App) ->
+substitute([{#token{type=variable, text=Arg}, N}|Rest], Args, Params, App) ->
     [{Data, virtual(Node, App)} ||
         {Data, Node} <- subs_arg(Arg, N, Args, Params)] ++
         substitute(Rest, Args, Params, App);
 substitute([{#token{type='?'}, _},
             {#token{type='?'}, _},
-            {#token{type=variable, value=Arg}, N}|Rest], Args, Params, App) ->
+            {#token{type=variable, text=Arg}, N}|Rest], Args, Params, App) ->
     %% Proper text substitution could be implemented here if needed
-    [{#token{type=string, value=Arg}, virtual(N, App)} |
+    [{#token{type=string, text="\"" ++ Arg ++ "\""}, virtual(N, App)} |
      substitute(Rest, Args, Params, App)];
 substitute([{Data, Node} | Rest], Args, Params, App) ->
     [{Data, virtual(Node, App)} | substitute(Rest, Args, Params, App)];
@@ -424,26 +434,12 @@ subs_arg(Name, _, [Name|_], [Value|_]) ->
 subs_arg(Name, Node, [_|Args], [_|Params]) ->
     subs_arg(Name, Node, Args, Params);
 subs_arg(Name, Node, [], _) ->
-    [{#token{type=variable, value=Name}, Node}].
+    [{#token{type=variable, text=Name}, Node}].
 
 
 macro_name(Atom) when is_atom(Atom) -> atom_to_list(Atom);
 macro_name(Str)  when is_list(Str)  -> Str.
 
-%% Returns the canonical name of the file, which does not contain ".."
-%% in the path. Should work for both Unix and Windows (and mixed) style paths.
-canonical_name(Filename) ->
-    case elim_up_dir(elim_up_dir(Filename, "\\\\"), "/") of
-        Filename -> Filename;
-        Shorter  -> canonical_name(Shorter)
-    end.
-
-%% Eliminates a "/dir/../" section from the path.
-%% `Sep' is the path separator, which has to expand to one regexp character.
-elim_up_dir(Filename, Sep) ->
-    re:replace(Filename,
-               "[^" ++ Sep ++ "]+" ++ Sep ++ "[.][.]" ++ Sep ++ "?", "",
-               [{return, list}]).
 
 %% Looks for the first existing include file in the list of include
 %% directories.
@@ -461,7 +457,7 @@ find_include(include, Name, FileNode) ->
             case [Filename ||   Dir      <- [Base | Dirs],
                                 Filename <- [filename:join(Dir, RealName)],
                                 filelib:is_file(Filename)] of
-                [Filename|_] -> canonical_name(Filename);
+                [Filename|_] -> ?MISC:canonical_filename(Filename);
                 []       ->
                     error_logger:warning_msg("Include file not found: ~s~n",
                                              [Name]),
@@ -478,7 +474,7 @@ find_include(include_lib, Name, _) ->
             {BaseName, [$/ | Dir]} =
                 lists:splitwith(fun (Ch) -> Ch /= $/ end, Name),
             case app_files(AppBases, BaseName, Dir) of
-                [Filename|_] -> canonical_name(Filename);
+                [Filename|_] -> ?MISC:canonical_filename(Filename);
                 []           ->
                     error_logger:warning_msg("Include lib not found: ~s~n",
                                              [Name]),
@@ -532,7 +528,8 @@ app_files(AppBases, BaseName, Dir) ->
 %% @spec include(node(), string(), [node()]) -> [processedForm()]
 %% @doc Adds an include file into the graph. Returns the form list that is the
 %% result of including the file.
-include(File, IncName, Tokens) ->
+include(File, NonCanIncName, Tokens) ->
+    IncName = ?MISC:canonical_filename(NonCanIncName),
     FileType = (?Graph:data(File))#file.type,
     case ?Graph:path(?Graph:root(), [{file, {path, '==', IncName}}]) of
         [File2] -> Add = {none, File2};

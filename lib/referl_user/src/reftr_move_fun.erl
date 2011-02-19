@@ -92,7 +92,7 @@
 
 
 -module(reftr_move_fun).
--vsn("$Rev: 5496 $ ").
+-vsn("$Rev: 5618 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -159,7 +159,11 @@ error_text(unincludables, [Conflicts]) ->
 error_text(include_mismatch, [Clash]) ->
     ["Different definitions come from includes in the source and target files",
      " for some records and macros: ",
-     ?MISC:format("(~p)", [Clash])].
+     ?MISC:format("(~p)", [Clash])];
+
+error_text(funobj, [Loc, Name, Arity]) ->
+    ["No such function object found in the given module ",
+     ?MISC:format("~p:~p/~p", [Loc, Name, Arity])].
 
 %% Returns the name of a record or a macro from its node.
 recmac_name(Node) ->
@@ -181,6 +185,10 @@ prepare(Args) ->
     %% Finding the source and the target module
 
     FunObjs = ?Args:functions(Args),
+    FunNameA = [ {FunName, Arity}
+               || FunObj  <- FunObjs,
+                  FunName <- [?Fun:name(FunObj)],
+                  Arity   <- [?Fun:arity(FunObj)]],
     [FromMod] = ?Query:exec(hd(FunObjs), ?Fun:module()),
     ToMod   = exec1(?Mod:find(?Args:name(Args)),
                     ?RefErr0r(target_not_found)),
@@ -194,6 +202,7 @@ prepare(Args) ->
 
     FromFile = exec1(FromMod, ?Mod:file(), ?RefErr0r(source_not_found)),
     ToFile   = exec1(ToMod, ?Mod:file(), ?RefErr0r(target_not_found)),
+    ToModPath = ?File:path(ToFile),
 
     %% Finding function objects and definitions
 
@@ -244,7 +253,12 @@ prepare(Args) ->
     [fun()   -> transform_1(Info)          end,
      fun(ok) -> flatten(transform_2(Info)) end,
      fun(_)  -> [?Dynfun:transform(DCall) || DCall <- DynFunCalls] end,
-     fun(_) -> FunObjs end]. %@todo
+     fun(_) ->
+        [Target] = ?Query:exec(?Query:seq(?File:find(ToModPath), ?File:module())),
+        [ ?Query:exec1(Target, ?Fun:find(F,A),
+                       ?LocalError(funobj, [ToModName, F, A]))
+         || {F,A} <- FunNameA]
+     end].
 
 %%% @private
 prepare_recmac(FunDefs, FromFile, ToFile) ->
@@ -370,7 +384,8 @@ transform_1(I = #info{frommod = FromMod, fromfile = FromFile, tofile = ToFile,
 transform_2(#info{frommod = FromMod, fundefs = FunDefs,
                   fromfile = FromFile, tofile = ToFile}) ->
     ListAdds =
-        [Add#list_add{funobj = exec1(Loc, ?Fun:find(Name, Arity), funobj)}
+        [Add#list_add{funobj = exec1(Loc, ?Fun:find(Name, Arity),
+                                     ?LocalError(funobj, [?Mod:name(Loc), Name, Arity]))}
          || Add <- ets:lookup(?TableName, list_add),
             #list_add{location=Loc, name=Name, arity=Arity} <- [Add]],
 
@@ -536,7 +551,13 @@ correct_module_qualifier(Expr, #info{frommod = FromMod, tomod = ToMod,
             end;
         {_, [FromMod]} ->
             ?Transform:touch(File),
-            ?NOTE(#modq_upd{expr = Expr, module = ToMod});
+            ModSubstT = ?Query:exec(Expr, [{esub, 1}, elex, llex]),
+            FNameSubstT = ?Query:exec(Expr, [{esub, 2}, elex, llex]),
+            case ModSubstT /= [] andalso FNameSubstT /= [] andalso
+                hd(ModSubstT) == hd(FNameSubstT) of
+                true -> ?NOTE(#modq_upd_macro{expr = Expr, module = ToMod});
+                _    -> ?NOTE(#modq_upd{expr = Expr, module = ToMod})
+            end;
         {_, _} ->
             ok
     end.
@@ -710,13 +731,8 @@ handle_modq_macro(add, Expr, Module) ->
     Copy     = ?Syn:copy(FunName),
     {FunName, CFunName} = lists:keyfind(FunName, 1, Copy),
     [CFunVirtTok] = ?Query:exec(CFunName, [{elex, 1}]),
-
-% todo Why does it badmatch on the following, if `moving' is moved?
-%            %  -define(m, moving()).
-%            %  staying() -> ?m.
-%            %  moving()  -> 1.
-%    [CSubstTok]   = ?Query:exec(CFunVirtTok, [{llex, 1}]),
-%    ?Graph:delete(CSubstTok),
+    [CSubstTok]   = ?Query:exec(CFunVirtTok, [{llex, 1}]),
+    ?Graph:delete(CSubstTok),
 
     ?Graph:mklink(CFunVirtTok, orig, Orig),
     ?Graph:mklink(CFunVirtTok, llex, Subst),
@@ -731,9 +747,17 @@ handle_modq_macro(add, Expr, Module) ->
     ?ESG:insert(InfixExpr, {esub, 1}, ModqExpr),
     ?ESG:insert(InfixExpr, {esub, 2}, CFunName),
     ?ESG:remove(Expr, esub, FunName),
-    ?ESG:insert(Expr, {esub, 1}, InfixExpr).
-%handle_modq_macro(upd, Expr, Module) ->
-
+    ?ESG:insert(Expr, {esub, 1}, InfixExpr);
+handle_modq_macro(upd, Expr, Module) ->
+    [Orig] = ?Query:exec(Expr, ?Query:seq([?Expr:child(1), ?Expr:child(1), [elex, orig]])),
+    case ets:lookup(token_info, Orig) of
+        [] ->
+            ets:insert(token_info, #funname_tokinfo{orig=Orig, colon={}, modq={}}),
+            ND=#lex{data=NND} = ?ESG:data(Orig),
+            NewNode           = ND#lex{data=NND#token{text=atom_to_list(Module)}},
+            ?ESG:update(Orig, NewNode);
+        _ -> ok
+    end.
 
 handle_modq_macro(del, Expr) ->
     {Token, Orig} = get_funname_token(Expr),
@@ -745,6 +769,7 @@ handle_modq_macro(del, Expr) ->
     [CFunVirtTok] = ?Query:exec(CFunName, [{elex, 1}]),
     [CSubstTok]   = ?Query:exec(CFunVirtTok, [{llex, 1}]),
     ?Graph:delete(CSubstTok),
+
     ?Graph:mklink(CFunVirtTok, orig, Orig),
     ?Graph:mklink(CFunVirtTok, llex, Subst),
 
@@ -764,7 +789,7 @@ handle_modq_macro(del, Expr) ->
     end,
 
     ?ESG:remove(Expr, esub, Modq),
-    ?ESG:insert(Expr, esub, CFunName),
+    ?ESG:insert(Expr, {esub,1}, CFunName),
     case Delete of
        true ->
             ?Graph:delete(ModqT),

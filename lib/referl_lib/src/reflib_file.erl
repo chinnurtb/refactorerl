@@ -20,7 +20,7 @@
 %%% @doc File properties and file based queries
 
 -module(reflib_file).
--vsn("$Rev: 4960 $ ").
+-vsn("$Rev: 5576 $ ").
 
 %% =============================================================================
 %% Exports
@@ -114,17 +114,31 @@ token(Pos) when Pos > 0 ->
 %% </ul>
 token(Pos, Ws) when Pos > 0 ->
     fun (File) ->
-            ?Token:foldpos(
-               fun (Node, _D, Start, End, _) when Start =< Pos, Pos =< End ->
-                       {stop, [Node]};
-                   (_,_,_,_,Acc) ->
-                       {next, Acc}
-               end, [], File, Ws)
+        Forms          = ?ESG:path(File, [form]),
+        {Form, RemPos} = containing_form(Forms, Pos),
+        ?Token:foldpos(
+            fun (Node, _D, Start, End, _) when Start =< RemPos, RemPos =< End ->
+                    {stop, [Node]};
+                (_,_,_,_,Acc) ->
+                    {next, Acc}
+            end, [], Form, Ws)
+    end.
+
+containing_form([Form|Forms], Pos) ->
+    case ?ESG:data(Form) of
+        #form{hash=virtual} ->
+            containing_form(Forms, Pos);
+        #form{length=Len} when Pos > Len ->
+            containing_form(Forms, Pos - Len);
+        _ ->
+            {Form, Pos}
     end.
 
 %% @spec find(string()) -> query(root(), #file{})
 %% @doc Finds file node by its path.
-find(Path) -> [{file, {path, '==', Path}}].
+find(Path) ->
+    CPath = ?MISC:canonical_filename(Path),
+    [{file, {path, '==', CPath}}].
 
 %% @spec module() -> query(#file{}, #module{})
 %% @doc The result query returns the described erlang module.

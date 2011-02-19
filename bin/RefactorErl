@@ -1,4 +1,6 @@
 #!/usr/bin/env escript
+%%% -*- erlang -*-
+%%! -sname refactorerl_cli
 
 %%% The  contents of this  file are  subject to  the Erlang  Public License,
 %%% Version  1.1, (the  "License");  you may  not  use this  file except  in
@@ -13,169 +15,75 @@
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the  Original Code is EÃ¶tvÃ¶s LorÃ¡nd University.
-%%% Portions created  by EÃ¶tvÃ¶s  LorÃ¡nd University are  Copyright 2009,
-%%% EÃ¶tvÃ¶s LorÃ¡nd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
-
-%%%        RefactorErl CMD interface (prototype 0.0.1)
-%%%        This is not a stable final version!
+%%% RefactorErl command line interface (prototype)
 %%%
-%%%        Configure:
+%%% Setup:
+%%% - Redefine referlpath() and referlnode()
+%%% - chmod +x RefactorErl
+%%% - You may also set up a system-level alias
+%%%   (e.g. alias refactorerl='/pathtorefactorerl/bin/RefactorErl')
 %%%
-%%%        bin/RefactorErl escript 'rwx'
-%%%        bin/starttool shell script 'rwx'
-%%%
-%%%        set the path of the RefactorErl (~/path)
-%%%        into the refpath/0 function (in this module).
-%%%        write into your .bashrc file the following alias:
-%%%        alias refactorerl='/pathtorefactorerl/bin/RefactorErl'
-%%%
-%%%        Usage:
-%%%
-%%%        refactorerl mod fun "params"
-%%%        refactorerl fun "params"
-%%%        refactorerl fun
-%%%
-%%%        refactorerl start | stop | reset
-%%%        refactorerl q "mods.funs[name==f].spec"
-%%%        refactorerl query "show number_of_fun for module ('mod')"
-%%%        refactorerl graph "pathtofile/mod.dot"
-%%%
+%%% Usage:
+%%% - refactorerl fun       -- this calls ri:fun()
+%%% - refactorerl mod fun param1 param2 ... paramN
+%%% Note that terms should be enclosed by double quote marks.
+%%% - refactorerl mod fun "{a1, 2}"
 
-%%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
+referlpath() -> ".".
+referlnode() -> refactorerl@localhost.
 
-%%% UI message callback
- -record(msg_cb,{unicast,broadcast}).
-
-refpath() ->
-   "".
-
-epmdStart()->
-   Pid = spawn(os,cmd,[os:find_executable("epmd")++" -daemon"]),
-   %%TODO: need something instead of sleep/1 to wait until epmd is up!
-   timer:sleep(1000),
-   {ok, Start} = net_kernel:start([shell, shortnames]),
-   %% <- Temporary debug info ->
-   io:format("::epmd is up ~w~n::~w",[Pid, Start]),
-   ok.
-
-main([Fun])->
-   epmdStart(),
-   try
-     Result = rpc_call(to_atom(Fun)),
-     handleResult(Result)
-   catch
-     ErrH:ErrT-> handleResult({error, ErrH, ErrT})
-   end;
-main([Fun, Param])->
-   net_kernel:start([shell, shortnames]),
-   try
-     Result = rpc_call(to_atom(Fun), Param),
-     handleResult(Result)
-   catch
-     ErrH:ErrT-> handleResult({error, ErrH, ErrT})
-   end;
-main([Mod, Fun, Param])->
-   net_kernel:start([shell, shortnames]),
-   try
-     Result = rpc_call(to_atom(Mod),
-                       to_atom(Fun),
-                       Param),
-     handleResult(Result)
-   catch
-     ErrH:ErrT-> handleResult({error, ErrH, ErrT})
-   end;
-main([])-> 
-    handleResult({{format,"~s~n"}, 
-                          "not enough parameters"}).
-
-
-%=============== Remote procedure calls ====================
-
-rpc_call(start) ->
-    case net_adm:ping(refactorerl@localhost) of
-       pong -> {{format, "~s~n"}, "RefactorErl alredy started"};
-          _ -> refactorerl_internal(start)
-    end;
-        
-rpc_call(reset) ->
-    case net_adm:ping(refactorerl@localhost) of
-       pong -> refactorerl_internal(reset);
-       pang -> pang;
-       _-> refactorerl_internal(start)
-    end;
-            
-rpc_call(stop) ->
-     case net_adm:ping(refactorerl@localhost) of
-        pong -> refactorerl_internal(stop);
-           _ -> {{format, "~s~n"}, "not running"}
-    end;
-      
-rpc_call(Fun) ->
-   rpc:call(refactorerl@localhost,ri, Fun, []).
-   
-rpc_call(add, FileName) ->
-   rpc:call(refactorerl@localhost, refcore_fileman, add_file, 
-               [FileName]);
-               
-rpc_call(drop, FileName) ->
-      FileN = rpc:call(refactorerl@localhost, 
-         reflib_file, find, [FileName]),
-      [Node] = rpc:call(refactorerl@localhost, 
-                     reflib_query, exec, [FileN]),
-      rpc:call(refactorerl@localhost, 
-                refcore_fileman, drop, [FileName]),
-      {file, Node};
-      
-rpc_call(Fun, Param) ->
-   rpc:call(refactorerl@localhost, ri, Fun, [Param]).
-      
-rpc_call(Mod, Fun, Params) ->
-    case length(Params) of
-       0 -> rpc:call(refactorerl@localhost, Mod, Fun, []);
-       _ -> rpc:call(refactorerl@localhost, Mod, Fun, [Params])
+main([]) ->
+    format({format, "Give me some arguments!~n"});
+main(Args) ->
+    try
+        format(rpc_call([parse(A) || A <- Args]))
+    catch
+        Class:Reason -> format({error, Class, Reason})
     end.
 
-%================ RefactorErl start and stop ===============
+parse(Str) ->
+    try
+        {ok, Tokens, _} = erl_scan:string(string:concat(Str, ".")),
+        {ok, Term}      = erl_parse:parse_term(Tokens),
+        Term
+    catch
+        _:_ -> Str
+    end.
 
-refactorerl_internal(start) ->
-    {
-     os:cmd(refpath()++"/bin/starttool "++refpath()++" -server &"),
+%% -----------------------------------------------------------------------------
+
+rpc_call([Fun])               -> rpc_call(Fun);
+rpc_call([Mod, Fun | Params]) -> rpc_call(Mod, Fun, Params);
+
+rpc_call(start) ->
+    case net_adm:ping(referlnode()) of
+        pong -> {format, "RefactorErl is already running at ~w.~n",
+                 [referlnode()]};
+        pang -> start_refactorerl()
+    end;
+rpc_call(Fun) when is_atom(Fun) -> rpc:call(referlnode(), ri, Fun, []).
+rpc_call(Mod, Fun, Params)      -> rpc:call(referlnode(), Mod, Fun, Params).
+
+start_refactorerl() ->
+    {os:cmd(referlpath() ++ "/bin/starttool " ++ referlpath() ++ " -server &"),
      erlang:set_cookie(node(), 'secretwookie'),
-     started};
+     started}.
 
-refactorerl_internal(reset) ->
-    rpc:call(refactorerl@localhost, reflib_ui, reset, 
-             [#msg_cb{broadcast = fun(_, _)-> stop end}]);
-    
-refactorerl_internal(stop) ->
-    {_, StopMsg} = rpc:call(refactorerl@localhost, reflib_ui, stop, 
-      [#msg_cb{broadcast = fun(_, _)-> stop end}]),
-    {StopMsg, stopped}.
+%% -----------------------------------------------------------------------------
 
-%=============== Handling function results (I/O) ===========
-
-handleResult(Params) ->
-    handleResult_(Params).
-    %TODO format for the output
-
-handleResult_({error, ErrH, ErrT})->
-    io:format("CLIerror reason :: ~w ~w~n",[ErrH, ErrT]);
-handleResult_({{format, F}, OtherRes}) ->
-    io:format(F, [OtherRes]);
-handleResult_({badrpc, nodedown}) ->
-    handleResult_({{format, "~s~n"}, "refactorerl not running"});
-handleResult_(OtherParams) ->
-    io:format("~w~n",[OtherParams]).
-
-
-to_atom(Str) when is_atom(Str) -> Str;
-to_atom(Str) when is_binary(Str) -> 
-         list_to_atom(binary_to_list(Str));
-to_atom(Str) when is_list(Str) -> 
-   try list_to_atom(Str) of Re -> Re
-   catch error : _ ->  
-     list_to_atom(
-       binary_to_list(erlang:iolist_to_binary(Str)))
-   end.
+format({error, Class, Reason}) ->
+    io:format("[CLI error] ~w: ~w~n", [Class, Reason]);
+format({error, Reason}) when is_list(Reason) ->
+    io:format("[CLI error] ~s~n", [Reason]);
+format({format, F}) ->
+    format({format, F, []});
+format({format, F, Params}) ->
+    io:format(F, Params);
+format({badrpc, nodedown}) ->
+    format({format, "RefactorErl is not running at ~w.~n", [referlnode()]});
+format(Params) ->
+    io:format("~w~n", [Params]).

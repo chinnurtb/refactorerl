@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reflib_expression).
--vsn("$Rev: 5356 $ ").
+-vsn("$Rev: 5585 $ ").
 
 -export([role/1, type/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
@@ -413,7 +413,7 @@ lex_content(Expr) ->
         variable -> ?Query:exec([Expr], varrefs());
         _ ->
             Lexes = ?Query:exec([Expr], [elex]),
-            [(?Token:data(Lex))#token.value || Lex <- Lexes]
+            [?Token:get_value(Lex) || Lex <- Lexes]
     end.
 
 %% Collects data about the expression.

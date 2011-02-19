@@ -21,7 +21,7 @@
 %%% macros. Macros are represented with the form that defines them.
 
 -module(reflib_macro).
--vsn("$Rev: 5455 $ ").
+-vsn("$Rev: 5585 $ ").
 
 %% =============================================================================
 %% Exports
@@ -316,7 +316,7 @@ update_virtual_token(Virtual, NewValue) ->
     [N]               = ?Query:exec(Virtual, [orig]),
     New               = [NewValue],
     ND=#lex{data=NND} = ?ESG:data(N),
-    NewNode           = ND#lex{data=NND#token{value=New,text=New}},
+    NewNode           = ND#lex{data=NND#token{text=New}},
     ?ESG:update(N, NewNode),
     [F] = ?Query:exec(N, [{llex, back}, {flex, back}]),
     ?Transform:touch(F).

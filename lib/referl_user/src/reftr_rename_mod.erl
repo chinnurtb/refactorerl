@@ -52,7 +52,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_rename_mod).
--vsn("$Rev: 5496 $ ").
+-vsn("$Rev: 5609 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -138,4 +138,6 @@ cc_newname(NewModName, OldPath) ->
 cc_error(?RefError(module_exists,[NewModName]), NewModName, _OldPath) ->
    ?MISC:format("The module name ~p is already used.", [NewModName]);
 cc_error(?RefError(file_exists,[NewFilePath]), _NewModName, _OldPath) ->
-   ?MISC:format("The file ~p is already used.", [NewFilePath]).
+    ?MISC:format("The file ~p is already used.", [NewFilePath]);
+cc_error(?RefErr0r(quoted_atom), _NewModName, _OldPath) ->
+    ["Quoted atoms are not allowed."].

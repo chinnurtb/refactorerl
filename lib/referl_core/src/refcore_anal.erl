@@ -78,7 +78,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_anal).
--vsn("$Rev: 5277 $").                           % this makes emacs happy: "
+-vsn("$Rev: 5615 $").                           % this makes emacs happy: "
 -behaviour(gen_server).
 
 -export([start/1, insert/5, remove/5, update/3, create/3,

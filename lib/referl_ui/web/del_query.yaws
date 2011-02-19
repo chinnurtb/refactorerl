@@ -5,10 +5,11 @@
             L = yaws_api:parse_query(Args),
             [_U,_Eq|QD] = Args#arg.querydata,
             User = web_helper:get_value("u",L),
-            QueryReq = lists:dropwhile(fun(X)-> X/=hd("&") end, QD),
+            QueryReq = lists:dropwhile(fun(X)-> X/=$& end, QD),
                %% need because parse_query lost '+' character
             [_And,Type,_Eq|Req] = QueryReq,  
-            web_helper:delete_from_tab(yaws_api:url_decode(Req),User), 
+            web_helper:delete_from_tab(web_helper:decode_quotes
+                                       (yaws_api:url_decode(Req)),User), 
             ok.
     </erl>
   </body>

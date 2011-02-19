@@ -5,17 +5,18 @@
         L = yaws_api:parse_query(Args),
         [_U,_Eq|QD] = Args#arg.querydata,
         User = web_helper:get_value("u",L),
-        QueryReq = lists:dropwhile(fun(X)-> X/=hd("&") end, QD),
+        QueryReq = lists:dropwhile(fun(X)-> X/=$& end, QD),
                %% need because parse_query lost '+' character
         [_And,Type,_Eq|Req] = QueryReq,
-        P = hd("p"),
-        Q = hd("q"),
+        P = $p,
+        Q = $q,
         T = case Type of
                 Q -> 'query';
                 P -> prev_query
             end,
          {ehtml,
-          web_helper:result_to_ehtml({T,web_helper:decode_quotes(yaws_api:url_decode(Req)),User})}.
+          web_helper:result_to_ehtml({T,web_helper:decode_quotes
+                                      (yaws_api:url_decode(Req)),User})}.
     </erl>
   </body>
 </html>

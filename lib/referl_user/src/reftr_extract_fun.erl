@@ -88,7 +88,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reftr_extract_fun).
--vsn("$Rev: 5455 $"). % for emacs"
+-vsn("$Rev: 5517 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1]).
@@ -100,16 +100,18 @@
 
 %% @private
 prepare(Args) ->
-    Exprs   = ?Args:expr_range(Args),
+    [Expr1|_] = Exprs = ?Args:expr_range(Args),
     {Link, Parent} = check_expr_link(Exprs),
 
-    Module = ?Args:module(Args),
     lists:foreach(fun check_expr/1, Exprs),
-    Form = ?Query:exec1(hd(Exprs), ?Query:seq([?Expr:clause(),
-                                               ?Clause:funcl(),
-                                               ?Clause:form()]),
+%    [Form] = ?Query:exec(Expr1, ?Expr:attribute_form()),
+    Form = ?Query:exec1(Expr1, ?Query:seq([?Expr:clause(),
+                                           ?Clause:funcl(),
+                                           ?Clause:form()]),
                         ?RefErr0r(parent_not_form)),
     [File] = ?Query:exec(Form, ?Form:file()),
+    Filepath = ?File:path(File),
+    [Module] = ?Query:exec(File, ?File:module()),
     {Bound, NotBound} = vars(Exprs),
     OutVars = check_var(Bound,Exprs),
     ?Check(OutVars =:= [] orelse Link =:= body,
@@ -118,7 +120,7 @@ prepare(Args) ->
     PatNames = lists:usort([?Var:name(Var) || Var <- NotBound]),
     Arity    = length(PatNames),
     ModName  = ?Mod:name(Module),
-    % todo Add transformation info
+    % @todo Add transformation info
     NewName  = ?Args:ask(Args, name,
                          fun cc_fun/2, fun cc_error/3, {Module, ModName, Arity}),
 
@@ -134,6 +136,11 @@ prepare(Args) ->
      end,
      fun(_) ->
              ?Syn:put_comments(NewExprs, Comments)
+     end,
+     fun(_)->
+             ?Query:exec(?Query:seq([?File:find(Filepath),
+                                     ?File:module(),
+                                     ?Fun:find(NewName,Arity)]))
      end].
 
 vars(Exprs) ->

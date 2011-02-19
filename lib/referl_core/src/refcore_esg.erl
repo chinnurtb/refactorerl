@@ -55,7 +55,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_esg).
--vsn("$Rev: 5503 $").
+-vsn("$Rev: 5615 $").
 -behaviour(gen_server).
 
 
@@ -191,6 +191,7 @@ start_link() ->
 %% @private
 init(_) ->
     {Schema, State} = init_state(),
+    refcore_pp_rules:check_load(refcore_pp_rules:erlang()),
     case ?Graph:schema(Schema) of
         init ->
             {ok, State};

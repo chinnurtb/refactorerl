@@ -25,9 +25,11 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_genetic).
--vsn("$Rev: 5049 $").
+-vsn("$Rev: 5569 $").
 
--export([ga/0, 
+-compile({no_auto_import, [min/2, max/2]}).
+
+-export([ga/0,
          ga/2,
          ga_default/0]).
 
@@ -47,12 +49,12 @@ ga() ->
 
 %% @doc Runs genetic algoritm with given parameters.
 ga(Output, Options) ->
-    cl_db:update(deps), 
-    {W, C} = cl_out:open(Output), 
+    cl_db:update(deps),
+    {W, C} = cl_out:open(Output),
     FilesNum = length(?Query:exec([file])),
    	Options2 = cl_utils:proplist_update(ga_default(), Options),
 %todo: remove Data
-    Data = null, 
+    Data = null,
     Result = if FilesNum >= 2 ->
 	                core(#global{data=Data, output=W, options=Options2});
 	            true -> []
@@ -69,16 +71,16 @@ ga_default() ->
      {max_cluster_size, 5},
      {max_start_cluster_size, 2}].
 
-    
+
 core(Global) ->
     PopulationSize = proplists:get_value(population_size,Global#global.options),
     Iterations = proplists:get_value(iterations,Global#global.options),
     cl_out:fwrite(Global#global.output, "Starting genetic algorithm...~n"),
-    cl_out:fwrite(Global#global.output, 
+    cl_out:fwrite(Global#global.output,
                   "---------------------------------------------------~n"),
     L = chromosome_length(),
     Population = random_population(Global, PopulationSize, L),
-    ga(Global, Population, L, 1,Iterations).    
+    ga(Global, Population, L, 1,Iterations).
 
 %% ga(Global, Population, Length, N, N) ->
 %%     cl_out:fwrite(Global#global.output, "Iteration no. ~p~n", [N]),
@@ -111,7 +113,7 @@ create_new_population(Global, OldPopulation, Length) ->
     PopLevel = population_leveled(Global, PopFit, Length),
     Elites = elites(Global, PopFit, EliteCount),
     NewPopulation =
-    select_new_population(Global, Elites, PopFit, PopLevel, Length, 0, 
+    select_new_population(Global, Elites, PopFit, PopLevel, Length, 0,
                           PopulationSize-EliteCount),
     NewPopulation.
 
@@ -126,13 +128,13 @@ elites(Global, Elites, [{_F, Chromosome} | RestPop], K) ->
 population_fitness(Global, Population, Length) ->
     L = lists:map(
       fun(Chromosome) ->
-              Phenotype = phenotype(Global, Chromosome, Length), 
-              Fitness = 
+              Phenotype = phenotype(Global, Chromosome, Length),
+              Fitness =
                   cl_fitness:fitness(
-                    Phenotype, 
-                    [{mq, first_version}, 
+                    Phenotype,
+                    [{mq, first_version},
                      {entity_type, module},
-                     {entities, 
+                     {entities,
                       #which_entities{funs=true, recs=false, macros=false}}
                     ]),
               {Fitness, Chromosome}
@@ -140,16 +142,16 @@ population_fitness(Global, Population, Length) ->
     lists:reverse(lists:sort(L)).
 
 population_leveled(_Global, PopFit, Length) ->
-    SumFitness = sum_fitness(PopFit),    
+    SumFitness = sum_fitness(PopFit),
     if SumFitness == 0 ->
-            {PopLevel, _} = 
+            {PopLevel, _} =
                 lists:mapfoldl(
                   fun({_Fitness, Chromosome}, Acc) ->
                           {{1/Length + Acc, Chromosome}, 1/Length + Acc}
                   end, 0, PopFit);
        true ->
             SortPop = lists:sort(PopFit),
-            {PopLevel, _} = 
+            {PopLevel, _} =
                 lists:mapfoldl(
                   fun({Fitness, Chromosome}, Acc) ->
                           X = (Fitness + Acc)/SumFitness,
@@ -157,7 +159,7 @@ population_leveled(_Global, PopFit, Length) ->
                   end, 0, SortPop)
     end,
     PopLevel.
-    
+
 
 sum_fitness(PopFit) ->
     lists:foldl(fun({F, _C}, Acc) -> F + Acc end, 0, PopFit).
@@ -187,11 +189,11 @@ select_new_population(Global, PartPopulation, PopFit, PopLevel, Length, K, N) ->
     if K + 2 < N ->
             NewPopulation = [C5, C6 |PartPopulation],
             select_new_population(Global,
-                                  NewPopulation, 
-                                  PopFit, 
-                                  PopLevel, 
-                                  Length, 
-                                  K+2, 
+                                  NewPopulation,
+                                  PopFit,
+                                  PopLevel,
+                                  Length,
+                                  K+2,
                                   N);
        K + 2 == N ->
             NewPopulation = [C5, C6 | PartPopulation],
@@ -266,12 +268,12 @@ phenotype(_Global, Chromosome, Length) ->
     {_ , ClusterList} = lists:unzip(dict:to_list(C3)),
     Phenotype = lists:filter(fun([]) -> false; (_) -> true end, ClusterList),
     Phenotype.
-                      
+
 chromosome_length() ->
     length(modules()).
 
 random_population(Global, PopulationSize, ChromosomeLength) ->
-    random_population(Global, [], PopulationSize, PopulationSize, 
+    random_population(Global, [], PopulationSize, PopulationSize,
                       ChromosomeLength).
 
 random_population(_Global, List, 0, _, _) ->
@@ -281,13 +283,13 @@ random_population(Global, List, K, PopulationSize, ChromosomeLength) ->
                                          Global#global.options),
     MaxStartClusterSize = proplists:get_value(max_start_cluster_size,
                                               Global#global.options),
-    R = random_chromosome(Global, ChromosomeLength, 
+    R = random_chromosome(Global, ChromosomeLength,
                           min(MaxClusterSize, MaxStartClusterSize)),
-    random_population(Global, [R | List], K-1, PopulationSize, 
+    random_population(Global, [R | List], K-1, PopulationSize,
                       ChromosomeLength).
 
 random_chromosome(Global, ChromosomeLength, Range) ->
-    L = random_chromosome(Global, [], ChromosomeLength, ChromosomeLength, 
+    L = random_chromosome(Global, [], ChromosomeLength, ChromosomeLength,
                           Range),
     dict:from_list(L).
 

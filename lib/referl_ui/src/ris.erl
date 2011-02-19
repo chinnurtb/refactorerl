@@ -21,11 +21,12 @@
 %%% Module information
 %%%
 %%% @doc @todo
+%%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(ris).
 -vsn("$Rev: 9876 $ ").
 
--export([q/1,q1/1,qstr/1, unpack/1]).
+-export([q/1,q1/1,qstr/1, desugar/1, unpack/1]).
 -export([show/1,show/2, print/1, print/2]).
 
 -export([add/1, add_byname/1, drop/1]).
@@ -33,7 +34,7 @@
          delenv/1, delenv/2, delenv/3]).
 
 -export([rename/2, move/2, extract/2, inline/1, eliminate/1, reorder/2,
-     intrec/2, intmac/2, merge/2, genfun/2, expfun/1, tupfun/2,
+     extfun/2, intrec/2, merge/2, genfun/2, expfun/1, tupfun/2, %%intmac/2,
      upregex/0]).
 -export([error_text/2]).
 % build, test, errors, cat_errors,
@@ -57,8 +58,8 @@ error_text(ErrType, ErrParams) ->
 % ris:q("mods.name").
 % ris:q("mods.fun").
 % ris:q("mods.fun.arity:sum").
-% ris:q("mods.fun.(refs.fundef)+").
-% ris:q("mods.fun.{refs.fundef}2").
+% ris:q("mods.fun.(calls)+").
+% ris:q("mods.fun.{calls}2").
 % ris:q([mods,".fun",".name"]).
 % ris:add({"../a.erl"}).
 % ris:drop({"/root/erl/tool/../a.erl"}).
@@ -89,7 +90,7 @@ q({Q1,intersect,Q2},S)->
     ?MISC:intersect(qd(Q1,S), qd(Q2,S));
 q({Q1,minus,Q2},S) ->
     qd(Q1,S)--qd(Q2,S);
-q({Q1,range,Q2},S) ->
+q({_Q1,range,_Q2},_S) ->
     todo;
 
 q(Sel,S)when is_atom(Sel)->
@@ -121,7 +122,7 @@ q(Sel,S)when is_list(Sel)->
 
 q_start(Sel,none)->
     run_q([{output,nodes}],[],Sel);
-q_start(Sel,[])->
+q_start(_Sel,[])->
     [];
 q_start(Sel,Start)->
     Nodes = [N || #entity{e=N} <- Start],
@@ -140,7 +141,7 @@ is_entity(_)->
 q1(Sel)->
     hd(unpack(q(Sel))).
 
-unpack(Sel)->
+unpack(Sel) ->
     [case X of
          #entity{e=E}->
              E;
@@ -173,24 +174,55 @@ erlang_type(_) ->
     todo.
 
 print(R)->
-    io:format("~s~n",[show(R)]).
+    show(R, [{out, stdio}]).
 
 print(R,Options)->
-    io:format("~s~n",[show(R,Options)]).
+    case ?MISC:pget([out], Options) of
+        [[]]->
+            show(R, [{out, stdio} | Options]);
+        [[_]] ->
+            show(R, Options)
+    end.
 
-show(#rich{text=T})->
-    T;
+show(Result0)->
+    show(Result0,[]).
 
-show(Result)->
-    show(Result,[]).
+show(Result0, Options)->
+    Text = show_(Result0, Options),
+    case ?MISC:pget([out],Options) of
+        [[]]->
+            Text;
+        [[A]] when A==stdio; A==stdout->
+            io:format("~s~n",[Text]),
+            ok;
+        [[FileName=[C|_]]] when is_integer(C)->
+            {ok,IODev} = file:open(FileName, [write]),
+            io:put_chars(IODev, Text),
+            ok = file:close(IODev),
+            ok
+    end.
 
-show(Result0,Options)->
-    Result = unpack(Result0),
+show_(Result0,Options)->
     case ?MISC:pget([linenum,linecol],Options) of
         [[],[]]->
-            ?SQ:format_nodes(Result, none);
+            case Result0 of
+                #rich{text=T}->
+                    T;
+                _->
+                    show_2(Result0, none)
+            end;
         [_,_] ->
-            ?SQ:format_nodes(Result, linecol)
+            show_2(Result0, linecol)
+    end.
+
+show_2(Result0, LineCol)->
+    Result = desugar(Result0),
+    case is_subset(entity_types(Result), [property]) of
+        true->
+            string:join([?MISC:any_to_string(V) || V <- unpack(Result)],
+                        "\n");
+        false->
+            ?SQ:format_nodes(unpack(Result0), LineCol)
     end.
 
 %%% ============================================================================
@@ -209,11 +241,10 @@ dispatch_nodetype([],_Dispatchers)->
     throw(?LocalError(empty_selection,[]));
 dispatch_nodetype(Nodes,Dispatchers)->
     Got = entity_types(Nodes),
-    R =
-        [Value ||
+    R = [Value ||
             {NodeTypes,Value} <- Dispatchers,
             Accepted <- [lists:flatten([NodeTypes])],
-        true==is_subset(Got,Accepted)],
+        true == is_subset(Got,Accepted)],
     case R of
         [] ->
             throw(?LocalError(no_match,[Got]));
@@ -316,7 +347,7 @@ each_ui(Func,Files) ->
         [begin
             Res = ui({Func,File}),
             case {Func,Res} of
-                {drop_dir, {ok,_}} -> [File];
+                {drop_dir, {ok,_}} -> to_entities([File]);
                 {add_dir, {ok,N}} -> to_entities(N);
                 {drop_dir,_} -> []; %@todo only accept if missing
                 {add_dir,_} -> [] %@todo exception
@@ -411,105 +442,161 @@ any_to_list(X) when is_atom(X)->
 any_to_list(L=[C|_]) when is_integer(C)->
     L.
 
-rename(Old,New)->
-    Atom = fun()-> {name,any_to_atom(New)} end,
-    List = fun(Key) -> fun()-> {Key, any_to_list(New)} end end,
-    L=[{function,{rename_fun,Atom}},
-       {variable,{rename_var,List(varname)}},
-       {file,{rename_header,List(filename)}},
-       {mod,{rename_mod,Atom}},
-       {record,{rename_rec,Atom}},
-       {recfield,{rename_recfield,Atom}},
-       {macro,{rename_mac,List(macname)}}],
+rename(Old, New)->
+    Atom = fun(Name)-> {name, any_to_atom(Name)} end,
+    Str  = fun(Key) -> fun(Name)-> {Key, any_to_list(Name)} end end,
+    L = [{function, {rename_fun,      Atom}},
+         {variable, {rename_var,      Str(varname)}},
+         {file,     {rename_header,   Str(filename)}},
+         {mod,      {rename_mod,      Atom}},
+         {record,   {rename_rec,      Atom}},
+         {recfield, {rename_recfield, Atom}},
+         {macro,    {rename_mac,      Str(macname)}}],
     Nodes = qd(Old),
-    [{Fun,Key}] = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},Key()]).
+
+    [{Fun, Key}] = dispatch_nodetype(Nodes, L),
+
+    Res =
+        case New of
+            F when is_function(F, 1)->
+                [refac(Fun, [{nodes, unpack([Node])}, Key(F([Node]))])
+                || Node <- Nodes];
+            _ ->
+                [refac(Fun, [{nodes, unpack([Node])}, Key(New)])
+                 || Node <- Nodes]
+        end,
+    lists:append(Res).
 
 % ris:rename('mods[name=="a"].fun[name==f]', h).
 % ris:rename('mods[name=="a"].fun[name==f].var[name=="X"]', "Y").
 % ris:rename('files[name=="e.hrl"]', "y.hrl").
 % ris:rename('mods[name=="a"]', "b").
-% ris:rename('files.macros[name=="M"]', "Mac2").
 % ris:rename('files.records[name==rec1]', rec2).
 % ris:rename('files.records[name==rec1].fields[name==r1]', fld1).
+% ris:rename('files.macros[name=="M"]', "Mac2").
 
-move(Source,Dest)->
-    Atom = fun()-> {name,any_to_atom(Dest)} end,
+move(Source, Dest)->
+    Atom = fun(Name)-> {name, any_to_atom(Name)} end,
     File =
-        fun() ->
+        fun(Name) ->
             Path =
-                case Dest of
-                    {Path_} -> Path_;
-                    _ -> qstr("files[name==\"" ++ any_to_list(Dest) ++ "\"].path")
+                case Name of
+                    {Path_} ->
+                        Path_;
+                    _ ->
+                        qstr("files[name==\"" ++ any_to_list(Name) ++ "\"].path")
                 end,
-            {filename, Path} end,
-    L=[{function,{move_fun,Atom}},
-       {record,{move_rec, File}},
-       {macro,{move_mac,File}}],
+            {filename, Path}
+        end,
+    L = [{function, {move_fun, Atom}},
+         {record,   {move_rec, File}},
+         {macro,    {move_mac, File}}],
     Nodes = qd(Source),
-    [{Fun,Key}] = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},Key()]).
+    [{Fun, Key}] = dispatch_nodetype(Nodes, L),
+
+    % @todo support diverse types
+    Res =
+        case Dest of
+            F when is_function(F,1)->
+                [refac(Fun, [{nodes, unpack([Node])}, Key(F([Node]))])
+                || Node <- Nodes];
+            _ ->
+                [refac(Fun,[{nodes,unpack(Nodes)},Key(Dest)])]
+        end,
+    lists:append(Res).
 
 % ris:move('mods[name=="a"].fun[name==f]', b).
-% ris:move('mods[name=="c"].record[name==rec]', x).
-% ris:move('mods[name=="c"].macro[name=="M"]', x).
+% ris:move('mods[name=="a"].record[name==r]', b).
+% ris:move('mods[name=="a"].macro[name=="M"]', b).
+% ris:move('mods[name=="x"].fun[name==f]', fun(Src)-> io:format("~p~n",[ris:qstr([Src,'.mod'])]),a end).
 
-extract(Source,New)->
-    L=[{function,extract_fun}],
+extract(Source, New)->
+    extfun(Source, New).
+
+extfun(Source, New)->
+    L=[{expression,extract_fun}],
     Nodes = qd(Source),
     [Fun] = dispatch_nodetype(Nodes,L),
     refac(Fun,[{nodes,unpack(Nodes)},{name,any_to_atom(New)}]).
+
+% ris:extract('mods[name=="a"].fun[name==f].expr[.last]', h).
 
 inline(Source)->
     L=[{function,inline_fun},
        {macro,inline_mac}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)}]).
+    [Fun] = dispatch_nodetype(Nodes,L),
+    Res = [refac(Fun,[{nodes,unpack([Node])}]) || Node <- Nodes],
+    lists:append(Res).
+
+% ris:inline('mods[name=="a"].fun[name==f].expr[.last]').
 
 eliminate(Source)->
     L=[{variable,elim_var}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)}]).
+    [Fun] = dispatch_nodetype(Nodes,L),
+    Res = [refac(Fun,[{nodes,unpack([Node])}]) || Node <- Nodes],
+    lists:append(Res).
+
+%@todo
 
 %% -----------------------------------------------------------------------------
 
-intrec(Source,{Name,Fields}) when is_atom(Name), is_list(Fields)->
+intrec(Source,NameFields)->
     %@todo convert
-    L=[{expression,introduce_rec}],
+    L = [{expression, introduce_rec}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},{name,Name},{fields,Fields}]).
+    [Fun] = dispatch_nodetype(Nodes, L),
 
-intmac(Source,NewName)->
-    %@todo convert
-    L=[{expression,introduce_macro}],
-    Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},{name,any_to_list(NewName)}]).
+    Res =
+        case NameFields of
+            {Name, Fields} when is_atom(Name), is_list(Fields)->
+                [refac(Fun, [{nodes, unpack([Node])},
+                             {name, Name}, {text, Fields}])
+                 || Node <- Nodes];
+
+            F when is_function(F, 1)->
+                [begin
+                    {Name, Fields} = F([Node]),
+                    refac(Fun,[{nodes, unpack([Node])},
+                               {name, Name}, {text, Fields}])
+                 end || Node <- Nodes]
+        end,
+    lists:append(Res).
+
+% ris:intrec('mods[name=="a"].fun[name==f].expr[.last]', {r3,[f1]}).
 
 merge(Source,New)->
-    L=[{expression,merge}],
+    L = [{expression, merge}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},{varname,New}]).
+    [Fun] = dispatch_nodetype(Nodes, L),
+    Res =
+        case New of
+            F when is_function(F, 1)->
+                [refac(Fun, [{nodes, unpack([Node])}, {varname, F([Node])}])
+                 || Node <- Nodes];
+            _->
+                [refac(Fun, [{nodes, unpack([Node])}, {varname, New}])
+                 || Node <- Nodes]
+        end,
+    lists:append(Res).
 
 genfun(Source,NewVar)->
-    L=[{function,gen}],
+    L=[{expression,gen}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},{name,NewVar}]).
+    [Fun] = dispatch_nodetype(Nodes,L),
+    refac(Fun, [{nodes,unpack(Nodes)}, {name,NewVar}]).
 
 expfun(Source)->
     L=[{function,expand_funexpr}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)}]).
+    [Fun] = dispatch_nodetype(Nodes,L),
+    Res = [refac(Fun,[{nodes,unpack([Node])}]) || Node <- Nodes],
+    lists:append(Res).
 
-tupfun(Source, Range)->
+tupfun(Source, _Range)->
     %@todo alternate calling
-    L=[{variable,tuple_funpar}],
+    L=[{function,tuple_funpar}],
     Nodes = qd(Source),
     Fun = dispatch_nodetype(Nodes,L),
     refac(Fun,[{nodes,unpack(Nodes)}]). %@todo
@@ -518,8 +605,17 @@ reorder(Source, Order=[_|_])->
     %@todo validate
     L=[{function,reorder_funpar}],
     Nodes = qd(Source),
-    Fun = dispatch_nodetype(Nodes,L),
-    refac(Fun,[{nodes,unpack(Nodes)},{order,Order}]).
+    [Fun] = dispatch_nodetype(Nodes,L),
+    Res =
+        case Order of
+            F when is_function(F,1)->
+                [refac(Fun,[{nodes,unpack([Node])}, {order,F([Node])}])
+                 || Node <- Nodes];
+            _->
+                [refac(Fun,[{nodes,unpack([Node])}, {order,Order}])
+                 || Node <- Nodes]
+        end,
+    lists:append(Res).
 
 upregex()->
     refac(upgrade_regexp,[]).

@@ -51,13 +51,15 @@
 %%% </li><li>
 %%%     The given variable name should not already exist in the given scope
 %%%     in order to avoid name clashes.
+%%% </li><li>
+%%%     The transformation should not destroy variable bindings.
 %%% </li></ol>
 %%%
 %%%
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(reftr_merge).
--vsn("$Rev: 5455 $").
+-vsn("$Rev: 5621 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -72,9 +74,14 @@ error_text(no_inst, []) ->
     % This should be impossible
     ["No instance of the expression is available for refactoring"];
 error_text(dirty_fun, []) ->
-    ["The selected expression has functions with possible side effects"];
+    ["The selection has functions with possible side effects"];
 error_text(message_passing, []) ->
-    ["The selected expression contains message passing"].
+    ["The selection contains message passing"];
+error_text(has_var_binding, BoundVars) ->
+    VarNames = [?Var:name(V) || V <- BoundVars],
+    ["The selection contains bindings for ",
+     ?MISC:plural("variable", VarNames), " ",
+     ?MISC:flatjoin(VarNames, ", ")].
 
 %%% ============================================================================
 %%% Callbacks
@@ -85,10 +92,6 @@ prepare(Args) ->
     ?Check(1 == length(Exprs), ?RefError(token_parent, [expr])),
     [Expr]        = Exprs,
 
-    VarNames = [?Var:name(V) || V <- ?Query:exec(Expr, ?Expr:scope_varbinds())],
-    % todo Add transformation info
-    VarName  = ?Args:ask(Args, varname, fun cc_varname/2, fun cc_error/3, VarNames),
-
     Disqual  = instance_disqualifiers(Expr),
     ?Check( [] == Disqual, ?RefError(bad_kind, Disqual)),
 
@@ -98,6 +101,13 @@ prepare(Args) ->
             ?LocalError(message_passing, [])),
     ?Check( not ?Expr:has_dirty_fun(Expr),
             ?LocalError(dirty_fun, [])),
+
+    BoundVars = ?Query:exec(Expr, ?Expr:varbinds()),
+    ?Check( [] == BoundVars, ?LocalError(has_var_binding, BoundVars)),
+
+    VarNames = [?Var:name(V) || V <- ?Query:exec(Expr, ?Expr:scope_varbinds())],
+    % todo Add transformation info
+    VarName  = ?Args:ask(Args, varname, fun cc_varname/2, fun cc_error/3, VarNames),
 
     % @todo Warn if expression is only instance.
     InstParents         = [{?Syn:parent(Inst), Inst} || Inst <- Insts],

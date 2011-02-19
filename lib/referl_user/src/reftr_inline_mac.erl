@@ -73,7 +73,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reftr_inline_mac).
--vsn("$Rev: 5455 $").
+-vsn("$Rev: 5517 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).

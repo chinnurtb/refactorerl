@@ -28,7 +28,7 @@
 %%% @author Gabor Olah <olikas.g@gmail.com>
 
 -module(refusr_spec).
--vsn("$Rev: 5410 $"). %for emacs"
+-vsn("$Rev: 5569 $"). %for emacs"
 
 -include_lib("stdlib/include/ms_transform.hrl").
 
@@ -729,7 +729,7 @@ matchVar(Env, Var, Type) ->
 finalize(Env, #type{kind=variable, value=V}) ->
     {_,VarType} = lookup_var(Env, V),
     VarType;
-finalize(Env, #type{kind=K, value=any}) ->
+finalize(_Env, #type{kind=K, value=any}) ->
     #type{kind=K, value=any};
 finalize(_Env, #type{kind=list, value=nil}) ->
     #type{kind=list, value=nil};
@@ -740,7 +740,7 @@ finalize(Env, #type{kind=tuple, value=V}) ->
 finalize(Env, #type{kind=union, value=V}) ->
 %    #type{kind=union, value=[finalize(Env, X)||X<-V]};
      simplify(#type{kind=union, value=uniq([finalize(Env, X)||X<-V])});
-finalize(Env, Type) ->
+finalize(_Env, Type) ->
     Type.
 
 % finalize(Env, Type) ->

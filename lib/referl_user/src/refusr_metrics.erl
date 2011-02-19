@@ -223,7 +223,7 @@
 %%% show metrics|filters
 
 -module(refusr_metrics).
--vsn("$Rev: 5271 $ ").
+-vsn("$Rev: 5548 $ ").
 
 -export([prepare/1]).
 
@@ -1013,7 +1013,6 @@ is_tail_recursive({function, Fun}) ->
 is_tail_recursive({module, _Mod}) ->
     throw(?RefError(incompat, [is_tail_recursive])).
 
-
 %%% @private
 %%% helper function for is_tail_recursive function
 is_recursive(Fun, Expr) ->
@@ -1023,7 +1022,6 @@ is_recursive(Fun, Expr) ->
         %has indirect recursive call
         has_indirect_recursion(Fun, ?Query:exec(Expr, ?Expr:funapps()), []).
 
-
 %%% @private
 %%% helper function for is_tail_recursive function
 has_indirect_recursion(_Fun, [], _Examined) -> false;
@@ -1031,7 +1029,7 @@ has_indirect_recursion(Fun, [F1|Fs], Examined) ->
     Fun == F1  orelse
         has_indirect_recursion
           (Fun,
-           Fs ++ (?Query:exec(F1, ?Fun:called()) -- Examined),
+           Fs ++ (?Query:exec(F1, ?Fun:funcalls()) -- Examined),
            [F1|Examined]).
 
 

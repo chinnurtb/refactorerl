@@ -45,7 +45,7 @@ externs(_) -> [].
 insert(Parent, _, {_, Child}, _) ->
     case ?Anal:data(Child) of
         #form{type=module, tag=Name} ->
-            ?NodeSync:move_refs(module, [exp, func, ref, def, ctx, imp], 
+            ?NodeSync:move_refs(module, [exp, func, ref, def, ctx, imp],
                                 Parent, Name);
         #form{type=func} ->
             [?NodeSync:add_ref(module, {ctx, Cl}, Parent) ||
@@ -61,7 +61,7 @@ insert(Parent, _, {_, Child}, _) ->
 remove(Parent, _, {_, Child}, _) ->
     case ?Anal:data(Child) of
         #form{type=module, tag=Name} ->
-            ?NodeSync:move_refs(module, [exp, func, ref, def, ctx, imp], 
+            ?NodeSync:move_refs(module, [exp, func, ref, def, ctx, imp],
                                 Name, Parent),
             ok;
         #form{type=func} ->
@@ -76,15 +76,10 @@ remove(Parent, _, {_, Child}, _) ->
 
 %%% @private
 update(Form, #form{type=module, tag=Name}) ->
-    [File] = ?Graph:path(Form, [{form, back}]),
+    File = ?Anal:parent(Form),
     ?NodeSync:move_refs(module, [exp, func, ref, ctx, imp, def], File, Name),
     [ModLex] = ?Graph:path(Form, [{flex, 4}]),
-    LexData = ?ESG:data(ModLex),
-    Token = LexData#lex.data,
-    ?Graph:update(ModLex, 
-                  LexData#lex{data = Token#token{value = Name, 
-                                                 text = io_lib:write(Name)}}),
-
+    ?Syn:update_lex_with_text(ModLex, Name),
     ok;
 update(_, _) ->
     ok.

@@ -78,7 +78,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reflib_args).
--vsn("$Rev: 5504 $ ").
+-vsn("$Rev: 5608 $ ").
 
 -export([string/1, string/2, string/3, recfield_names/1,
          integer/1, integer/3,
@@ -103,7 +103,9 @@
 error_text(bad_atom, [Text]) ->
     ["\"", Text, "\" is not a valid atom (use single quotes)"];
 error_text(bad_funclusters, [Clusters]) ->
-    ["\"", io_lib:print(Clusters), "\" is not a valid function clustering"].
+    ["\"", io_lib:print(Clusters), "\" is not a valid function clustering"];
+error_text(not_inside_funcl, _) ->
+    "The given position has to be inside a function clause.".
 
 error_action(bad_mod_name, ModName) ->
     Info = ?MISC:format("The given module (" ++
@@ -178,13 +180,23 @@ error_action(bad_recfield_pos, File, Pos) ->
      ") has to indicate a record field."),
     record_field([{file, File},{ask_missing, true}, {info_text, Info}]);
 
-error_action(bad_var_pos, _File, Pos) ->
-    ?Transform:question([[{format,info},{text,"The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate a variable or has to be inside a function clause."}]]);
+error_action(bad_importform_pos, File, Pos) ->
+    Info = ?MISC:format("The given position (" ++ integer_to_list(Pos) ++
+                            ") has to indicate an import form."),
+    import_form([{file,File},{ask_missing,true}, {info_text, Info}]);
 
-error_action(bad_importform_pos, _File, Pos) ->
+error_action(bad_var_pos, File, Pos) ->
     ?Transform:question([[{format,info},{text,"The given position (" ++ integer_to_list(Pos) ++
-     ") has to indicate an import form."}]]).
+     ") has to indicate a variable or has to be inside a function clause."}]]),
+    variable([{file,File},{ask_missing,true}]).
+
+error_case(true, {ErrAction, Arg1}, _) ->
+    error_action(ErrAction, Arg1);
+error_case(true, {ErrAction, Arg1, Arg2}, _) ->
+    error_action(ErrAction, Arg1, Arg2);
+error_case(false, _, {ErrAtom, ErrArgList}) ->
+    throw(?RefError(ErrAtom, ErrArgList)).
+
 
 %%% ============================================================================
 %%% Database independent functions
@@ -195,7 +207,9 @@ error_action(bad_importform_pos, _File, Pos) ->
 string(Args) -> string(text, "text: ", Args).
 
 %% @spec recfield_names(arglist()) -> string()
-%% @doc Returns target string value, which specifies the field names of a record.
+%% @doc Returns target string value, which specifies the field names
+%% of a record.
+
 recfield_names(Args) -> string(text, "record field names: ", Args).
 
 %% @spec string(arglist(), string()) -> string()
@@ -302,19 +316,16 @@ order(Args) ->
 convert_order(Order) ->
     [list_to_integer(T) || T <- string:tokens(Order, " ")].
 
-orderbylst(List) ->
-    if
-        is_list(List) ->
-            ListLength = length(List),
-            case lists:sort(List) =:= ?MISC:seq2(1, ListLength) of
-                true ->
-                    List;
-                false ->
-                    throw(?RefError(bad_order, [ListLength]))
-            end;
+orderbylst(List) when is_list(List) ->
+    ListLength = length(List),
+    case lists:sort(List) =:= ?MISC:seq2(1, ListLength) of
         true ->
-            throw(?RefError(order_not_list, []))
-    end.
+            List;
+        false ->
+            throw(?RefError(bad_order, [ListLength])) %@todo reask
+    end;
+orderbylst(_List) ->
+    throw(?RefError(order_not_list, [])).
 
 ask_missing(Args) ->
     case proplists:is_defined(ask_missing, Args) of
@@ -360,16 +371,19 @@ ask(Args, ArgFun, CollectAndCheckFun, AskErrorFmt) ->
     AEF2 = fun(Error, Data, unused) -> AskErrorFmt(Error, Data) end,
     ask(Args, ArgFun, CnC2, AEF2, unused).
 
+%@todo document
 ask2(Args, CollectAndCheckFun, AddInfos, ArgFun, AskErrorFmt, PreConvert, Data) ->
     ConvData = PreConvert(Data),
     try
         CollectAndCheckFun(ConvData, AddInfos)
     catch
-        % todo Should only catch thrown ?RefError(_, _) and ?LocalError(_, _)
+        % @todo Should only catch thrown ?RefError(_, _) and ?LocalError(_, _)
         throw:Error ->
             ErrorTxt = AskErrorFmt(Error, ConvData, AddInfos),
-            NewData = ?Args:ArgFun([{ask_missing, true}, {info_text, ErrorTxt}|Args]),
-            ask2(Args, CollectAndCheckFun, AddInfos, ArgFun, AskErrorFmt, PreConvert, NewData)
+            NewData = ?Args:ArgFun([ {ask_missing, true}, {info_text, ErrorTxt}
+                                     |proplists:delete(ArgFun,Args)]),
+            ask2(Args, CollectAndCheckFun, AddInfos, ArgFun, AskErrorFmt,
+                 PreConvert, NewData)
     end.
 
 % @todo document
@@ -377,16 +391,16 @@ algorithm(Args) ->
     NewArgs =
         case proplists:is_defined(algorithm, Args) of
             false ->
-                Qu = [{format,info},{text, "Please select an algorithm for clustering"}],
+                Qu = add_to_proplist(info,
+                                     "Please select an algorithm for clustering:",
+                                     false),
                 {_Args2, Qu2} = get_info_text(Args, Qu),
+                Algorithms = [agglom_attr, genetic],
                 Question = [Qu2] ++
-                           [[{format,radio},{text, "Agglomerative"},{default,false}],
-                            [{format,radio},{text, "Genetic"},{default,false}]],
+                    [add_to_proplist(radio, "Agglomerative", false),
+                     add_to_proplist(radio, "Genetic", false)],
                 Ans = ?Transform:question(Question),
-                Alg = case get_data(Ans, Question) of
-                          "Agglomerative" -> agglom_attr;
-                          "Genetic"       -> genetic
-                      end,
+                Alg = get_selected_entity(tl(Ans), Algorithms),
                 Args ++ [{algorithm, Alg}];
             true  ->
                 Args
@@ -407,13 +421,16 @@ entity(Args) ->
     NewArgs =
         case proplists:is_defined(entity, Args) of
             false ->
-                Qu = [{format,info},{text, "Please select an entity type for clustering"}],
+                Qu = add_to_proplist(info,
+                                    "Please select an entity type for clustering:",
+                                    false),
                 {_Args2, Qu2} = get_info_text(Args, Qu),
+                Types = [function, module],
                 Question = [Qu2] ++
-                           [[{format,radio},{text, "function"},{default,false}],
-                            [{format,radio},{text, "module"},{default,false}]],
+                           [add_to_proplist(radio, "function", false),
+                            add_to_proplist(radio, "module", false)],
                 Ans = ?Transform:question(Question),
-                Ent = list_to_atom(get_data(Ans, Question)),
+                Ent = get_selected_entity(tl(Ans), Types),
                 Args ++ [{entity, Ent}];
             true  ->
                 Args
@@ -451,6 +468,23 @@ funclusters_(Clusters) ->
     end.
 
 
+get_arg_data(Args, FunWithAsking, FunWithoutAsking) ->
+    case ask_missing(Args) of
+        true ->
+            FunWithAsking(Args);
+        _ ->
+            FunWithoutAsking(Args)
+    end.
+
+add_to_proplist(Format, Text, Default) ->
+    [{format, Format}, {text, Text}, {default, Default}].
+
+add_to_proplist(Format, Text, Default, Validator) ->
+    [{format,Format}, {text, Text}, {default, Default}, {validator, Validator}].
+
+create_fun_text(Name, Arity) ->
+    lists:flatten(?MISC:fun_text([Name, Arity])).
+
 %% @spec function(arglist()) -> node()
 %% @doc Returns the source function node. This value is specified in the
 %% argument list with
@@ -459,68 +493,41 @@ funclusters_(Clusters) ->
 %%  <li>`file' and `position' keys.</li>
 %% </ul>
 function(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getModule(Args),
-                case proplists:is_defined(function,NArgs) or proplists:is_defined(position,NArgs) of
-                    false ->
-                        Funs = ?Query:exec(module(NArgs), ?Mod:locals()),
-                        ?Check(Funs /= [], ?RefErr0r(no_fun)),
+    get_arg_data(Args, fun fun_with_ask/1, fun fun_from_arg_list/1).
 
-                        Qu = [{format,info},{text,"Please specify a function:"}],
-%                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu] ++
-                            [addtoproplist(?Fun:name(F),?Fun:arity(F))|| F <- Funs],
-                        Ans = ?Transform:question(Question),
-                        [Name,Arity] = getfundata(Ans,Question),
-                        %%io:format("Ans:~p~n", [Ans]),
-                        %%io:format("Name, arity:~p,~p~n", [Name, Arity]),
-                        NArgs ++ [{function,list_to_atom(Name)},
-                                  {arity,list_to_integer(Arity)}];
-                    _     ->
-                        NArgs
-                end;
-            false ->
-                Args
-         end,
-     ?CallArg(NewArgs, "Function",
+%% Function check wether the function is specified in the Args parameter, if no
+%% it asks the user to select a function from a list.
+fun_with_ask(Args) ->
+    NArgs = getModule(Args),
+    case proplists:is_defined(function,NArgs) or
+        proplists:is_defined(position,NArgs) of
+        false ->
+            Funs = ?Query:exec(module(NArgs),
+                               ?Query:seq([?Mod:file(),
+                                           ?File:forms(),
+                                           ?Form:func()])),
+            ?Check(Funs /= [], ?RefErr0r(no_fun)),
+            Qu = add_to_proplist(info, "Please specify a function:", false),
+            Question = [Qu] ++
+                [add_to_proplist(radio,
+                                 create_fun_text(?Fun:name(F),
+                                                 ?Fun:arity(F)),
+                                true)
+                 || F <- Funs],
+            Ans = ?Transform:question(Question),
+            get_selected_entity(tl(Ans), Funs);
+        _     ->
+            fun_from_arg_list(NArgs)
+    end.
+
+fun_from_arg_list(Args) ->
+    ?CallArg(Args, "Function",
              [{fun funbyname/4, [module, function, arity, ask_missing]},
               {fun funbypos/3, [file, position, ask_missing]},
               {fun funnode/1, [nodes]}]).
 
 funnode([Node])-> %@todo verify
     Node.
-
-getfundata(Ans,Question) ->
-    FunInList = proplists:get_value(yes,lists:zip(Ans,Question),no_answer),
-    case FunInList == no_answer of
-        false ->
-            Fun = proplists:get_value(text,FunInList),
-            string:tokens(Fun,"/");
-        true  ->
-            throw(?RefErr0r(cancelled))
-    end.
-
-addtoproplist(Name,Arity) ->
-    [{format,radio},
-     {text,lists:flatten(io_lib:format("~p~s~p",[Name,"/",Arity]))},
-     {default,false}].
-
-getfundatas(Ans,Question) ->
-    ValidAns = proplists:get_all_values(yes,lists:zip(Ans,Question)),
-    case ValidAns of
-        []          ->
-            throw(?RefErr0r(cancelled));
-        FunsInList  ->
-            Funs = [ proplists:get_value(text, FunInList) || FunInList <- FunsInList],
-            [list_to_tuple(string:tokens(Fun,"/")) || Fun <- Funs]
-    end.
-
-addtoproplist2(Name,Arity) ->
-    [{format,checkbox},
-     {text,lists:flatten(io_lib:format("~p~s~p",[Name,"/",Arity]))},
-     {default,true},{validator,function}].
 
 funbyname(Mod, Fun, Arity, AskMissing) ->
     Function = ?Query:exec(
@@ -529,11 +536,9 @@ funbyname(Mod, Fun, Arity, AskMissing) ->
 
     case Function of
         [Result] -> Result;
-        _       ->
-            case AskMissing of
-                true  -> error_action(bad_fun_name, [Mod,[Fun,Arity]]);
-                false -> throw(?RefError(fun_not_found, [Mod, Fun, Arity]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_fun_name, [Mod,[Fun,Arity]]},
+                               {fun_not_found, [Mod, Fun, Arity]})
     end.
 
 %% @todo Accept the `fun' token of implicit functions
@@ -543,48 +548,60 @@ funbypos(File, Pos, AskMissing) ->
                           ?File:token(Pos),
                           ?Token:expr()])),
 
+    ModName = ?Mod:name(modbyfile(File,true)),
+
     case Expr of
         [_Result] ->
             case ?Query:exec(Expr, ?Query:seq([?Expr:nameof(),
                                                ?Clause:form(),
                                                ?Form:func()])) of
-                  [Fun] -> Fun;
-                  []    -> funbyexportlist(Expr, Pos)
+                [Fun] -> Fun;
+                []    ->
+                    funbyexportlist(Expr, Pos, AskMissing, ModName)
             end;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_fun_pos, ?Mod:name(modbyfile(File,true)), Pos);
-                false -> throw(?RefError(pos_bad_type, ['fun', Pos]))
-            end
+        _         -> error_case(AskMissing,
+                                {bad_fun_pos, ModName, Pos},
+                                {pos_bad_type, ['fun', Pos]})
     end.
 
-funbyexportlist(Expr, Pos) ->
+funbyexportlist(Expr, Pos, AskMissing, ModName) ->
     case ?Query:exec(Expr, ?Expr:function()) of
        [Fun] -> Fun;
        [] ->
            case ?Query:exec(Expr, ?Query:seq(?Expr:parent(),
                                              ?Expr:function())) of
                [Fun] -> Fun;
-               [] -> funbyref(Expr, Pos)
+               [] -> funbyref(Expr, Pos, AskMissing, ModName)
            end
     end.
 
-funbyref(Expr, Pos) ->
+funbyref(Expr, Pos, AskMissing, ModName) ->
     case ?Query:exec(Expr, ?Expr:parent()) of
         [] -> throw(?RefError(pos_bad_type, ['fun', Pos]));
         [Par] ->
             case ?Expr:type(Par) of
                 T when T =:= application;
                        T =:= implicit_fun ->
-                    ?Query:exec1(Par, ?Expr:function(),
-                                 ?RefError(pos_bad_type, ['fun', Pos]));
+                    Func = ?Query:exec(Par, ?Expr:function()),
+                    case Func of
+                        [Result] -> Result;
+                        _        -> error_case(AskMissing,
+                                               {bad_fun_pos, ModName, Pos},
+                                               {pos_bad_type, ['fun', Pos]})
+                    end;
                 infix_expr ->
-                    ?Query:exec1(Par,
-                                 ?Query:seq(?Expr:parent(),
-                                            ?Expr:function()),
-                                 ?RefError(pos_bad_type, ['fun', Pos]));
-                _ ->
-                    throw(?RefError(pos_bad_type, ['fun', Pos]))
+                    Func = ?Query:exec(Par,
+                                       ?Query:seq(?Expr:parent(),
+                                                  ?Expr:function())),
+                    case Func of
+                        [Result] -> Result;
+                        _        -> error_case(AskMissing,
+                                               {bad_fun_pos, ModName, Pos},
+                                               {pos_bad_type, ['fun', Pos]})
+                    end;
+                _          -> error_case(AskMissing,
+                                         {bad_fun_pos, ModName, Pos},
+                                         {pos_bad_type, ['fun', Pos]})
             end
     end.
 
@@ -592,42 +609,63 @@ funbyref(Expr, Pos) ->
 %% @doc Returns the source function node list. This value is specified with
 %% `file' and `funlist' keys in the argument list.
 functions(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getFile(Args),
-                case proplists:is_defined(funlist, NArgs) of
-                    false ->
-                        Mod = modbyfile(proplists:get_value(file, NArgs), true),
-                        Funs = ?Query:exec(Mod, ?Mod:locals()),
-                        Qu = [{format,info},{text, "Please select the functions from the list:"}],
-                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu2] ++
-                            [addtoproplist2(?Fun:name(F),?Fun:arity(F))|| F <- Funs],
-                        Ans = ?Transform:question(Question),
-                        NArgs ++ [{funlist, [{list_to_atom(N),list_to_integer(A)}
-                                             || {N,A} <- getfundatas(Ans,Question)]}];
-                    true  ->
-                        NArgs
-                end;
-            false ->
-                Args
-        end,
+    get_arg_data(Args, fun funs_with_ask/1, fun funs_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Function list",
+funs_with_ask(Args) ->
+    NArgs = getFile(Args),
+    case proplists:is_defined(funlist, NArgs) of
+        false ->
+            Funs = ?Query:exec(module(NArgs),
+                               ?Query:seq([?Mod:file(),
+                                           ?File:forms(),
+                                           ?Form:func()])),
+            Qu = add_to_proplist(info,
+                                 "Please select the functions from the list:",
+                                 false),
+            {_Args2, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(checkbox,
+                                 create_fun_text(?Fun:name(F),
+                                              ?Fun:arity(F)),
+                                 true,
+                                 function)
+                 || F <- Funs],
+            Ans = ?Transform:question(Question),
+            get_selected_entities(tl(Ans), Funs);
+        true  ->
+            funs_from_arg_list(NArgs)
+    end.
+
+funs_from_arg_list(Args) ->
+    ?CallArg(Args, "Function list",
              [{fun funsbyname/2, [file, funlist]},
               {fun funbypos_/2, [file, position]},
               {fun funnodes/1, [nodes]}]).
+
+%% The function returns the first selected entity.
+get_selected_entity(Ans, Entities) ->
+    hd(get_selected_entities(Ans, Entities)).
+
+%% The function returns every selected entity if there is
+%% any. Oterwise throws an exception.
+get_selected_entities(Ans, Entities) ->
+    SelectedEnts = proplists:get_all_values(yes,lists:zip(Ans, Entities)),
+    case SelectedEnts of
+        [] ->
+            throw(?RefErr0r(cancelled));
+        _  ->
+            SelectedEnts
+    end.
+
 
 funnodes(Nodes)-> %@todo verify
     Nodes.
 
 funsbyname(File, Funs) ->
-    Mod = ?Query:exec1(
-             ?Query:seq([?File:find(File),
-                         ?File:module()]),
-             ?RefError(file_not_module, [File])),
-    [?Query:exec1(Mod, ?Mod:local(Fun, Arity),
+    Mod = ?Query:exec1(?Query:seq([?File:find(File), ?File:module()]),
+                       ?RefError(file_not_module, [File])),
+    [?Query:exec1(Mod,
+                  ?Mod:local(Fun, Arity),
                   ?RefError(fun_not_found, [Fun, Arity])) ||
         {Fun, Arity} <- Funs].
 
@@ -642,62 +680,33 @@ funbypos_(File,Pos) ->
 %%  <li>`file' and `position' keys.</li>
 %% </ul>
 macro(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getFile(Args),
-                case proplists:is_defined(macro, NArgs) or proplists:is_defined(position, NArgs) of
-                    false ->
-                        File = filebyname(proplists:get_value(file, NArgs), true),
-                        Macros = ?Query:exec(File, ?File:macros()),
-                        Qu = [{format,info},{text,"Please specify a macro:"}],
-                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu2] ++
-                            [add_to_proplist(?Macro:name(M)) || M <- Macros],
-                        Ans = ?Transform:question(Question),
-                        NArgs ++ [{macro, get_data(Ans, Question)}];
-                    _     ->
-                        NArgs
-                end;
-            false ->
-                Args
-        end,
+    get_arg_data(Args, fun mac_with_ask/1, fun mac_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Macro",
+mac_with_ask(Args) ->
+    NArgs = getFile(Args),
+    case proplists:is_defined(macro, NArgs) or
+        proplists:is_defined(position, NArgs) of
+        false ->
+            File = filebyname(proplists:get_value(file, NArgs), true),
+            Macros = ?Query:exec(File, ?File:macros()),
+            Qu = add_to_proplist(info, "Please specify a macro:", false),
+            {_Args2, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(radio, ?Macro:name(M), false) || M <- Macros],
+            Ans = ?Transform:question(Question),
+            get_selected_entity(tl(Ans), Macros);
+        _     ->
+            mac_from_arg_list(NArgs)
+    end.
+
+mac_from_arg_list(Args) ->
+    ?CallArg(Args, "Macro",
              [{fun macbyname/3, [file, macro, ask_missing]},
               {fun macbypos/3, [file, position, ask_missing]},
               {fun macnode/1, [nodes]}]).
 
 macnode([Node])-> %@todo verify
     Node.
-
-add_to_proplist(Name) ->
-    [{format,radio},
-     {text,lists:flatten(Name)},
-     {default,false}].
-
-add_to_proplist2(Name) ->
-    [{format,checkbox},
-     {text, lists:flatten(Name)},
-     {default,false}].
-
-get_data(Ans, Question) ->
-    EntInList = proplists:get_value(yes,lists:zip(Ans,Question),no_answer),
-    case EntInList == no_answer of
-        false ->
-            Entity = proplists:get_value(text,EntInList),
-            Entity;
-        true  ->
-            throw(?RefErr0r(cancelled))
-    end.
-
-get_datas(Ans, Question) ->
-    ValidAns = proplists:get_all_values(yes, lists:zip(Ans,Question)),
-    case ValidAns of
-        []           -> throw(?RefErr0r(cancelled));
-        EntsInList ->
-            [proplists:get_value(text, EntInList) || EntInList <- EntsInList]
-    end.
 
 macbyname(File, Macro, AskMissing) ->
     Mac = ?Query:exec(
@@ -706,73 +715,78 @@ macbyname(File, Macro, AskMissing) ->
 
     case Mac of
         [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_macro_name, [File, Macro]);
-                false -> throw(?RefError(mac_not_found, [Macro]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_macro_name, [File, Macro]},
+                               {mac_not_found, [Macro]})
     end.
 
 macbypos(File, Pos, AskMissing) ->
-    T = ?Query:exec(
-         ?Query:seq([?File:find(File),
-                     ?File:token(Pos)])),
+    T = ?Query:exec(?Query:seq([?File:find(File), ?File:token(Pos)])),
 
     case T of
         [_Result] ->
             case ?Query:exec([T], [{llex,back},mref]) of
                 [Macro] -> Macro;
-                []      -> Mac = ?Query:exec([T], ?Query:seq([
-                                          [{{flex,back}, {type, '==', macro}}] ])),
-                           case Mac of
-                               [Res] -> Res;
-                               _     ->
-                                   case AskMissing of
-                                       true  -> error_action(bad_macro_pos, File, Pos);
-                                       false -> throw(?RefError(pos_bad_type, [mac, Pos]))
-                                   end
-                           end
+                []      ->
+                    Mac =
+                        ?Query:exec([T],
+                                    ?Query:seq([[{{flex,back},
+                                                  {type, '==', macro}}] ])),
+                    case Mac of
+                        [Res] -> Res;
+                        _     -> error_case(AskMissing,
+                                            {bad_macro_pos, File, Pos},
+                                            {pos_bad_type, [mac, Pos]})
+                    end
             end;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_macro_pos, File, Pos);
-                false -> throw(?RefError(pos_bad_type, [mac, Pos]))
-            end
+        _         -> error_case(AskMissing,
+                                {bad_macro_pos, File, Pos},
+                                {pos_bad_type, [mac, Pos]})
     end.
 
 %% @spec macuse(arglist()) -> node()
 %% @doc Returns the source macro use node. This value is specified in the
 %% argument list with `file' and `position' keys.
 macuse(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getFile(Args),
-                case proplists:is_defined(position, NArgs) of
-                    false ->
-                        File = filebyname(proplists:get_value(file, NArgs), true),
-                        Macros = ?Query:exec(File, ?Query:seq(?File:macros(), [{mref,back},{llex,2}])),
-%                       MacUses = {mref,back} -> {llex,2}
-                        ?Check(Macros /= [], ?RefError(no_macuse,[])),
-                        Qu = [{format,info},{text,"Please specify a macro:"}],
-                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu2] ++
-                            [add_to_proplist(io_lib:fwrite("~s:~p",
-                                                 [?Token:text(M),element(1,?Token:pos(File, M))]))
-                                || M <- Macros],
-                        Ans = ?Transform:question(Question),
-                        Macro = get_data(Ans,Question),
-                        [_, Pos] = string:tokens(Macro, ":"),
-                        NArgs ++ [{position, list_to_integer(Pos)}];
-                    true  ->
-                        NArgs
-                end;
-            false ->
-                Args
-        end,
+    get_arg_data(Args, fun macuse_with_ask/1, fun macuse_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Macro",
-             [{fun macusebypos/3, [file, position, ask_missing]}]).
+macuse_with_ask(Args) ->
+    NArgs = getFile(Args),
+    NewArgs =
+        case proplists:is_defined(position, NArgs) of
+            false ->
+                File = filebyname(proplists:get_value(file, NArgs), true),
+                Macros =
+                    ?Query:exec(File, ?Query:seq(?File:macros(),
+                                                 [{mref,back}, {llex,2}])),
+                                                % MacUses = {mref,back} -> {llex,2}
+                MacData =
+                    [{?Token:text(M), element(1, ?Token:pos(File, M))} ||
+                        M <- Macros],
+                ?Check(Macros /= [], ?RefError(no_macuse,[])),
+                Qu = add_to_proplist(info, "Please specify a macro:", false),
+                {_Args2, Qu2} = get_info_text(Args, Qu),
+                Question = [Qu2] ++
+                    [add_to_proplist(radio,
+                                     io_lib:format("~s:~p", [Text, Pos]),
+                                     false)
+                     || {Text, Pos} <- MacData],
+                Ans = ?Transform:question(Question),
+                {_, Pos} = get_selected_entity(tl(Ans), MacData),
+                NArgs ++ [{position, Pos}];
+            true  ->
+                NArgs
+        end,
+    macuse_from_arg_list(NewArgs).
+
+macuse_from_arg_list(Args) ->
+    ?CallArg(Args, "Macro",
+             [{fun macusebypos/3, [file, position, ask_missing]},
+              {fun macusenode/1, [nodes]}]).
+
+macusenode([Node])-> %@todo verify
+    Node.
+
 
 macusebypos(File, Pos, AskMissing) ->
     P= ?Query:exec(
@@ -784,44 +798,43 @@ macusebypos(File, Pos, AskMissing) ->
         [_Result] ->
             case ?Query:exec([P], [mref]) of
                 [_] -> P;
-                []  ->
-                    case AskMissing of
-                        true  -> error_action(bad_macuse_pos, File, Pos);
-                        false -> throw(?RefError(pos_bad_type, [mac, Pos]))
-                    end
+                []  -> error_case(AskMissing,
+                                  {bad_macuse_pos, File, Pos},
+                                  {pos_bad_type, [mac, Pos]})
             end;
-        _         ->
-            case AskMissing of
-                true  -> error_action(bad_macuse_pos, File, Pos);
-                false -> throw(?RefError(pos_bad_type, [mac, Pos]))
-            end
+        _         -> error_case(AskMissing,
+                                {bad_macuse_pos, File, Pos},
+                                {pos_bad_type, [mac, Pos]})
     end.
 
 %% @spec macros(arglist()) -> [node()]
 %% @doc Returns the source macro node list. This value is specified with
 %% `file' and `maclist' keys in the argument list.
 macros(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getFile(Args),
-                case proplists:is_defined(maclist, NArgs) of
-                    false ->
-                        File = proplists:get_value(file, NArgs),
-                        Macros =?Query:exec(?Query:seq(?File:find(File), ?File:macros())),
-                        Qu = [{format,info},{text,"Please select the macros from the list:"}],
-                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu2] ++ [add_to_proplist2(?Macro:name(Mac)) ||  Mac <- Macros],
-                        Ans = ?Transform:question(Question),
-                        NArgs ++ [{maclist, [list_to_atom(MacName) || MacName <- get_datas(Ans, Question)]}];
-                    true  ->
-                        NArgs
-                end;
-            false ->
-                Args
-        end,
+    get_arg_data(Args, fun macs_with_ask/1, fun macs_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Macro list",
+
+macs_with_ask(Args) ->
+    NArgs = getFile(Args),
+    case proplists:is_defined(maclist, NArgs) of
+        false ->
+            File = proplists:get_value(file, NArgs),
+            Macros =?Query:exec(?Query:seq(?File:find(File), ?File:macros())),
+            Qu = add_to_proplist(info,
+                                 "Please select the macros from the list:",
+                                 false),
+            {_Args2, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(checkbox, ?Macro:name(Mac), false)
+                 ||  Mac <- Macros],
+            Ans = ?Transform:question(Question),
+            get_selected_entities(tl(Ans), Macros);
+        true  ->
+            macs_from_arg_list(NArgs)
+    end.
+
+macs_from_arg_list(Args) ->
+    ?CallArg(Args, "Macro list",
              [{fun macsbyname/2, [file, maclist]},
               {fun macnodes/1, [nodes]}]).
 
@@ -841,75 +854,99 @@ macsbyname(File, Macs) ->
 %%  <li>`file' and `position' keys.</li>
 %% </ul>
 record(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  -> getRecord(Args);
-            false -> Args
-        end,
+    get_arg_data(Args, fun record_with_ask/1, fun record_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Record",
+%% @doc This function asks the user to specify a record if it isn't
+%% specified yet.
+
+record_with_ask(Args) ->
+    NArgs = getFile(Args),
+
+    case proplists:is_defined(record, NArgs) or
+        proplists:is_defined(position, NArgs) of
+        false ->
+            File = filebyname(proplists:get_value(file, NArgs), true),
+            Records = ?Query:exec(File, ?File:records()),
+            Qu = add_to_proplist(info, "Please specify a record:", false),
+            {_Args2, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(radio,
+                                 io_lib:format("~p",[?Rec:name(R)]),
+                                 false)
+                 || R <- Records],
+            Ans = ?Transform:question(Question),
+            get_selected_entity(tl(Ans), Records);
+        _     ->
+            record_from_arg_list(NArgs)
+    end.
+
+record_from_arg_list(Args) ->
+    ?CallArg(Args, "Record",
              [{fun recbyname/3, [file, record, ask_missing]},
               {fun recbypos/3,  [file, position, ask_missing]},
               {fun recnode/1, [nodes]}]).
 
-recnode([Node])-> %@todo verify
-    Node.
+%% @doc This function asks the user to specify a record if it isn't
+%% specified yet and returns an extended ArgList.
 
-recbyname(File, Record, AskMissing) ->
-    Rec = ?Query:exec(
-                 ?Query:seq([?File:find(File),
-                             ?Rec:find(Record)])),
-
-    case Rec of
-        [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_rec_name, [File, Record]);
-                false -> throw(?RefError(rec_not_found, [Record]))
-            end
-    end.
-
-recbypos(File, Pos, AskMissing) ->
-    [Token] = ?Query:exec(
-                  ?Query:seq(?File:find(File),
-                             ?File:token(Pos))),
-    Rec = [Form || Form <- ?Query:exec(Token, ?Token:form()),
-               ?Form:type(Form) == record], %rec-ben hasznalt rec?
-    case ?Query:exec(Rec, ?Form:record()) of
-        [Result] -> Result;
-        []       -> Record = ?Query:exec(Token,
-                              ?Query:seq([?Token:expr(),
-                                         ?Expr:record()])),
-                    case Record of
-                        [Result] -> Result;
-                        _        ->
-                            case AskMissing of
-                                true  -> error_action(bad_rec_pos, File, Pos);
-                                false -> throw(?RefError(pos_bad_type, [rec, Pos]))
-                            end
-                    end
-    end.
-
-%% @doc This function asks the user to specify a record if it isn't specified yet.
 getRecord(Args) ->
     NArgs = getFile(Args),
-
     NewArgs =
-        case proplists:is_defined(record, NArgs) or proplists:is_defined(position, NArgs) of
+        case proplists:is_defined(record, NArgs)
+            or proplists:is_defined(position, NArgs) of
             false ->
                 File = filebyname(proplists:get_value(file, NArgs), true),
                 Records = ?Query:exec(File, ?File:records()),
                 Qu = [{format,info},{text,"Please specify a record:"}],
                 {_Args2, Qu2} = get_info_text(Args, Qu),
                 Question = [Qu2] ++
-                    [add_to_proplist(io_lib:format("~p",[?Rec:name(R)])) || R <- Records],
+                    [add_to_proplist(radio,
+                                     io_lib:format("~p",[?Rec:name(R)]),
+                                     false)
+                     || R <- Records],
                 Ans = ?Transform:question(Question),
-                NArgs ++ [{record, list_to_atom(get_data(Ans, Question))}];
+                SelectedRec = get_selected_entity(tl(Ans), Records),
+                NArgs ++ [{record, ?Rec:name(SelectedRec)}];
             _     ->
                 NArgs
         end,
-
     NewArgs.
+
+recnode([Node])-> %@todo verify
+    Node.
+
+recbyname(File, Record, AskMissing) ->
+    Rec = ?Query:exec(
+             ?Query:seq([?File:find(File),
+                         ?Rec:find(Record)])),
+
+    case Rec of
+        [Result] -> Result;
+        _        -> error_case(AskMissing,
+                               {bad_rec_name, [File, Record]},
+                               {rec_not_found, [Record]})
+    end.
+
+recbypos(File, Pos, AskMissing) ->
+    Token = ?Query:exec1(
+                 ?Query:seq(?File:find(File),
+                            ?File:token(Pos)),
+                 ?RefError(no_token, Pos)),
+    Rec = [Form || Form <- ?Query:exec(Token, ?Token:form()),
+                   ?Form:type(Form) == record], %rec-ben hasznalt rec?
+    case ?Query:exec(Rec, ?Form:record()) of
+        [Result] -> Result;
+        []       -> Record = ?Query:exec(Token,
+                                         ?Query:seq([?Token:expr(),
+                                                     ?Expr:record()])),
+                    case Record of
+                        [Result] -> Result;
+                        _        -> error_case(AskMissing,
+                                               {bad_rec_pos, File, Pos},
+                                               {pos_bad_type, [rec, Pos]})
+                    end
+    end.
+
 
 %% @spec record_field(arglist()) -> node()
 %% @doc Returns the source record field node. This value is
@@ -920,30 +957,32 @@ getRecord(Args) ->
 %% </ul>
 
 record_field(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true ->
-                NArgs = getRecord(Args),
-                case proplists:is_defined(recfield, NArgs) or proplists:is_defined(position, NArgs) of
-                    false ->
-                        File = proplists:get_value(file, NArgs),
-                        Record = recbyname(File, proplists:get_value(record, NArgs),
-                                           ask_missing(NArgs)),
-                        RecFields = ?Query:exec(Record, ?Rec:fields()),
-                        Qu = [{format,info},{text,"Please specify a record field:"}],
-                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu2] ++
-                            [add_to_proplist(atom_to_list(?RecField:name(RF))) || RF <- RecFields],
-                        Ans = ?Transform:question(Question),
-                        NArgs ++ [{recfield, list_to_atom(get_data(Ans, Question))}];
-                    _     ->
-                        NArgs
-                end;
-            false ->
-                Args
-        end,
+    get_arg_data(Args, fun recfield_with_ask/1, fun recfield_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Record field",
+recfield_with_ask(Args) ->
+    NArgs = getRecord(Args),
+    case proplists:is_defined(recfield, NArgs) or
+        proplists:is_defined(position, NArgs) of
+        false ->
+            File = proplists:get_value(file, NArgs),
+            Record = recbyname(File, proplists:get_value(record, NArgs),
+                               ask_missing(NArgs)),
+            RecFields = ?Query:exec(Record, ?Rec:fields()),
+            Qu = add_to_proplist(info,"Please specify a record field:",false),
+            {_Args2, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(radio,
+                                 io_lib:format("~p", [?RecField:name(RF)]),
+                                 false)
+                 || RF <- RecFields],
+            Ans = ?Transform:question(Question),
+            get_selected_entity(tl(Ans), RecFields);
+        _     ->
+            recfield_from_arg_list(NArgs)
+    end.
+
+recfield_from_arg_list(Args) ->
+    ?CallArg(Args, "Record field",
              [{fun recfieldbyname/4, [file, record, recfield, ask_missing]},
               {fun recfieldbypos/3,  [file, position, ask_missing]},
               {fun fldnode/1, [nodes]}]).
@@ -960,55 +999,55 @@ recfieldbyname(File, Record, Field, AskMissing) ->
     RecField = ?Query:exec(Rec, ?Rec:field(Field)),
     case RecField of
         [Res] -> Res;
-        _     ->
-            case AskMissing of
-                true  -> error_action(bad_recfield_name, File, Record);
-                false -> throw(?RefError(recfld_not_found, [Record,Field]))
-            end
+        _     -> error_case(AskMissing,
+                            {bad_recfield_name, File, Record},
+                            {recfld_not_found, [Record,Field]})
     end.
-
 
 recfieldbypos(File, Pos, AskMissing) ->
     [Token] = ?Query:exec(?Query:seq(?File:find(File), ?File:token(Pos))),
     case ?Query:exec(Token, ?Query:seq(?Token:typexp(), ?Expr:fielddef())) of
         [Field]  -> Field;
-        []       -> RecField = ?Query:exec(Token,
-                                    ?Query:seq(?Token:expr(), ?Expr:field())),
-                    case RecField of
-                        [Result] -> Result;
-                        _         ->
-                            case AskMissing of
-                                true  -> error_action(bad_recfield_pos, File, Pos);
-                                false -> throw(?RefError(pos_bad_type, [recfield, Pos]))
-                            end
-                    end
+        []       ->
+            RecField = ?Query:exec(Token,
+                                   ?Query:seq(?Token:expr(), ?Expr:field())),
+            case RecField of
+                [Result] -> Result;
+                _        -> error_case(AskMissing,
+                                       {bad_recfield_pos, File, Pos},
+                                       {pos_bad_type, [recfield, Pos]})
+            end
     end.
 
 %% @spec records(arglist()) -> [node()]
 %% @doc Returns the source record node list. This value is specified with
 %% `file' and `reclist' keys in the argument list.
 records(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getFile(Args),
-                case proplists:is_defined(reclist, NArgs) of
-                    false ->
-                        File = proplists:get_value(file, NArgs),
-                        Records =?Query:exec(?Query:seq(?File:find(File), ?File:records())),
-                        Qu = [{format,info},{text,"Please select the records from the list:"}],
-                        {_Args2, Qu2} = get_info_text(Args, Qu),
-                        Question = [Qu2] ++ [add_to_proplist2(atom_to_list(?Rec:name(Rec))) ||  Rec <- Records],
-                        Ans = ?Transform:question(Question),
-                        NArgs ++ [{reclist, [list_to_atom(RecName) || RecName <- get_datas(Ans, Question)]}];
-                    true  ->
-                        NArgs
-                end;
-            false ->
-                Args
-        end,
+    get_arg_data(Args, fun records_with_ask/1, fun records_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Record list",
+records_with_ask(Args) ->
+    NArgs = getFile(Args),
+    case proplists:is_defined(reclist, NArgs) of
+        false ->
+            File = proplists:get_value(file, NArgs),
+            Records =?Query:exec(?Query:seq(?File:find(File), ?File:records())),
+            Qu = add_to_proplist(info,
+                                 "Please select the records from the list:",
+                                 false),
+            {_Args2, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(checkbox,
+                                 io_lib:format("~p", [?Rec:name(Rec)]),
+                                 false)
+                 ||  Rec <- Records],
+            Ans = ?Transform:question(Question),
+            get_selected_entities(tl(Ans), Records);
+        true  ->
+            records_from_arg_list(NArgs)
+    end.
+
+records_from_arg_list(Args) ->
+    ?CallArg(Args, "Record list",
              [{fun recsbyname/2, [file, reclist]},
               {fun recnodes/1, [nodes]}]).
 
@@ -1047,11 +1086,12 @@ variable(Args, Transformation) ->
              [{fun varbypos/4, [file, position, ask_missing, transform]},
               {fun varnode/1, [nodes]}]).
 
-var_question(V, F) ->
-    [File] = ?Query:exec(?File:find(F)),
-    [Token] = ?Query:exec(V, ?Query:seq(?Var:bindings(), [elex])),
+get_var_data(Var, File) ->
+    [Token] = ?Query:exec(Var, ?Query:seq(?Var:bindings(), [elex])),
     {_, Pos} = ?Token:pos(File, Token),
-    add_to_proplist(io_lib:format("~s~s~p", [?Var:name(V), ":", Pos])).
+    {Pos, ?Var:name(Var)}.
+%%    ?d(io_lib:format("~s:~p", [?Var:name(V), Pos])),
+%%    add_to_proplist(radio, io_lib:format("~s:~p", [?Var:name(V), Pos]), false).
 
 varbypos(File, Pos, AskMissing, Transformation) ->
     Variable = ?Query:exec(
@@ -1064,35 +1104,45 @@ varbypos(File, Pos, AskMissing, Transformation) ->
         _        ->
             case AskMissing of
                 true  ->
-                    error_action(bad_var_pos, File, Pos),
-                    FunCl = ?Query:exec1(
-                                ?Query:seq([?File:find(File),
-                                            ?File:token(Pos),
-                                            ?Token:expr(), ?Expr:clause()]),
-                                ?RefError(pos_bad_type, ['variable',Pos])),
+                    ErrorText = "The given position ("
+                        ++ integer_to_list(Pos) ++
+                        ") has to indicate a variable.\n",
+                    [FileNode] = ?Query:exec(?File:find(File)),
+                    FunCl = ?Query:exec1(FileNode,
+                                         ?Query:seq([?File:token(Pos),
+                                                     ?Token:expr(),
+                                                     ?Expr:clause()]),
+                                         ?LocalError(not_inside_funcl, [])),
                     FunForm = ?Query:exec(FunCl, ?Clause:form()),
                     AllVars = ?Query:exec(FunForm,
-                                   ?Query:seq([?Form:clauses(),
-                                               ?Clause:variables()])),
+                                          ?Query:seq([?Form:clauses(),
+                                                      ?Clause:variables()])),
                     PatternVars = ?Query:exec(FunForm,
-                                       ?Query:seq([?Form:clauses(),
-                                                   ?Clause:patterns(),
-                                                   ?Expr:varbinds()])),
+                                              ?Query:seq([?Form:clauses(),
+                                                          ?Clause:patterns(),
+                                                          ?Expr:varbinds()])),
                     Vars =
                         case Transformation of
                             eliminate -> AllVars -- PatternVars;
                             rename    -> AllVars;
                             _         -> throw(?RefErr0r(unknown_exception))
                         end,
-                    ?Check(Vars /= [], ?RefError(no_elim_var, [])),
-                    Qu = [{format,info},{text,"Please specify a variable:"}],
+                    ?Check(Vars /= [], ?RefError(no_var, [])),
+                    VarsData =
+                        [ get_var_data(V, FileNode) || V <- Vars],
+                    Qu = add_to_proplist(info,
+                                         ErrorText ++
+                                             "Please specify a variable:",
+                                         false),
                     Question = [Qu] ++
-                               [var_question(V, File) || V <- Vars],
+                        [add_to_proplist(radio,
+                                         io_lib:format("~s:~p",[N, P]),
+                                         false)
+                         || {P, N} <- VarsData],
                     Ans = ?Transform:question(Question),
-                    Var = get_data(Ans, Question),
-                    [_, Position] = string:tokens(Var, ":"),
-                    variable([{file,File},{position,list_to_integer(Position)},
-                              {ask_missing,true}], eliminate);
+                    {Position, _} = get_selected_entity(tl(Ans), VarsData),
+                    variable([{file,File},{position, Position},
+                              {ask_missing,true}],eliminate);
                 false -> throw(?RefError(pos_bad_type, ['variable',Pos]))
             end
     end.
@@ -1186,31 +1236,64 @@ exprbypos(File, Pos) ->
 %% @doc Returns the source file node. This value is specified with
 %% a `file' key in the argument list.
 file(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  -> getFile(Args);
-            false -> Args
-        end,
+    get_arg_data(Args, fun file_with_ask/1, fun file_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Source file",
+file_with_ask(Args) ->
+    case proplists:is_defined(file, Args) of
+        false ->
+            Question =
+                add_to_proplist(textbox,
+                                "Please type in the path of source file:",
+                                -1,
+                                module),
+            {_, Question2} = get_info_text(Args, Question),
+            [NewFile] = ?Transform:question([Question2]),
+            filebyname(NewFile, true);
+        _     ->
+            file_from_arg_list(Args)
+    end.
+
+
+file_from_arg_list(Args) ->
+    ?CallArg(Args, "Source file",
              [{fun filebyname/2, [file, ask_missing]},
               {fun filenode/1, [nodes]}]).
 
+%% This function asks the user to specify a source file if it isn't
+%% specified yet and returns the extended ArgList.
+getFile(Args) ->
+    case (not ask_missing(Args)) orelse proplists:is_defined(file, Args) of
+        false ->
+            Question =
+                add_to_proplist(textbox,
+                                "Please type in the path of source file:",
+                                -1,
+                                module),
+            {_, Question2} = get_info_text(Args, Question),
+            [NewFile] = ?Transform:question([Question2]),
+            FileNode = filebyname(NewFile, true),
+            [{file, ?File:path(FileNode)} | Args];
+        _     ->
+            Args
+    end.
+
 filenode([Node])-> %@todo verify
-    Node.
+    case ?Syn:node_type(Node) of
+	file ->
+	    Node;
+	_ ->
+	     hd([File || {file, File} <- ?Syn:root_path(Node)])
+    end.
 
 filebyname(File, AskMissing) ->
     F = ?Query:exec(?File:find(File)),
 
     case F of
         [Result] -> Result;
-        _         ->
-            case AskMissing of
-                true  -> error_action(bad_file, File);
-                false -> throw(?RefError(file_not_present, [File]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_file, File},
+                               {file_not_present, [File]})
     end.
-
 
 %% @spec form(arglist()) -> node()
 %% @doc Returns the form node. This value is specified with
@@ -1226,63 +1309,65 @@ formbypos(File, Pos) ->
        ?RefError(illegal_pos, [File, Pos])).
 
 import_form(Args) ->
-    NewArgs = getFile(Args),
+    get_arg_data(Args, fun impform_with_ask/1, fun impform_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Import form",
+impform_with_ask(Args) ->
+    NArgs = getFile(Args),
+    case proplists:is_defined(position, NArgs) of
+        false ->
+            Forms = ?Query:exec(
+                       ?Query:seq([?File:find(proplists:get_value(file,NArgs)),
+                                   ?File:forms()])),
+            Imports = lists:filter(fun(F) -> ?Form:type(F) == import end,Forms),
+            Qu = add_to_proplist(info, "Please specify an import:", false),
+            {_, Qu2} = get_info_text(Args, Qu),
+            Question = [Qu2] ++
+                [add_to_proplist(radio, create_impform_text(F), false)
+                 || F <- Imports],
+            Ans = ?Transform:question(Question),
+            get_selected_entity(tl(Ans), Imports);
+        true  -> impform_from_arg_list(NArgs)
+    end.
+
+impform_from_arg_list(Args) ->
+    ?CallArg(Args, "Import form",
             [{fun import_form_bypos/3, [file, position, ask_missing]},
              {fun impnode/1, [nodes]}]).
 
 impnode([Node])-> %@todo verify
     Node.
 
-import_form_bypos(File, Position, Interaction) ->
-    Form = ?Query:exec1(
+import_form_bypos(File, Position, AskMissing) ->
+    Form = ?Query:exec(
                ?Query:seq([?File:find(File),
                            ?File:token(Position),
-                           ?Token:form()]),
-               ?RefError(illegal_pos, [File, Position])),
-
-    case ?Form:type(Form) == import of
-        true        -> Form;
-        false       ->
-            case Interaction of
-                true  -> error_action(bad_importform_pos, File, Position),
-                         Forms = ?Query:exec(
-                                     ?Query:seq([?File:find(File),?File:forms()])),
-                         Imports = lists:filter(fun(F) -> ?Form:type(F) == import end, Forms),
-                         Qu = [{format,info},{text,"Please specify an import:"}],
-                         Question = [Qu] ++
-                                    [add_import_form_question(F) || F <- Imports],
-                         Ans = ?Transform:question(Question),
-                         [[Pos], _, _] = string:tokens(get_data(Ans, Question),":"),
-                         import_form([{file, File},{position,list_to_integer(Pos)},{ask_missing,true}]);
-                false -> throw(?RefError(illegal_pos, [File, Position]))
-            end
+                           ?Token:form()])),
+    case Form of
+        [Result] ->
+            case ?Form:type(Result) == import of
+                true  -> Result;
+                false -> error_case(AskMissing,
+                                    {bad_importform_pos, File, Position},
+                                    {illegal_pos, [File, Position]})
+            end;
+        _        ->
+            error_case(AskMissing,
+                       {bad_importform_pos, File, Position},
+                       {illegal_pos, [File, Position]})
     end.
 
-add_import_form_question(Form) ->
+create_impform_text(Form) ->
     [Module] = ?Query:exec(Form, ?Form:expr(1)),
     [FormToken] = ?Query:exec(Form, [{flex,2}]),
-    Funlist = ?Query:exec(Form, ?Query:seq([?Form:expr(2),?Expr:children(),?Expr:function()])),
-    FunListText = [list_to_atom(atom_to_list(?Fun:name(F)) ++ "/" ++ integer_to_list(?Fun:arity(F)))
-                  || F <- Funlist],
-    [{format,radio},{text,io_lib:fwrite("~p:~s:~p",[element(1,?Token:pos(FormToken)),
-                                                    ?Expr:value(Module),FunListText])}].
-
-
-%% This function asks the user to specify a source file if it isn't specified yet.
-getFile(Args) ->
-   case (not ask_missing(Args)) orelse proplists:is_defined(file, Args) of
-        false ->
-            [NewFile] = ?Transform:question([[{format,textbox},
-                                             {text, "Please type in the path of source file:"},
-                                             {validator,file},
-                                             {default,-1}]]),
-            NewArgs = Args ++ [{file, NewFile}],
-            NewArgs;
-        _     ->
-            Args
-    end.
+    FunList =
+        ?Query:exec(Form, ?Query:seq([?Form:expr(2),
+                                      ?Expr:children(),
+                                      ?Expr:function()])),
+    FunInfos = [ [?Fun:name(Fun), ?Fun:arity(Fun)] || Fun <- FunList],
+    FunsText = ["[" | ?MISC:funlist_text(FunInfos)] ++ "]",
+    io_lib:format("~p:~s:~s",
+                  [element(1, ?Token:pos(FormToken)),
+                   ?Expr:value(Module), FunsText]).
 
 %% @spec macname(arglist()) -> string()
 %% @doc Returns the target macro name. This value is specified with
@@ -1293,6 +1378,8 @@ macname(Args) ->
     ?CallArg(NewArgs, "Target macro name", [{fun macrostr/1, [macname]}]).
 
 
+convert_mac_name(NewName)when is_atom(NewName) ->
+    NewName;
 convert_mac_name(NewName) ->
     case string:to_upper(hd(NewName)) =:= hd(NewName) of
         false -> list_to_atom(NewName);
@@ -1315,46 +1402,60 @@ macrostr(Name) when is_list(Name) ->
 %%  <li>a `file' key.</li>
 %% </ul>
 module(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  -> getModule(Args);
-            false -> Args
-        end,
+    get_arg_data(Args, fun module_with_ask/1, fun module_from_arg_list/1).
 
-    ?CallArg(NewArgs, "Source module",
+module_with_ask(Args) ->
+    case proplists:is_defined(module, Args)
+        or proplists:is_defined(file, Args) of
+        false ->
+            Question = add_to_proplist(textbox,
+                                       "Please type in the module name:",
+                                       -1,
+                                       module),
+            {_, Question2} = get_info_text(Args, Question),
+            [NewMod] = ?Transform:question([Question2]),
+            modbyname(list_to_atom(NewMod), true);
+        true  ->
+            module_from_arg_list(Args)
+    end.
+
+module_from_arg_list(Args) ->
+    ?CallArg(Args, "Source module",
              [{fun modbyname/2, [module, ask_missing]},
               {fun modbypos/3,  [file, position, ask_missing]},
               {fun modbyfile/2, [file, ask_missing]},
               {fun modnode/1, [nodes]}]).
 
-modnode([Node])-> %@todo verify
-    Node.
-
+%% This function asks the usert to specify the module, if there is no
+%% module or file specified in the ArgList and returns the extended
+%% ArgList.
 getModule(Args) ->
-    case proplists:is_defined(module, Args) or proplists:is_defined(file, Args) of
+    case proplists:is_defined(module, Args) or
+        proplists:is_defined(file, Args) of
         false ->
-            Question =
-                [{format,textbox},
-                 {text, "Please type in the module name:"},
-                 {validator,module},
-                 {default,-1}],
+            Question = add_to_proplist(textbox,
+                                       "Please type in the module name:",
+                                       -1,
+                                       module),
             {_, Question2} = get_info_text(Args, Question),
             [NewMod] = ?Transform:question([Question2]),
-            [{module, list_to_atom(NewMod)} | Args];
+            NewModName = modbyname(list_to_atom(NewMod), true),
+            [{module, ?Mod:name(NewModName)} | Args];
         true  ->
             Args
     end.
+
+modnode([Node])-> %@todo verify
+    Node.
 
 modbyname(Mod, AskMissing) ->
     Module = ?Query:exec(?Mod:find(Mod)),
 
     case Module of
         [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_mod_name, Mod);
-                false -> throw(?RefError(mod_not_found, [Mod]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_mod_name, Mod},
+                               {mod_not_found, [Mod]})
     end.
 
 modbypos(File, Pos, AskMissing) ->
@@ -1366,11 +1467,9 @@ modbypos(File, Pos, AskMissing) ->
 
     case Mod of
         [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_mod_pos, File, Pos);
-                false -> throw(?RefError(pos_bad_type, [module, Pos]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_mod_pos, File, Pos},
+                               {pos_bad_type, [module, Pos]})
     end.
 
 modbyfile(File, AskMissing) ->
@@ -1380,40 +1479,47 @@ modbyfile(File, AskMissing) ->
 
     case Mod of
         [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_file, File);
-                false -> throw(?RefError(file_not_module, [File]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_file, File},
+                               {file_not_module, [File]})
     end.
 
 % @todo document
 moduse(Args) ->
-    NewArgs =
-        case ask_missing(Args) of
-            true  ->
-                NArgs = getFile(Args),
-                case proplists:is_defined(position, Args) or proplists:is_defined(module, Args) of
-                    false ->
-                        File = filebyname(proplists:get_value(file, NArgs), false),
-                        [SourceMod] = ?Query:exec(File, ?File:module()),
-                        Modules = ?Query:exec(File,
-                                      ?Query:seq([?File:forms(),?Form:func(),
-                                                  ?Fun:funcalls(),?Fun:module()])),
-                        ?Check(Modules /= [], ?RefError(no_moduse, [])),
-                        ModUses = lists:filter(fun(M) -> ?Mod:name(M) /= ?Mod:name(SourceMod) andalso
-                                                         ?Mod:name(M) /= erlang end, Modules),
-                        ?Check(ModUses /= [], ?RefError(no_moduse, [])),
-                        Qu = [[{format,info},{text,"Please specify a module to import:"}]],
-                        Question = Qu ++ [add_to_proplist(atom_to_list(?Mod:name(ModUse)))
-                                          || ModUse <- ModUses],
-                        Ans = ?Transform:question(Question),
-                        NArgs ++ [{module,list_to_atom(get_data(Ans,Question))}];
-                    true -> NArgs
-                end;
-            false -> Args
-        end,
-    ?CallArg(NewArgs, "Module usage",
+    get_arg_data(Args, fun moduse_with_ask/1, fun moduse_from_arg_list/1).
+
+moduse_with_ask(Args) ->
+    NArgs = getFile(Args),
+    case proplists:is_defined(position, Args)
+        or proplists:is_defined(module, Args) of
+        false ->
+            File = filebyname(proplists:get_value(file, NArgs), false),
+            [SourceMod] = ?Query:exec(File, ?File:module()),
+            Modules = ?Query:exec(File,
+                                  ?Query:seq([?File:forms(),?Form:func(),
+                                              ?Fun:funcalls(),?Fun:module()])),
+            ?Check(Modules /= [], ?RefError(no_moduse, [])),
+            ModUses =
+                lists:filter(fun(M) -> ?Mod:name(M) /= ?Mod:name(SourceMod)
+                                           andalso
+                                           ?Mod:name(M) /= erlang end, Modules),
+            ?Check(ModUses /= [], ?RefError(no_moduse, [])),
+            Qu = add_to_proplist(info,
+                                 "Please specify a module to import:",
+                                 false),
+            Question = [Qu] ++
+                [add_to_proplist(radio,
+                                 io_lib:format("~p", [?Mod:name(ModUse)]),
+                                 false)
+                 || ModUse <- ModUses],
+            Ans = ?Transform:question(Question),
+            get_selected_entity(tl(Ans), ModUses);
+        true ->
+            moduse_from_arg_list(NArgs)
+    end.
+
+moduse_from_arg_list(Args) ->
+    ?CallArg(Args, "Module usage",
              [{fun modusebyname/2, [module, ask_missing]},
               {fun modusebypos/3,  [file, position, ask_missing]},
               {fun modusenode/1, [nodes]}]).
@@ -1426,11 +1532,9 @@ modusebyname(Mod, AskMissing) ->
 
     case Module of
         [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_moduse_name, Mod);
-                false -> throw(?RefError(mod_not_found, [Mod]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_moduse_name, Mod},
+                               {mod_not_found, [Mod]})
     end.
 
 modusebypos(File, Pos, AskMissing) ->
@@ -1442,11 +1546,9 @@ modusebypos(File, Pos, AskMissing) ->
 
     case Mod of
         [Result] -> Result;
-        _        ->
-            case AskMissing of
-                true  -> error_action(bad_moduse_pos, File, Pos);
-                false -> throw(?RefError(pos_bad_type, [module, Pos]))
-            end
+        _        -> error_case(AskMissing,
+                               {bad_moduse_pos, File, Pos},
+                               {pos_bad_type, [module, Pos]})
     end.
 
 %% @spec expr_range(arglist()) -> [node()]
@@ -1482,13 +1584,58 @@ expr_posnumr(File, Pos1, Num) ->
     End    = hd(lists:reverse(?Query:exec(EndE,[elex]))),
     expr_range_common(Start, End).
 
+%% todo When `End' is already in the prews of a token that is self-sufficient,
+%%      e.g. `abc' in `case A of blah -> body ; abc -> ... end', it does not
+%%      go back to `body', as it accepts `abc' as a rightmost token.
+%% todo Should work even if a `stop' token (end of form) separates `Start' and `End'.
 expr_range(File, {Pos1, Pos2}) ->
     F     = get_filenode(File),
     Start = ?Query:exec1(F, ?File:token(Pos1),
                          ?RefError(illegal_pos, [File, Pos1])),
     End   = ?Query:exec1(F, ?File:token(Pos2),
                          ?RefError(illegal_pos, [File, Pos2])),
-    expr_range_common(Start, End).
+    {Join, _Link, _LeftRest, _RightRest} =
+        joint(?Syn:root_path(Start, left), ?Syn:root_path(End, right)),
+    RealStart = skip_to_token(left, Join, Start),
+    RealEnd   = skip_to_token(right, Join, End),
+    expr_range_common(RealStart, RealEnd).
+
+%% Skips to the first token that begins/ends an expression,
+%% depending on whether `Side' is `left' or `right'.
+%% Since `Start..End' is a range within the leaves of `Join',
+%% only those nodes need to be checked.
+skip_to_token(Side, Join, Node) ->
+    case is_side_token(Side, Node) of
+        true ->
+            Node;
+        false ->
+            Tokens = ?Syn:leaves(Join),
+            {Prevs, [Node|Afters]} =
+                lists:splitwith(fun(Token) -> Token =/= Node end, Tokens),
+            Nexts =
+                case Side of
+                    right -> lists:reverse(Prevs);
+                    left  -> Afters
+                end,
+            % Note: some constructs have a rightmost token at unexpected places.
+            % E.g.  `x' is rightmost, but is not represented as such in
+            %       f() -> #rec{x=0}.
+            case lists:dropwhile(fun(Token) -> not is_side_token(Side, Token) end, Nexts) of
+                [OKToken|_] -> OKToken;
+                []          -> Node
+            end
+    end.
+
+%% Returns whether the token is a leftmost/rightmost child of its parent.
+is_side_token(Side, Node) ->
+    TokenIdxFun =
+        case Side of
+            left  -> fun hd/1;
+            right -> fun lists:last/1
+        end,
+    [{_, Parent} | _] = ?Syn:parent(Node),
+    {_, Child} = TokenIdxFun(?Syn:children(Parent)),
+    Child == Node.
 
 get_filenode(File) ->
     ?Query:exec1(?File:find(File), ?RefError(file_not_present, [File])).

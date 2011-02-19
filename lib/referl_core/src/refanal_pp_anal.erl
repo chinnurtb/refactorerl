@@ -38,22 +38,7 @@ externs(_) -> [].
 
 %%% @private
 insert(_, _, {_, Child}, _) ->
-    case ?Anal:data(Child) of
-        #form{pp=node} ->
-            format_node(Child);
-        #form{} ->
-            format_children(Child);
-        #clause{pp=node} ->
-            format_node(Child);
-        #clause{} ->
-            format_children(Child);
-        #expr{pp=node} ->
-            format_node(Child);
-        #expr{} ->
-            format_children(Child);
-        _ -> ok
-    end.
-
+    format_subtree([Child]).
 
 %TODO: Do we need reformatting when remove/4 is called??
 %%% @private
@@ -65,7 +50,7 @@ update(_,_) ->
     ok.
 
 walk(Fun, [Node | Tail]) ->
-    walk(Fun, Fun(Node, ?Anal:data(Node)) ++ Tail);
+    walk(Fun, Fun(Node, ?ESG:data(Node)) ++ Tail);
 walk(_, []) ->
     ok.
 
@@ -74,40 +59,37 @@ clear(Expr, #expr{pp=PPAttr}=Data) ->
         node  -> ?Anal:update(Expr, Data#expr{pp=none});
         _     -> ok
     end,
-    [Child || {_, Child} <- ?Anal:children(Expr)];
+    [Child || {_, Child} <- ?Syn:children(Expr)];
 clear(Form, #form{pp=PPAttr}=Data) ->
     case PPAttr of
         node  -> ?Anal:update(Form, Data#form{pp=none});
         _     -> ok
     end,
-    [Child || {_, Child} <- ?Anal:children(Form)];
+    [Child || {_, Child} <- ?Syn:children(Form)];
 clear(Clause, #clause{pp=PPAttr}=Data) ->
     case PPAttr of
         node  -> ?Anal:update(Clause, Data#clause{pp=none});
         _     -> ok
     end,
-    [Child || {_, Child} <- ?Anal:children(Clause)];
+    [Child || {_, Child} <- ?Syn:children(Clause)];
 clear(_, _) -> [].
+
+format_subtree([Node|Nodes]) ->
+    case ?Graph:data(Node) of
+        #form{pp=node} ->
+            format_node(Node),
+            format_subtree(Nodes);
+        #clause{pp=node} ->
+            format_node(Node),
+            format_subtree(Nodes);
+        #expr{pp=node} ->
+            format_node(Node),
+            format_subtree(Nodes);
+        _ ->
+            format_subtree([Child || {_,Child} <- ?Syn:children(Node)] ++ Nodes)
+    end;
+format_subtree([]) -> ok.
 
 format_node(Node) ->
     ?PP:format(Node, Node, ?PP_OPTIONS, ?PPR:erlang()),
     walk(fun clear/2, [Node]).
-
-format_children(Node) ->
-    Children = lists:filter(fun has_pp_node_set/1, ?Anal:children(Node)),
-    case Children /= [] of
-        true -> {_, First} = hd(Children),
-                {_, Last} = lists:last(Children),
-                ?PP:format(First, Last,
-                            ?PP_OPTIONS,?PPR:erlang()),
-                 walk(fun clear/2, [Child || {_, Child} <- Children]);
-        false -> ok
-    end.
-
-has_pp_node_set({_, Node}) ->
-    case ?Anal:data(Node) of
-        #expr{pp=node} -> true;
-        #form{pp=node} -> true;
-        #clause{pp=node} -> true;
-        _ -> false
-    end.

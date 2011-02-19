@@ -21,12 +21,12 @@
 %%% Node data records
 
 -record(file,     {type, path, eol, lastmod}).
--record(form,     {type, tag, paren=default, pp=none, hash}).
+-record(form,     {type, tag, paren=default, pp=none, hash, length, linecol}).
 -record(clause,   {type, var, pp=none}).
 -record(expr,     {type, role, value, pp=none}).
 -record(typexp,   {type, tag}).
 -record(lex,      {type, data}).
--record(token,    {type, value, text, prews="", postws=""}).
+-record(token,    {type, text, prews="", postws=""}).
 
 -record(module,   {name}).
 -record(record,   {name}).

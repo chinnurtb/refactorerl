@@ -115,7 +115,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_inline_fun).
--vsn("$Rev: 5509 $ ").
+-vsn("$Rev: 5568 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -145,10 +145,17 @@ error_text(no_app_in_clause, _) ->
 
 %% @private
 prepare(Args)->
-    File = ?Args:file(Args),
-    [AppModule] = ?Query:exec(File, ?File:module()),
     %% The selected expression
     Expr = ?Args:expression(Args),
+    PosFile = ?Query:exec(Expr, ?Query:seq([?Expr:clause(),
+                                         ?Clause:funcl(),
+                                         ?Clause:form(),
+                                         ?Form:file()])),
+    ?Check( PosFile =/= [],
+            ?LocalError(bad_location, [])),
+    [File] = PosFile,
+    [AppModule] = ?Query:exec(File, ?File:module()),
+
     %% Determines the application node, if the selected position is not an
     %% application then throws an error
     AppNode = get_app_node(Args),
@@ -229,7 +236,10 @@ prepare(Args)->
                      maintain_applications(AppNodes, Imported, Exported)
              end
      end
-    ] ++ rec_mac_tr_steps(FunFile, File, RecMacInfo).
+    ] ++ rec_mac_tr_steps(FunFile, File, RecMacInfo) ++
+        [fun(_)->
+                 ok
+         end].
 
 
 %%% ============================================================================
@@ -263,16 +273,6 @@ get_app_node_by_expr(Expr) ->
         _ -> throw(?LocalError(bad_location, []))
     end.
 
-qualified_app([]) ->
-    bad_expression;
-qualified_app([Expr]) ->
-    case ?Expr:type(Expr) of
-        application -> Expr;
-        _Otherwise  -> bad_expression
-    end;
-qualified_app(_) ->
-    throw(?RefError(bad_kind, [])).
-
 %% Gets the application node by interaction.
 get_app_node_by_interaction(Expr) ->
     ActualClause = ?Query:exec(Expr, ?Expr:clause()),
@@ -289,7 +289,10 @@ get_app_node_by_interaction(Expr) ->
              ModName = ?Mod:name(Mod),
              {App, ModName, Name, Arity, Pos}
          end
-         || App <- PottentialApps],
+         || App <- PottentialApps, 
+            ?Query:exec(App, 
+                        ?Query:seq(?Expr:function(), ?Fun:definition())) 
+                =/= []],
     Qu = [{format,info},{text,"Please specify an application:"}],
     Question = [Qu] ++
         [add_to_proplist(format_app_string(AppString))
@@ -308,6 +311,16 @@ format_app_string({App, ModName, Name, Arity, Pos}) ->
         _ ->
             io_lib:format("~p/~p:~p", [Name, Arity, Pos])
     end.
+
+qualified_app([]) ->
+    bad_expression;
+qualified_app([Expr]) ->
+    case ?Expr:type(Expr) of
+        application -> Expr;
+        _Otherwise  -> bad_expression
+    end;
+qualified_app(_) ->
+    throw(?RefError(bad_kind, [])).
 
 %% Gathers data from the answer.
 get_data(Ans, Question) ->

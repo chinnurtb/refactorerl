@@ -113,7 +113,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(refcore_nodesync).
--vsn("$Rev: 5506 $ ").
+-vsn("$Rev: 5615 $ ").
 -behaviour(gen_server).
 
 -export([get_node/2, add_ref/3, del_ref/3, move_refs/4, clean/0]).
@@ -335,32 +335,10 @@ get_func({Mod, {Name, Ary}}, Drf) when is_atom(Name) orelse Name =:= -1,
                                        is_integer(Ary) ->
     MN = get_module(Mod, Drf),
     case lookup_func({MN, Mod}, Name, Ary) of
-        [Fun] -> if Ary >= 0 andalso Name /= -1 andalso Mod /= -1 -> Fun;
-                    true -> {heuristic, Fun}
-                 end;
-        Funs  ->
-            Opaque = case {Mod =:= -1, Name =:= -1, Ary < 0} of
-                         {false, false, false} -> false;
-                         {true,  false, false} -> module;
-                         {false, true , false} -> name;
-                         {false, false, true } -> arity;
-                         %% TODO: should we support '/opaque':opaque/-1? etc
-                         {_, _, _} -> throw("too many unknown function attributes")
-                     end,
-            Node = create(MN, func, #func{name = case Name of
-                                                     -1 -> opaque;
-                                                     _  -> Name
-                                                 end,
-                                          arity = Ary,
-                                          opaque = Opaque}, Drf),
-	    [?Graph:mklink(Node, may_be, F) || F <- Funs],
-
-            add_param_nodes(Node, Ary),
-            add_return_node(Node),
-            case Opaque of
-                false -> Node;
-                _ -> {opaque, Node}
-            end
+        [Fun] when Ary >= 0, Name /= -1, Mod /= -1 ->
+            Fun;
+        Funs ->
+            create_fun(Mod, Name, Ary, MN, Funs, Drf)
     end;
 get_func(Node, _Drf) ->
     case ?Graph:class(Node) of
@@ -373,10 +351,61 @@ get_func(Node, _Drf) ->
             Node
     end.
 
+create_fun(Mod, Name, Ary, MN, Funs, Drf) ->
+    Opaque = case {Mod =:= -1, Name =:= -1, Ary < 0} of
+                 {false, false, false} -> false;
+                 {true,  false, false} -> module;
+                 {false, true , false} -> name;
+                 {false, false, true } -> arity;
+                 %% TODO: should we support '/opaque':opaque/-1? etc
+                 {_, _, _} -> throw("too many unknown function attributes")
+             end,
+    Node = create(MN, func, #func{name = case Name of
+                                             -1 -> opaque;
+                                             _  -> Name
+                                         end,
+                                  arity = Ary,
+                                  opaque = Opaque}, Drf),
+    [?Graph:mklink(Node, may_be, F) || F <- Funs],
+
+    add_param_nodes(Node, Ary),
+    add_return_node(Node),
+    case Opaque of
+        false -> update_opaques(Node), Node;
+        _ -> {opaque, Node}
+    end.
+
+update_opaques(Fun) ->
+    [update_opaque(O, Fun) ||
+        O <- ?Graph:path(?Graph:root(), [module,{func,{opaque,'/=',false}}])].
+
+update_opaque(OFun, Fun) ->
+    [Mod]  = ?Graph:path(Fun, [{func, back}]),
+    [OMod] = ?Graph:path(Fun, [{func, back}]),
+    #func{name = Name, arity = Arity} = ?Graph:data(Fun),
+    #func{name = OName, arity = OArity, opaque = Opaque} = ?Graph:data(OFun),
+    update_opaque(Opaque, OMod, OFun, OName, OArity, Mod, Fun, Name, Arity).
+
+%% TODO: cleanup
+update_opaque(name, OMod, OFun, opaque, OArity, Mod, Fun, _Name, Arity)
+  when OMod == Mod, OArity == Arity ->
+    ?Graph:mklink(OFun, may_be, Fun);
+update_opaque(arity, OMod, OFun, OName, -1, Mod, Fun, Name, _Arity)
+  when OMod == Mod, OName == Name ->
+    ?Graph:mklink(OFun, may_be, Fun);
+update_opaque(arity, OMod, OFun, OName, OArity, Mod, Fun, Name, Arity)
+  when OMod == Mod, OName == Name, abs(OArity)-1 =< Arity ->
+    ?Graph:mklink(OFun, may_be, Fun);
+update_opaque(module, _OMod, OFun, OName, OArity, _Mod, Fun, Name, Arity)
+  when OName == Name, OArity == Arity ->
+    ?Graph:mklink(OFun, may_be, Fun);
+update_opaque(_, _, _, _, _, _, _, _, _) ->
+    ok.
+
 lookup_func({MN, Mod}, -1, Ary) when Mod /= -1, Ary >= 0 ->
     ?Graph:path(MN, [{funimp,{arity,'==',Ary}}]) ++
         ?Graph:path(MN, [{func,{arity,'==',Ary}}]);
-lookup_func({MN, Mod}, Name, Ary) when Mod /= -1; Name /= -1 ->
+lookup_func({MN, Mod}, Name, Ary) when Mod /= -1, Name /= -1 ->
     OP = if Ary >= 0 -> '==';
             true     -> '>='
          end,
@@ -437,8 +466,8 @@ add_funref(Ref, Spec, Drf, Fun) ->
 
 add_funlref(Drf, {opaque, Fun}, Expr, dynfunlref) ->
     add_funlref(Drf, Fun, Expr, ambfunlref);
-add_funlref(Drf, {heuristic, Fun}, Expr, dynfunlref) ->
-    add_funlref(Drf, Fun, Expr, dynfunlref);
+%%add_funlref(Drf, {heuristic, Fun}, Expr, dynfunlref) ->
+%%    add_funlref(Drf, Fun, Expr, dynfunlref);
 add_funlref(Drf, Fun, Expr, Lnk) ->
     #func{name=Name, arity=Ary} = ?Graph:data(Fun),
     #expr{type=Type}            = ?Graph:data(Expr),
@@ -458,8 +487,8 @@ add_funlref(Drf, Fun, Expr, Lnk) ->
 
 add_funeref({opaque, Fun}, Expr, dynfuneref) ->
     add_funeref(Fun, Expr, ambfuneref);
-add_funeref({heuristic, Fun}, Expr, dynfuneref) ->
-    add_funeref(Fun, Expr, dynfuneref);
+%%add_funeref({heuristic, Fun}, Expr, dynfuneref) ->
+%%    add_funeref(Fun, Expr, dynfuneref);
 add_funeref(Fun, Expr, Lnk) ->
     ok = ?Graph:mklink(Expr, Lnk, Fun).
 
@@ -499,7 +528,8 @@ del_funref(Ref, Spec, Drf) ->
 clean_func(Func) ->
     clean_node(Func, [{fundef, back}, {funeref, back}, {funlref, back},
                       {dynfuneref, back}, {dynfunlref,back},
-                      {ambfuneref, back}, {ambfunlref,back}])
+                      {ambfuneref, back}, {ambfunlref,back}
+                      ])
         andalso
         begin
             ?FunProp:remove(Func),

@@ -30,7 +30,7 @@
 %%% @author Gabor Horvath <tyros3@gmail.com>
 
 -module(refcl_main).
--vsn("$Rev: 5417 $").
+-vsn("$Rev: 5540 $").
 
 -export([prepare/1, refresh/0]).
 
@@ -65,9 +65,11 @@ prepare(Args) ->
         end,
 
     Qu = [[{format,info},{text, EntLabel ++ " clustering with " ++ AlgLabel ++ " algorithm"}]],
-    Question = Qu ++ [ add_to_question(Label, DefValue)  || {Label, DefValue} <- lists:zip(Labels, DefValues)] ++
-           [[{format,checkbox},{text,"Save results to database:"},{default,false}]],
+    LabelsAndValues = lists:zip(Labels, DefValues),
+    Question = Qu ++ add_to_question(LabelsAndValues) ++
+               [[{format,checkbox},{text,"Save results to database:"},{default,false}]],
     Ans = lists:reverse(tl(?Transform:question(Question))),
+
     CreateDb = case hd(Ans) of
                    yes -> true;
                    _   -> false
@@ -103,9 +105,29 @@ prepare(Args) ->
 %% Private
 %%----------------------------------------------------------------
 
+add_to_question([]) -> [];
+
+add_to_question([{L,V} | LabelsAndValues]) ->
+    [] ++ add_to_question(L, V) ++ add_to_question(LabelsAndValues).
+
 add_to_question(Label, DefValue) ->
+    case Label of 
+        "Transform function" -> add_to_question(select, Label, [none, zero_one]);
+        "Distance function" -> add_to_question(select, Label, [call_sum, weight]);
+        _                   -> 
+            case DefValue of 
+                undefined -> add_to_question(type, Label, none);
+                _         -> add_to_question(type, Label, DefValue)
+            end
+    end.
+
+add_to_question(type, Label, DefValue) ->
     DefValueStr = io_lib:fwrite("~p",[DefValue]),
-    [{format,textbox}, {text,Label ++ "(Default: " ++ DefValueStr ++ ")"},{validator,text},{default,-1}].
+    [[{format,textbox}, {text,Label ++ "(Type: " ++ DefValueStr ++ " for default)"},{validator,text},{default,-1}]];
+
+add_to_question(select, Label, Values) ->
+    DefValueStr = io_lib:fwrite("~p",[Values]),
+    [[{format,textbox}, {text,Label ++ "(Select: " ++ DefValueStr ++ ")"},{validator,text},{default,-1}]].
 
 add_to_result(List) ->
     Text = io_lib:fwrite("~p", [List]),
@@ -113,8 +135,14 @@ add_to_result(List) ->
 
 get_options(Terms, Opt, OptionName) ->
     Opts    = correct_opt(Opt,Terms),
-    Options = [convert(Value,Type) ||  {Value, Type} <- lists:zip(Opts, Terms)],
+    Options = [get_option(Value,Type) ||  {Value, Type} <- lists:zip(Opts, Terms)],
     lists:zip(OptionName,Options).
+
+get_option(Value, Type) ->
+    case Value of
+        "none" -> convert("undefined",Type);
+        _      -> convert(Value, Type)
+    end.
 
 convert(Value,Term)->
    if

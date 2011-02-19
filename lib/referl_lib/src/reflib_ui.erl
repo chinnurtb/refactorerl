@@ -179,8 +179,8 @@
 -define(RefErr(R,L),   ?ERR(?RefError(R,L))).
 
 % the following can be sent anytime:
-send_progress(MCB, Op, File, Count, Max) ->
-    (MCB#msg_cb.unicast)(progress,{Op, File, Count, Max}).
+send_progress(MCB, Op, File, Percent, FormCount, FormMax, KBps) ->
+    (MCB#msg_cb.unicast)(progress,{Op, File, Percent, FormCount, FormMax, KBps}).
 
 send_change(MCB,Change) ->
     (MCB#msg_cb.broadcast)(statusinfo,[{change,Change}]).
@@ -634,7 +634,7 @@ do_drop_file(MCB,FileName)->
 %% specified on all "*.erl" and "*.beam" files each folder contains.
 recurse_erl(MCB,Start=[_|_], Action) when is_function(Action,2) ->
     Files = erl_beam(MCB,Start),
-    Result = [Action(MCB,F) || F <- Files].
+    _Result = [Action(MCB,F) || F <- Files].
 % @todo
     %% case Result /= [] of
     %%     true ->
@@ -693,8 +693,8 @@ add_flat(Results0)->
 
 progress(MCB,Op) ->
     fun
-        (File, Count, Max) ->
-            send_progress(MCB, Op, File, Count, Max)
+        (File, Percent, FormCount, FormMax, KBps) ->
+            send_progress(MCB, Op, File, Percent, FormCount, FormMax, KBps)
     end.
 
 %% @doc Filters can be given either by their atomic abbreviations

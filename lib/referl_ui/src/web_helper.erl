@@ -20,7 +20,7 @@
 %%% @author Judit Koszegi <kojqaai@inf.elte.hu>
 
 -module(web_helper).
--vsn("$Rev: 5507 $ ").
+-vsn("$Rev: 5590 $ ").
 
 -export([start_yaws/0, start_yaws/1, stop_yaws/0]).
 -export([result_to_ehtml/1, get_files/0, query_list_from_tab/1, get_value/2]).
@@ -40,16 +40,21 @@ start_yaws() ->
 
 %% @doc Configure and start yaws web server.
 start_yaws(["from_script", YPath, YName, YPort, YListen]) ->
-    YawsPathProp = {yaws_path,YPath},
-    YawsNameProp = {yaws_name,YName},
-    YawsPortProp = {yaws_port, convert_list_to_integer(YPort)},
-    YawsListenProp = {yaws_listen, string_to_ip(YListen)},
-    AllProp = [YawsNameProp,YawsPortProp,YawsListenProp], 
-    case YPath of
-        "no_path" -> start_yaws(AllProp);
-        _ -> start_yaws([YawsPathProp|AllProp])
+    try
+        YawsPathProp = {yaws_path,YPath},
+        YawsNameProp = {yaws_name,YName},
+        YawsPortProp = {yaws_port, convert_list_to_integer(YPort)},
+        YawsListenProp = {yaws_listen, string_to_ip(YListen)},
+        AllProp = [YawsNameProp,YawsPortProp,YawsListenProp], 
+        case YPath of
+            "no_path" -> start_yaws(AllProp);
+            _ -> start_yaws([YawsPathProp|AllProp])
+        end
+    catch
+        RefErr ->
+            io:format(?Error:error_text(RefErr) ++ "~n"),
+            exit("Cannot start yaws.")
     end;
-
 start_yaws(Proplist) ->
     case (proplists:get_value(yaws_path,Proplist)) of
         undefined -> ok;
@@ -60,9 +65,20 @@ start_yaws(Proplist) ->
                     throw(?RefError(file_notdir,[YawsDir]))
             end
     end,
+    case code:ensure_loaded(yaws) of
+        {error,_} -> throw(?RefErr0r(yaws_not_loaded));
+            _ -> ok
+    end,
     Port = proplists:get_value(yaws_port,Proplist,8001),
-    Listen = proplists:get_value(yaws_listen,Proplist,{0,0,0,0}),  
-    Name = proplists:get_value(yaws_name,Proplist,"refactorErl"),
+    validate_port_number(Port),
+    Listen = proplists:get_value(yaws_listen,Proplist,{0,0,0,0}), 
+    validate_ip_tuple(Listen),
+    Name0 = proplists:get_value(yaws_name,Proplist,"refactorErl"),
+    Name = case is_atom(Name0) of
+               true -> atom_to_list(Name0);
+               false -> Name0
+           end,
+    validate_name(Name),
     yaws:start_embedded(
       get_index_yaws_folder(),
       [{port,Port},{servername,Name},{listen, Listen}]).
@@ -70,6 +86,42 @@ start_yaws(Proplist) ->
 %% @doc Stop yaws web server.
 stop_yaws() ->
     application:stop(yaws).
+
+validate_port_number(Port) ->
+    case is_number(Port) of
+        true -> ok;
+        false -> throw(?RefError(port_format_error,[io_lib:format("~p",[Port])]))
+    end.
+
+validate_ip_tuple(Listen) ->
+    Str = io_lib:format("~p",[Listen]),
+    case Listen of
+        {A,B,C,D} ->
+            case is_number(A) andalso is_number(B) andalso
+                is_number(C) andalso is_number(D) of
+                true -> ok;
+                false -> throw(?RefError(ip_format_error,[Str]))
+            end;
+        _ -> throw(?RefError(ip_format_error,[Str]))
+    end.
+
+validate_name(Name) ->
+    case is_string(Name) of
+        true -> ok;
+        false -> throw(?RefError(name_format_error,[io_lib:format("~p",[Name])]))
+    end.
+
+is_char(Ch) ->
+    if Ch < 0 -> false;  
+       Ch > 255 -> false;
+       true -> true
+    end.
+
+is_string(Str) ->            
+    case is_list(Str) of
+        false -> false;           
+        true -> lists:all(fun is_char/1, Str)
+    end.
 
 get_index_yaws_folder() ->
     Path0 = filename:split(filename:dirname(code:which(web_helper))),
@@ -88,8 +140,8 @@ convert_list_to_integer(String) ->
     end.
 
 take_and_drop(L) -> 
-    {convert_list_to_integer(lists:takewhile(fun(X) -> not(X == hd(".")) end,L)),
-     (lists:dropwhile(fun(X) -> not(X == hd(".")) end,L))}.
+    {convert_list_to_integer(lists:takewhile(fun(X) -> not(X == $.) end,L)),
+     (lists:dropwhile(fun(X) -> not(X == $.) end,L))}.
 
 string_to_ip(YPort) -> 
     L1 = YPort,
@@ -133,6 +185,7 @@ calculate_result(Q) ->
 result_to_ehtml({_,[],_}) ->
     result_to_ehtml(noquery);
 result_to_ehtml({'query',Q,U}) ->
+    init_tab(),
     case calculate_result(Q) of
         {result, Result} ->
             [R0] = ?MISC:pgetu([result],Result),
@@ -207,6 +260,8 @@ ehtml_from_query_posres(Table) ->
     end.
 
 to_table([]) -> [];
+to_table([{eq,Text1,Text2}]) ->
+     [{tr, [], [{td, [], to_html({eq,Text1,Text2})}]}];
 to_table([{list,L}]) ->
     case L of 
         [] ->  [{tr, [], [{td, [], "No result"}]}];
@@ -405,7 +460,7 @@ get_files() ->
     Files = lists:map(fun reflib_file:path/1, reflib_query:exec([file])),
     ShortFiles = lists:map(
                    fun(X) ->
-                           case length(X)>30 of
+                           case length(X)>33 of
                                false ->
                                    {X,X};
                                true ->

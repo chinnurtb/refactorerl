@@ -47,7 +47,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(reflib_error).
--vsn("$Rev: 5455 $").
+-vsn("$Rev: 5567 $").
 
 -include("lib.hrl").
 
@@ -95,8 +95,11 @@ unknown_error_text(Mod, Type, Detail) ->
 %error_text(lex_not_found, [_Path, _Pos]) ->
 %    ["There is no lexical element in the given position"];
 
-error_text(no_elim_var, _) ->
-    "There is no variable in this module which can be eliminated.";
+error_text(no_token, Pos) ->
+    "There is no token specified in the given position (" ++ 
+    integer_to_list(Pos) ++ ").";
+error_text(no_var, _) ->
+    "There is no variable in the specified function clause which can be transformed.";
 error_text(no_macuse, _) ->
     "There is no macro usage in this module.";
 error_text(no_moduse, _) ->
@@ -113,6 +116,8 @@ error_text(source_not_found, _) ->
     "Source module not found";
 error_text(cancelled, _) ->
     "Transformation aborted by user";
+error_text(yaws_not_loaded,_) ->
+    "Yaws module is not loaded";
 error_text(illegal_pos, [File, Pos]) ->
     ["Position ", integer_to_list(Pos), " not found in file ", File];
 error_text(token_parent, [Type]) ->
@@ -239,8 +244,12 @@ error_text(mac_error, _Virtuals)->
     ["The transformation is denied because of an ambiguous macro substitution"];
 error_text(list_to_integer_error, [String])->
     ["Cannot convert string to integer: ",String];
+error_text(port_format_error, [Port])->
+    ["Not a valid port format (have to be a number): ", Port];
 error_text(ip_format_error, [IP])->
-    ["This string is not in a valid IP format: ",IP];
+    ["Not a valid IP format: ",IP];
+error_text(name_format_error, [Name])->
+    ["Not a valid server name: ",Name];
 error_text(ErrType, ErrParams) ->
     ["Unknown error: {",
      io_lib:print(ErrType), ", ", io_lib:print(ErrParams), "}"].

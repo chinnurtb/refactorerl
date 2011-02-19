@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq).
--vsn("$Rev: 5496 $ ").
+-vsn("$Rev: 5620 $ ").
 
 -export([run/3]).
 -export([format_nodes/2]).
@@ -54,14 +54,15 @@ error_text(illegal_property, Params) ->
     io_lib:format("illegal ~p property: ~p", Params);
 error_text(illegal_selector, Params) ->
     io_lib:format("illegal ~p selector: ~p  ", Params);
-%error_text(type_mismatch, Params) ->
-%    io_lib:format("the entity types ~p and ~p don't match", Params);
-%error_text(non_bool_property, Param) -> type mismatch eleg
-%    io_lib:format("the property ~p is not bool", Param);
-%error_text(non_property, Param) -> % illegal property?
-%    io_lib:format("~p is not a property", Param);
+error_text(non_bool_property, Param) ->
+    io_lib:format("the property ~p is not bool", Param);
 error_text(type_mismatch, Params) ->
-    io_lib:format("the types of ~p and ~p don't match", Params).
+    io_lib:format("the types of ~p and ~p don't match", Params);
+error_text(no_property_in_comparison, []) ->
+    "no property in comparison";
+error_text(illegal_statistics, Params) ->
+    io_lib:format("illegal statistics: ~p", Params).
+
 
 %%% ============================================================================
 %%% Callbacks
@@ -244,14 +245,14 @@ check({Action, {query_seq, QuerySeq}, {mult, Mult}}, {Type, Lst}) ->
 
 %todo - skipped properties?
 check({filter, Filter}, {Type, Lst}) ->
-    {Type, [{filter, Filter}|Lst]};
+    {Type, [{filter, check_filter(Type, Filter)}|Lst]};
 
 %% statistics
-check(Statistics, {_Type, Lst = [{property, _Prop, PropType}| _]}) ->
+check(Statistics, {_Type, Lst = [{property, Prop, PropType}| _]}) ->
     case PropType of
         any -> {int, [{statistics, Statistics}| Lst]};
         int -> {int, [{statistics, Statistics}| Lst]};
-        _ -> throw(?LocalError(prop_type_mismatch, [int, PropType]))
+        _ -> throw(?LocalError(type_mismatch, [Statistics, Prop]))
     end;
 
 check(_Statistics, {_Type, [Elem| _]}) ->
@@ -274,6 +275,114 @@ check_last({Action, {query_seq, QuerySeq}, {mult, Mult}}, {Type, Lst}) ->
     {Type, [{Action, QSLst, Mult}| Lst]};
 check_last(LstElem, Acc) -> check(LstElem, Acc).
 
+%% @private
+%% @spec check_filter(Type::atom(), Filter::atom()|tuple()) -> atom()|tuple()
+check_filter(_Type, 'true') ->
+    'true';
+
+check_filter(_Type, 'false') ->
+    'false';
+
+check_filter(Type, {'or', Filter1, Filter2}) ->
+    F1 = check_filter(Type, Filter1),
+    F2 = check_filter(Type, Filter2),
+    {'or', F1, F2};
+
+check_filter(Type, {'and', Filter1, Filter2}) ->
+    F1 = check_filter(Type, Filter1),
+    F2 = check_filter(Type, Filter2),
+    {'and', F1, F2};
+
+check_filter(Type, {'not', Filter}) ->
+    F = check_filter(Type, Filter),
+    {'not', F};
+
+check_filter(Type, {query_seq, QuerySeq}) ->
+    QS = lists:flatten([List|| {_,List} <- QuerySeq]),
+    {_QSType, QSLst} = lists:foldl(fun check/2, {Type, []}, QS),
+    {query_seq, QSLst};
+
+check_filter(_Type, {CompOp, F1, F2}) when is_tuple(F1) andalso is_tuple(F2)->
+    {CompOp, F1, F2};
+
+%todo: not a property for F2
+check_filter(Type, {CompOp, F1, F2}) when is_tuple(F1)->
+    ?Check(?Lib:prop_type(Type, F2) == [bool],
+           ?LocalError(non_bool_property, [F2])),
+    {CompOp, F1, F2};
+
+check_filter(Type, {CompOp, F1, F2}) when is_tuple(F2)->
+    check_filter(Type, {CompOp, F2, F1});
+
+%todo: property for F2?
+check_filter(Type, {CompOp, name, F2}) ->
+    Comp2 =
+        case ?Lib:prop_type(Type, name) of
+            [string] ->
+                case is_list(F2) of
+                    true  -> F2;
+                    false ->
+                        case is_atom(F2) of
+                            true  -> atom_to_list(F2);
+                            false ->
+                                throw(?LocalError(type_mismatch, [name, F2]))
+                        end
+                end;
+            [atom] ->
+                case is_atom(F2) of
+                    true  -> F2;
+                    false ->
+                        case is_list(F2) of
+                            true  -> list_to_atom(F2);
+                            false ->
+                                throw(?LocalError(type_mismatch, [name, F2]))
+                        end
+                end
+        end,
+    {CompOp, name, Comp2};
+
+check_filter(Type, {CompOp, F1, name}) ->
+    check_filter(Type, {CompOp, name, F1});
+
+check_filter(Type, {CompOp, F1, F2}) when is_atom(F1) andalso is_atom(F2)->
+    Type1 = ?Lib:prop_type(Type, F1),
+    Type2 = ?Lib:prop_type(Type, F2),
+
+    ?Check(Type1 /= [] orelse Type2 /= [],
+           ?LocalError(no_property_in_comparison, [])),
+
+    ?Check((Type1 == [] andalso Type2 == [atom]) orelse
+           (Type1 == [atom] andalso (Type2 == [] orelse Type2 == [atom])) orelse
+           Type1 == Type2 orelse Type1 == [any] orelse Type2 == [any],
+           ?LocalError(type_mismatch, [F1, F2])),
+
+    {CompOp, F1, F2};
+
+check_filter(Type, {CompOp, F1, F2}) when is_atom(F1) ->
+    PropType = ?Lib:prop_type(Type, F1),
+
+    ?Check(PropType /= [],
+           ?LocalError(no_property_in_comparison, [])),
+
+    ?Check(PropType == [any] orelse
+           (PropType == [int] andalso is_integer(F2)) orelse
+           (PropType == [atom] andalso is_atom(F2)) orelse
+           (PropType == [string] andalso is_list(F2)) orelse
+           (PropType == [bool] andalso (F2 == 'true' orelse F2 == 'false')),
+           ?LocalError(type_mismatch, [F1, F2])),
+
+    {CompOp, F1, F2};
+
+check_filter(Type, {CompOp, F1, F2}) when is_atom(F2) ->
+    check_filter(Type, {CompOp, F2, F1});
+
+check_filter(_Type, {_CompOp, _F1, _F2}) ->
+    throw(?LocalError(no_property_in_comparison, []));
+
+check_filter(Type, Filter) ->
+    ?Check(?Lib:prop_type(Type, Filter) == [bool],
+           ?LocalError(non_bool_property, [Filter])),
+    Filter.
 
 %%% ============================================================================
 %%% Processing of queries
@@ -344,11 +453,13 @@ process({Action, QSLst, Mult}, #state{type=Type, res=Res}=State) ->
 %%% ----------------------------------------------------------------------------
 %%% Statistics
 
-% todo: error message
+% todo: error message, preproc
 process({statistics, Statistics}, #state{res=PropValues}) ->
-    ?Check(lists:all(fun(Val) -> is_integer(Val) orelse is_float(Val) end,
-                     PropValues),
-           ?LocalError(type_mismatch, [any, int])),
+    NonNum = lists:filter(
+               fun(Val) -> not(is_integer(Val) orelse is_float(Val)) end,
+               PropValues),
+
+    ?Check(NonNum == [], ?LocalError(type_mismatch, [Statistics, hd(NonNum)])),
 
     Value =
         case Statistics of
@@ -358,7 +469,9 @@ process({statistics, Statistics}, #state{res=PropValues}) ->
             min -> lists:min(PropValues);
             max -> lists:max(PropValues);
             sum -> lists:sum(PropValues);
-            avg -> lists:sum(PropValues) / length(PropValues)
+            average -> lists:sum(PropValues) / length(PropValues);
+            avg -> lists:sum(PropValues) / length(PropValues);
+            _ -> throw(?LocalError(illegal_statistics, [Statistics]))
         end,
 
     #state{action = statistics, type = Statistics, res = Value};
@@ -505,11 +618,9 @@ filter({'and', Filter1, Filter2}, EntityType, Entities) ->
 %%       Entities);
 
 filter({query_seq, QuerySeq}, EntityType, Entities) ->
-    QS = lists:flatten([List|| {_,List} <- QuerySeq]),
-    {_QSType, QSLst} = lists:foldl(fun check/2, {EntityType, []}, QS),
     lists:filter(
       fun(Entity) ->
-              case process_query_seq({EntityType, [Entity]}, QSLst) of
+              case process_query_seq({EntityType, [Entity]}, QuerySeq) of
                   {_QSType, Res} -> Res =/= [];
                   _ -> false
               end
@@ -541,8 +652,6 @@ filter({CompOp, Filt1, Filt2}, EntityType, Entities) ->
       Entities);
 
 filter(Filter, EntityType, Entities)->
-    ?Check(?Lib:prop_type(EntityType, Filter) == bool,
-           ?LocalError(non_bool_property, [Filter])),
     lists:filter(prop_fun(EntityType, Filter), Entities).
 
 
@@ -685,7 +794,8 @@ positions(Type, Nodes, PositionOpt) ->
           lists:foldl(
             fun({_Node, []}, Dict) ->
                     Dict;
-               ({_Node, [File, First, Last]}, Dict) ->
+               %todo: how can the list be longer than 3?
+               ({_Node, [File, First, Last|_]}, Dict) ->
                     D1 = case dict:is_key(File, Dict) of
                              false -> dict:store(File, [First], Dict);
                              true -> dict:append(File, First, Dict)
@@ -694,13 +804,13 @@ positions(Type, Nodes, PositionOpt) ->
             end,
             dict:new(),
             lists:keysort(2, NodesWithTokens))),
-    ?d(PositionOpt),
     TokenPos = lists:flatten([?Token:map_pos(File, Tokens, PositionOpt)||
                                  {File, Tokens} <- CollTokens]),
     lists:foldl(
       fun({Node, []}, Dict) ->
               dict:store(Node, nopos, Dict);
-         ({Node, [File, First, Last]}, Dict) ->
+         %todo: how can the list be longer than 3?
+         ({Node, [File, First, Last|_]}, Dict) ->
               {First, {Pos1, _}} = lists:keyfind(First, 1, TokenPos),
               {Last, {_, Pos2}} = lists:keyfind(Last, 1, TokenPos),
               dict:store(Node, {?File:path(File), Pos1, Pos2}, Dict)

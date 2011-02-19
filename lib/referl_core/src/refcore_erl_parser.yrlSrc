@@ -1,6 +1,6 @@
--vsn("$Rev: 3877 $").
+-vsn("$Rev: 5585 $").
 -include("core.hrl").
 -import(?Syn, [build/2]).
-tv({_, _, {#token{value = V}, _}}) -> V.
+tv({_, _, {T=#token{}, _}}) -> reflib_token:get_value(T).
 tn({_, _, {_, N}}) -> N.
 
