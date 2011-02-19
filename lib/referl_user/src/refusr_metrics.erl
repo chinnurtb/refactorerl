@@ -180,17 +180,17 @@
 %%% <b>Max length of line</b> Gives the length of the longest line of the given
 %%%    module or function.
 %%%
-%%% <b>Average length of line</b> Gives the average length of the lines within 
+%%% <b>Average length of line</b> Gives the average length of the lines within
 %%%    the given module or function.
 %%%
 %%% <b>No space after comma</b> Gives the number of cases when there are not any
-%%%    whitespaces after a comma or a semicolon in the given module's or 
+%%%    whitespaces after a comma or a semicolon in the given module's or
 %%%    function's text.
 %%%
 %%% <b>Is tail recursive</b> This metric returns with 1, if the given function
-%%%    is tail recursive; with 0, if it is recursive, but not tail recursive; 
+%%%    is tail recursive; with 0, if it is recursive, but not tail recursive;
 %%%    and -1 if it is not a recursive function (direct and indirect recursions
-%%%    are also examined). 
+%%%    are also examined).
 %%%
 %%% <b>Aggregation filters:</b>
 %%%
@@ -223,12 +223,17 @@
 %%% show metrics|filters
 
 -module(refusr_metrics).
--vsn("$Rev: 5015 $ ").
+-vsn("$Rev: 5271 $ ").
 
--export([cmd/1, prepare/1, preQuery/1, metric/1]).
--export([fun_return_points/1]). %% DEPRICATED. Use this function instead: 
-                                %% ?Fun:return_points/1 
-                                %% //?Query:exec(?Fun:return_points(Fun)).// 
+-export([prepare/1]).
+
+% @todo unexport
+-export([cmd/1, preQuery/1, metric/1]).
+
+% @todo unexport
+-export([fun_return_points/1]). %% DEPRICATED. Use this function instead:
+                                %% ?Fun:return_points/1
+                                %% //?Query:exec(?Fun:return_points(Fun)).//
 
 -include("user.hrl").
 
@@ -236,37 +241,37 @@
 -define(PARSER, refusr_m_parser).
 
 %%% @private
-prepare([{_, Query}])->
-
-    case cmd(Query) of
-        {list, List} ->
-            ?UI:message(
-               metric,
-               "Query: ~s~n"
-               "Result:~n"
-               "~s",
-               [Query,
-                [["   ", createText(E), "\n"] || E <- List]]);
-        {helpfun, FNList} ->
-            ?UI:message(
-              metric,
-               "Query: ~s~n"
-               "Result:~n"
-               "~s",
-               [Query,
-                [["   ", createText({fn, FN}), "\n"] || FN <- FNList]]);
-        {Agr, Data} ->
-            ?UI:message(
-               metric,
-               "Query: ~s~n"
-               "Result:~n"
-               "~s",
-               [Query,
-                ["   ", createText({Agr, Data})]]);
-        SE ->
-            ?UI:message(metric, "~s", [SE])
-    end,
-    fun () -> nomsg end.
+prepare(Args)->
+    fun()->
+        [Query] = ?MISC:pgetu([querys],Args),
+        Result =
+            case cmd(Query) of
+                {list, List} ->
+                    io_lib:format(
+                        "Query: ~s~n"
+                        "Result:~n"
+                        "~s",
+                        [Query,
+                            [["   ", createText(E), "\n"] || E <- List]]);
+                {helpfun, FNList} ->
+                    io_lib:format(
+                        "Query: ~s~n"
+                        "Result:~n"
+                        "~s",
+                        [Query,
+                            [["   ", createText({fn, FN}), "\n"] || FN <- FNList]]);
+                {Agr, Data} ->
+                    io_lib:format(
+                        "Query: ~s~n"
+                        "Result:~n"
+                        "~s",
+                        [Query,
+                            ["   ", createText({Agr, Data})]]);
+                SE ->
+                    io_lib:format("~s", [SE])
+            end,
+        lists:flatten(Result)
+    end.
 
 
 %%% @private
@@ -539,12 +544,12 @@ result_handler(Data) when is_number(Data) ->
 
 %%% @private
 loc({module, Mod})->
-    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    [File] = ?Query:exec(Mod, ?Mod:file()),
     string:tokens(lists:flatten(?Syn:tree_text(File)),"\n");
 loc({function, Fun})->
-    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
-    Text = ?Syn:tree_text(Def), 
-    string:tokens(lists:flatten(Text),"\n"). 
+    [Def] = ?Query:exec(Fun, ?Fun:definition()),
+    Text = ?Syn:tree_text(Def),
+    string:tokens(lists:flatten(Text),"\n").
 
 %%% @private
 choc({module, Mod})->
@@ -948,37 +953,37 @@ return_points(Expr, _Other)->
 
 %%% @private
 max_length_of_line({module, Mod}) ->
-    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    [File] = ?Query:exec(Mod, ?Mod:file()),
     Text = lists:flatten(?Syn:tree_text(File)),
     lists:max(lists:map(fun length/1, string:tokens(Text,"\n")));
 max_length_of_line({function, Fun}) ->
-    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
-    Text = lists:flatten(?Syn:tree_text(Def)), 
+    [Def] = ?Query:exec(Fun, ?Fun:definition()),
+    Text = lists:flatten(?Syn:tree_text(Def)),
     lists:max(lists:map(fun length/1, string:tokens(Text,"\n"))).
 
 %%% @private
 avg_length_of_line({module, Mod}) ->
-    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    [File] = ?Query:exec(Mod, ?Mod:file()),
     Text = lists:flatten(?Syn:tree_text(File)),
     List = lists:map(fun length/1, string:tokens(Text,"\n")),
     lists:sum(List) div length(List);
 avg_length_of_line({function, Fun}) ->
-    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
-    Text = lists:flatten(?Syn:tree_text(Def)), 
+    [Def] = ?Query:exec(Fun, ?Fun:definition()),
+    Text = lists:flatten(?Syn:tree_text(Def)),
     List = lists:map(fun length/1, string:tokens(Text,"\n")),
     lists:sum(List) div length(List).
 
 %%% @private
 no_space_after_comma({module, Mod}) ->
-    [File] = ?Query:exec(Mod, ?Mod:file()), 
+    [File] = ?Query:exec(Mod, ?Mod:file()),
     Text = lists:flatten(?Syn:tree_text(File)),
     length(lists:filter(fun ([]) -> true;
-                            ([X|_]) -> X =/= $ 
+                            ([X|_]) -> X =/= $
                         end,
                         tl(string:tokens(Text,","))));
 no_space_after_comma({function, Fun}) ->
-    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
-    Text = lists:flatten(?Syn:tree_text(Def)), 
+    [Def] = ?Query:exec(Fun, ?Fun:definition()),
+    Text = lists:flatten(?Syn:tree_text(Def)),
     length(lists:filter(fun ([]) -> true;
                             ([X|_]) -> not lists:member(X, [$\s, $\n, $\t])
                         end,
@@ -989,12 +994,12 @@ no_space_after_comma({function, Fun}) ->
 %%%               0 means recursive, but not tail recursive function
 %%%              -1 means non-recursive function
 is_tail_recursive({function, Fun}) ->
-    [Def] = ?Query:exec(Fun, ?Fun:definition()), 
-    Exprs = ?Query:exec(Def, ?Query:seq(?Form:clauses(), 
+    [Def] = ?Query:exec(Fun, ?Fun:definition()),
+    Exprs = ?Query:exec(Def, ?Query:seq(?Form:clauses(),
                                         ?Clause:exprs())),
     case lists:reverse(Exprs) of
         [] -> -1; %% is not a recursive function
-        [X|Xs] -> 
+        [X|Xs] ->
             case lists:all
                 (fun(Expr) -> not is_recursive(Fun, Expr) end,
                  Xs) of
@@ -1003,7 +1008,7 @@ is_tail_recursive({function, Fun}) ->
                              false -> -1; % is not a recursive function
                              true -> 1 % is a tail recursive function
                          end
-            end        
+            end
     end;
 is_tail_recursive({module, _Mod}) ->
     throw(?RefError(incompat, [is_tail_recursive])).
@@ -1013,11 +1018,11 @@ is_tail_recursive({module, _Mod}) ->
 %%% helper function for is_tail_recursive function
 is_recursive(Fun, Expr) ->
     %has direct recursive call
-    length(?Query:exec(Fun, ?Fun:applications(Expr))) > 0 
+    length(?Query:exec(Fun, ?Fun:applications(Expr))) > 0
         orelse
         %has indirect recursive call
         has_indirect_recursion(Fun, ?Query:exec(Expr, ?Expr:funapps()), []).
-    
+
 
 %%% @private
 %%% helper function for is_tail_recursive function
@@ -1025,8 +1030,8 @@ has_indirect_recursion(_Fun, [], _Examined) -> false;
 has_indirect_recursion(Fun, [F1|Fs], Examined) ->
     Fun == F1  orelse
         has_indirect_recursion
-          (Fun, 
+          (Fun,
            Fs ++ (?Query:exec(F1, ?Fun:called()) -- Examined),
            [F1|Examined]).
- 
-    
+
+

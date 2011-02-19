@@ -24,7 +24,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(refcore_fileman).
--vsn("$Rev: 4970 $"). % for emacs"
+-vsn("$Rev: 5134 $"). % for emacs"
 
 %% Client interface
 -export([add_file/1, add_file/2, drop_file/1, drop_file/2, save_file/1]).

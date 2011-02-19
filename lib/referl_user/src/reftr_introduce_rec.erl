@@ -89,7 +89,7 @@
 %%% @author Matyas Karacsonyi <k_matyas@inf.elte.hu>
 
 -module(reftr_introduce_rec).
--vsn("$Rev: 5233 $ ").
+-vsn("$Rev: 5482 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -104,93 +104,125 @@
 error_text(not_tuple, []) ->
     ["The selection is not a tuple skeleton."];
 error_text(wrong_arity, [])->
-    ["The number of element doesn't match the number of fields."];
+    ["The number of elements doesn't match the number of fields."];
 error_text(record_exists, [Name]) ->
     ["A record named ", io_lib:write(Name), " already exists."];
 error_text(implicit, [])->
-    ["There is an implicit reference to the function."];
+    ["There is an implicit reference to the function that contains the selection."];
 error_text(illegal_selection, []) ->
-    ["The selection cannot be refactored."].
+    ["The selected tuple is not a parameter of a function definition."].
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
 prepare(Args) ->
-    Expr      = get_skeleton(?Args:expr_range(Args)),
-    Recname   = ?Args:name(Args),
-    Recfields = split_fields(?Args:string(Args)),
-
-    Exprs = ?Query:exec([Expr], ?Expr:children()),
-    ?Check(length(Recfields) == length(Exprs), ?LocalError(wrong_arity, [])),
-
-    File = ?Args:file(Args),
-    Recs = ?Query:exec(File, ?File:records()),
-    ?Check(not lists:member(Recname, [?Rec:name(R) || R <- Recs]),
-           ?LocalError(record_exists, [Recname])),
+    Expr      = get_tuple(?Args:expr_range(Args)),
 
     [{_, Parent}] = ?Syn:parent(Expr),
+    [{_, Fun}]    = ?Syn:parent(Parent),
+    ?Check(is_fundef_param(Expr, Parent), ?LocalErr0r(illegal_selection)),
+    ?Check([] =:= implicit_refs(Parent), ?LocalErr0r(implicit)),
+
+    File     = ?Args:file(Args),
+    Recnames = [?Rec:name(R) || R <- ?Query:exec(File, ?File:records())],
+    Args2    = info1(Args, Expr, Fun),
+    RName    = ?Args:ask(Args2, name, fun cc_recname/2, fun cc_error/3, Recnames),
+
+    Schema   = ?Query:exec(Expr, ?Expr:children()),
+    RecArity = length(Schema),
+    Args3    = info2(Args2, RName, RecArity),
+    RFields  = ?Args:ask(Args3, recfield_names, fun cc_recfield/2, fun cc_error/3,
+                         RecArity, fun split_fields/1),
+
+    Collected = lists:flatten(collect(Schema, Fun)),
+    UseInfos = lists:flatten([Clause || {_, Clause} <- Collected]),
+    FunDefs = lists:umerge([?Query:exec([FD], [fundef]) || {FD, _} <- Collected]),
+    DynFunCalls =
+        [?Dynfun:collect(int_rec, FD, {RName, RFields}) || FD <- FunDefs],
+
+    Calleds = [Called || {_, _, _, _, Called, _} <- UseInfos],
+    UCalledWChs = [{Node, Children}
+                        ||  Node <- lists:umerge(Calleds),
+                            Children <- [?Query:exec(Node, ?Expr:children())],
+                            Children =/= []],
+
+    ?Transform:touch(File),
     [fun () ->
-             Form = define_record(Recname, Recfields),
-             ?File:add_form(File, Form),
-             ?Transform:touch(File)
+        Form = define_record(RName, RFields),
+        ?File:add_form(File, Form)
      end,
-     case ?ESG:data(Parent) of
-         #clause{type=fundef} ->
-             ?Check(?Query:exec(Parent, ?Query:seq([?Clause:form(), ?Form:func(),
-                                                    ?Fun:implicits()])) == [],
-                    ?LocalError(implicit, [])),
-             Schema = ?Query:exec(Expr, ?Expr:children()),
-
-             [{_, Fun}] = ?Syn:parent(Parent),
-
-             fun(_) ->
-                     transform(Recname, Recfields, Schema, Fun)
-             end;
-
-         _ ->
-             throw(?LocalError(illegal_selection, []))
+     fun(_) ->
+        [replace_record_use(UseInfo, RFields, RName) || UseInfo <- UseInfos],
+        [replace(Node, make_record(RName, RFields, Children))
+            || {Node, Children} <- UCalledWChs],
+        [?Dynfun:transform(DCall) || DCall <- DynFunCalls]
      end].
 
-transform(RName, RFields, Schema, Fun) ->
-    List = lists:flatten(collect(Schema, Fun)),
-    Called =
-        [begin
-             PC = ?Query:exec(Pattern, ?Expr:children()),
-             PR = case FunCalls of
-                      [] ->
-                          make_record(RName, RFields, PFields);
-                      _ ->
-                          make_record_pattern(VarName, RName, RFields, PFields)
-                  end,
-             replace(Pattern, PR),
-	     
-	     lists:foreach(
-	       fun (Node) ->
-		  Fields = ?Query:exec(Node, ?Expr:children()),
-		  Ret = make_record(RName, RFields, Fields),
-		  replace(Node, Ret)
-	       end, Return),
+%%% ============================================================================
+%%% Implementation
 
-             lists:foreach(
-               fun (Node) ->
-                       NC = ?Query:exec(Node, ?Expr:children()),
-                       RU = make_record_update(VarName, RName, RFields, PC, NC),
-                       replace(Node, RU)
-               end, FunCalls),
-             Back
-         end || {Pattern, PFields, VarName, FunCalls, Back, Return} <- List],
+info1(Args, Expr, Fun) ->
+    [FunDef] = ?Query:exec(Fun, ?Form:func()),
+    Info =
+        ?MISC:format(
+            "Introducing a record from ~p, a parameter in function ~p.",
+                [?Syn:flat_text(Expr), get_mfa_text(FunDef)]),
+    [{transformation_text, Info} | Args].
 
-    lists:foreach(
-      fun (Node) ->
-	      case ?Query:exec(Node, ?Expr:children()) of
-		  [] ->
-		      ok;
-		  Expr ->
-		      Record = make_record(RName, RFields, Expr),
-		      replace(Node, Record)
-	      end
-      end, lists:umerge(Called)).
+info2(Args, RName, RecArity) ->
+    Info =
+        ?MISC:format("The new record #~p will have ~p fields.",
+                     [RName, RecArity]),
+    [{transformation_text, Info} | Args].
+
+
+%% Returns the Mod:Fun/Arity text, formatted.
+%% todo Move to an appropriate module. Possibly it already exists...
+get_mfa_text(Fun) ->
+    [Mod] = ?Query:exec(Fun, ?Fun:module()),
+    ?MISC:format("~p:~p/~p", [?Mod:name(Mod), ?Fun:name(Fun), ?Fun:arity(Fun)]).
+
+
+%% Returns whether the node is a parameter in a function definition.
+is_fundef_param(Node, Parent) ->
+    case ?ESG:data(Parent) of
+        #clause{type=fundef} ->
+            Patterns = ?Query:exec(Parent, ?Clause:patterns()),
+            lists:member(Node, Patterns);
+        _ -> false
+    end.
+
+implicit_refs(Node) ->
+    ?Query:exec(Node, ?Query:seq([?Clause:form(), ?Form:func(), ?Fun:implicits()])).
+
+
+replace_record_use({Pattern, PFields, VarName, FunCalls, _, Returns}, RFields, RName) ->
+    replace_pattern(FunCalls, PFields, Pattern, RFields, RName, VarName),
+    [replace_record(RFields, RName, Return) || Return <- Returns],
+
+    PC = ?Query:exec(Pattern, ?Expr:children()),
+    [replace_record_update(FunCall, PC, RFields, RName, VarName)
+        || FunCall <- FunCalls].
+
+
+replace_record_update(Funcall, PC, RFields, RName, VarName) ->
+    NC = ?Query:exec(Funcall, ?Expr:children()),
+    RU = make_record_update(VarName, RName, RFields, PC, NC),
+    replace(Funcall, RU).
+
+replace_record(RFields, RName, Return) ->
+    Fields = ?Query:exec(Return, ?Expr:children()),
+    Ret = make_record(RName, RFields, Fields),
+    replace(Return, Ret).
+
+replace_pattern(FunCalls, PFields, Pattern, RFields, RName, VarName) ->
+    PR =
+        case FunCalls of
+            [] -> make_record(RName, RFields, PFields);
+            _  -> make_record_pattern(VarName, RName, RFields, PFields)
+        end,
+    replace(Pattern, PR).
 
 collect(Schema, Fun) ->
     Visited = ets:new(visited_nodes, [set]),
@@ -206,29 +238,27 @@ collect(Schema, Fun, Visited) ->
 
     TC = lists:flatten(
            [begin
-                CP = collect_clauses(Schema, Clause, Visited),
-
-                case CP of
+                case collect_clauses(Schema, Clause, Visited) of
                     [] ->
                         [];
-                    _ ->
+                    CP ->
                         [P || P <- CP, P /= []]
                 end
             end || Clause <- Clauses]),
-    
     FunCalls = lists:flatten([FC || {_, _, _, FC, _, _} <- TC]),
     Flow = lists:flatten([lists:delete(FC, ?Dataflow:reach([FC], [{back, false}])) ||
                              FC <- FunCalls]),
-    Funs = 
-	[X || {_, X} <- 
-		  lists:umerge([lists:filter(fun (X) ->
-						     case X of 
-							 {form, _} -> true;
-							 _ -> false
-						     end
-					     end, ?Syn:root_path(Call)) || Call <- Flow])],
+    Funs =
+        [X || {_, X} <-
+                  lists:umerge([lists:filter(
+                                  fun (X) ->
+                                          case X of
+                                              {form, _} -> true;
+                                              _ -> false
+                                          end
+                                  end, ?Syn:root_path(Call)) || Call <- Flow])],
 
-    TC ++ [collect(Schema, F, Visited) || F <- Funs].
+    [{Fun, TC} | [collect(Schema, F, Visited) || F <- Funs]].
 
 
 collect_clauses(Schema, Clause, Visited) ->
@@ -241,7 +271,7 @@ collect_clauses(Schema, Clause, Visited) ->
                  [] ->
                      ets:insert(Visited, {Pattern}),
                      Fields = ?Query:exec(Pattern, ?Expr:children()),
-		     collect_clauses(Schema, Clause, Pattern, Fields, Visited, UsedNamesBuffer);
+                     collect_clauses(Schema, Clause, Pattern, Fields, Visited, UsedNamesBuffer);
 
                  _ ->
                      []
@@ -253,51 +283,51 @@ collect_clauses(Schema, Clause, Visited) ->
 
 collect_clauses(Schema, Clause, Pattern, Fields, Visited, UsedNamesBuffer) ->
     case check_type(Schema, Fields) of
-	true ->
-	    PFields = pattern_fields([?ESG:data(C) || C <- Fields], Fields),
-	    FunCalls = get_funcalls(Schema, Fields, Visited),
-	    Back = lists:delete(Pattern, ?Dataflow:reach([Pattern], [back])),
-	    
-	    UsedNames = [Elem || {Elem} <- ets:tab2list(UsedNamesBuffer)],
-	    VarName = ?Var:new_varname(Pattern, "Rec", UsedNames),
-	    ets:insert(UsedNamesBuffer, {VarName}),
+        true ->
+            PFields = pattern_fields([?ESG:data(C) || C <- Fields], Fields),
+            FunCalls = get_funcalls(Schema, Fields, Visited),
+            Back = lists:delete(Pattern, ?Dataflow:reach([Pattern], [back])),
 
-	    Last = lists:last(?Query:exec(Clause, [body])),
-	    Return =
-		case {?Expr:type(Last),
-		      check_type(Schema, ?Query:exec(Last, ?Expr:children()))} of
-		    {tuple, true} ->
-			[Last |
-			 [begin
-			      RootPath = lists:reverse(?Syn:root_path(B)),
-			      ME = lists:filter(
-				     fun ({_, X}) ->
-					     case ?ESG:data(X) of
-						 #expr{type=match_expr} ->
-						     true;
-						 _ ->
-						     false
-					     end
-				     end, RootPath),
+            UsedNames = [Elem || {Elem} <- ets:tab2list(UsedNamesBuffer)],
+            VarName = ?Var:new_varname(Pattern, "Rec", UsedNames),
+            ets:insert(UsedNamesBuffer, {VarName}),
 
-			      case ME of
-				  [] ->
-				      [];
+            Last = lists:last(?Query:exec(Clause, [body])),
+            Return =
+                case {?Expr:type(Last),
+                      check_type(Schema, ?Query:exec(Last, ?Expr:children()))} of
+                    {tuple, true} ->
+                        [Last |
+                         [begin
+                              RootPath = lists:reverse(?Syn:root_path(B)),
+                              ME = lists:filter(
+                                     fun ({_, X}) ->
+                                             case ?ESG:data(X) of
+                                                 #expr{type=match_expr} ->
+                                                     true;
+                                                 _ ->
+                                                     false
+                                             end
+                                     end, RootPath),
 
-				  [{_, MatchExpr}|_] ->
-				      [Left|_] = ?Query:exec(MatchExpr, ?Expr:children()),
-				      Left
-			      end
-			  end || B <- Back]];
-		    
-		    _ ->
-			[]
-		end,
-	    
-	    {Pattern, PFields, VarName, FunCalls, Back, Return};
-	
-	false ->
-	    []
+                              case ME of
+                                  [] ->
+                                      [];
+
+                                  [{_, MatchExpr}|_] ->
+                                      [Left|_] = ?Query:exec(MatchExpr, ?Expr:children()),
+                                      Left
+                              end
+                          end || B <- Back]];
+
+                    _ ->
+                        []
+                end,
+
+            {Pattern, PFields, VarName, FunCalls, Back, Return};
+
+        false ->
+            []
     end.
 
 
@@ -342,25 +372,20 @@ var_occ(C, Pattern, [Node|Rest]) ->
 
     case {?ESG:data(Parent), ?ESG:data(P2)} of
         {#expr{type=tuple}, #expr{type=arglist}} ->
-	    Eq = lists:zipwith(
-		   fun (P, N) ->
-			   ND = ?ESG:data(N),
-			   if
-			       (C =:= P) and (P#expr.value /= ND#expr.value) ->
-				   true;
-			       true ->
-				   false
-			   end
-		   end, Pattern, ?Query:exec(Parent, ?Expr:children())),
-	    case lists:member(true, Eq) of
-		true ->
-		    Node;
-		_ ->
-		    var_occ(C, Pattern, Rest)
-	    end;
+            Eq = lists:zipwith(
+                   fun (P, N) ->
+                           ND = ?ESG:data(N),
+                           C =:= P andalso P#expr.value =/= ND#expr.value
+                   end, Pattern, ?Query:exec(Parent, ?Expr:children())),
+            case lists:member(true, Eq) of
+                true ->
+                    Node;
+                _ ->
+                    var_occ(C, Pattern, Rest)
+            end;
 
-	_ ->
-	    Node
+        _ ->
+            Node
     end.
 
 %% @spec get_funcalls(node(), node(), node()) -> node()
@@ -505,11 +530,34 @@ replace(From, To) ->
     end.
 
 
-get_skeleton(Exprs) ->
-    ?Check(length(Exprs) == 1, ?LocalError(not_tuple, [])),
+get_tuple(Exprs) ->
+    ?Check(length(Exprs) == 1, ?LocalErr0r(not_tuple)),
     [Expr] = Exprs,
-    ?Check(?Expr:type(Expr) == tuple, ?LocalError(not_tuple, [])),
+    ?Check(?Expr:type(Expr) == tuple, ?LocalErr0r(not_tuple)),
     Expr.
 
 split_fields(S) ->
     [list_to_atom(A) || A <- string:tokens(S, " ")].
+
+
+%%% ============================================================================
+%%% Checks
+
+cc_recname(Recname, Recnames) ->
+    ?Check(not lists:member(Recname, Recnames), ?LocalError(record_exists, [Recname])),
+    Recname.
+
+cc_recfield(Recfields, RecArity) ->
+    ?Check(length(Recfields) == RecArity, ?LocalErr0r(wrong_arity)),
+    ?Check(length(lists:usort(Recfields)) == length(Recfields),
+           ?LocalErr0r(multiply_given_fields)),
+    Recfields.
+
+cc_error(?LocalError(record_exists, [Recname]), Recname, _Recnames) ->
+    ?MISC:format("Record ~p already exists.", [Recname]);
+cc_error(?LocalErr0r(multiply_given_fields), Recfields, _RecArity) ->
+    ?MISC:format("Multiply given record field names: ~p.",
+                 [Recfields -- lists:usort(Recfields)]);
+cc_error(?LocalErr0r(wrong_arity), Recfields, RecArity) ->
+    ?MISC:format("The record should have ~p fields. Instead, ~p field names were given.",
+                 [RecArity, length(Recfields)]).

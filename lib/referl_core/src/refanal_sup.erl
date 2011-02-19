@@ -23,7 +23,7 @@
 %%% @author Laszlo Lovei <lovei@elte.hu>
 
 -module(refanal_sup).
--vsn("$Rev: 4519 $").
+-vsn("$Rev: 5262 $").
 -behaviour(application).
 -behaviour(supervisor).
 
@@ -60,6 +60,17 @@ stop(_State) ->
 %% =============================================================================
 %% Supervisor functions
 
+-ifdef(development_mode).
+    -define(ALLOWED_RESTARTS_COUNT, 1).
+    -define(ALLOWED_RESTARTS_IN_SEC, 3).
+    -define(SERVER_SHUTDOWN_TIMEOUT, 3000).
+-else.
+    -define(ALLOWED_RESTARTS_COUNT, 3).
+    -define(ALLOWED_RESTARTS_IN_SEC, 3600).
+    -define(SERVER_SHUTDOWN_TIMEOUT, 3000).
+-endif.
+
+
 %% @private
 init(top) ->
     {ok,
@@ -75,14 +86,14 @@ init(top) ->
        {fileman,
         {?FileMan, start_link, []},
         permanent,
-        3000,
+        ?SERVER_SHUTDOWN_TIMEOUT,
         worker,
         [?FileMan]},
        %% Semantic node server
        {semnode,
         {?NodeSync, start_link, []},
         permanent,
-        3000,
+        ?SERVER_SHUTDOWN_TIMEOUT,
         worker,
         [?NodeSync]}
       ]}};
@@ -90,13 +101,13 @@ init(top) ->
 init(graph) ->
     {ok,
      {{one_for_all,   % restart everyone in case of runtime error
-       %3, 3600},     % 3 restarts in 1 hour at most
-       1, 3},         % 1 restart in 3 seconds - development setting
+       ?ALLOWED_RESTARTS_COUNT,
+       ?ALLOWED_RESTARTS_IN_SEC},
       [%% Low level graph storage
        {graph,        % ID
         {?Graph, start_link, []},   % start function
         permanent,    % always restart
-        3000,         % shutdown timeout: 3 second
+        ?SERVER_SHUTDOWN_TIMEOUT,         % shutdown timeout: 3 second
         worker,       % worker child (not a supervisor)
         [?Graph]      % module list
        },
@@ -104,21 +115,21 @@ init(graph) ->
        {esg,
         {?ESG, start_link, []},
         permanent,
-        3000,
+        ?SERVER_SHUTDOWN_TIMEOUT,
         worker,
         [?ESG]
        },
         {anal,
         {?MODULE, start_sup, [?ANAL_SERVER, anal]},
         permanent,
-        3000,
+        ?SERVER_SHUTDOWN_TIMEOUT,
         supervisor,
         [?MODULE]},
       %% Function analyser server
        {funprop,
         {?FunProp, start_link, []},
         permanent,
-        3000,
+        ?SERVER_SHUTDOWN_TIMEOUT,
         worker,
         [?FunProp]}
       ]}};

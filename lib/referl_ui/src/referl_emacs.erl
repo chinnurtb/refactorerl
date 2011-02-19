@@ -31,13 +31,15 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(referl_emacs).
--vsn("$Rev: 3816 $").
+-vsn("$Rev: 5269 $").
 
 -export([start/0]).
 
 -export([run_server/0]).
 
 -include("ui.hrl").
+%-include_lib("referl_core/include/core_export.hrl").
+-define(RefStop,1000).
 
 %% @doc Main loop that reads Erlang terms from standard input and passes them
 %% to the interpreter server.
@@ -66,66 +68,71 @@ emacs_server() ->
     Self = self(),
     referl_ui_evsend:start(Self, msg),
     receive
-	{msg, installed} -> loop(spawn_link(fun() -> read_loop(Self) end))
+        {msg, installed} ->
+            loop(spawn_link(fun() -> read_loop(Self) end))
     end.
 
 loop(Inp) ->
     receive
-	{msg, terminated} -> loop(Inp);
-	{msg,{gen_event_EXIT,referl_ui_evsend,shutdown}} -> loop(Inp);
+        {msg, terminated} ->
+            loop(Inp);
+        {msg, {gen_event_EXIT,referl_ui_evsend,shutdown}} ->
+            loop(Inp);
+        {msg, Msg}    -> %global messages
+%?d(Msg),
+            show_msg(Msg),
+            loop(Inp);
         {Inp, Term} ->
-            try
-                ui_call(Term)
-            catch
-                _:Err ->
-                    io:format("Server Error: ~p~n", [Err])
-            end,
+%?d(Term),
+            ui_call(Term),
             loop(Inp);
         {'EXIT', Inp, Reason} ->
             io:format("Read loop error: ~p~n", [Reason]),
             Self = self(),
             Inp1 = spawn_link(fun() -> read_loop(Self) end),
             loop(Inp1);
-        {msg, Msg}    ->
-            show_msg(Msg),
-            loop(Inp);
         code_change ->
             exit(code_change);
         {nodedown, ?REFERL_NODE} ->
-            init:stop()
+            init:stop();
+        Msg -> %unicast messages
+            show_msg(Msg),
+            loop(Inp)
     end.
 
 %% @private
 read_loop(Pid) ->
     case io:read('') of
         {ok, Term} -> Pid ! {self(), Term};
-        eof        -> Pid ! {self(), {stop}};
+        eof        ->
+            Pid ! {self(), {stop}},
+            timer:sleep(?RefStop);
         {error, {_, Mod, Error}} ->
             Pid ! {msg, {error,
                          lists:flatten(
                            io_lib:format("~s", [Mod:format_error(Error)]))}};
-        _ -> ok
+        _ -> skip
     end,
     read_loop(Pid).
 
 
 
 %% @private
-ui_call(Command) when is_tuple(Command) ->
-    [Func | Args] = tuple_to_list(Command),
-    try
-        apply(?UI, Func, Args)
-    catch
-        error:undef ->
-            io:format("Unrecognised command ~512P~n", [Command, 4])
+ui_call({getid}) ->
+    ReqID = ?UI:getid(),
+    show_msg({reqid,ReqID});
+
+ui_call(RNA) when is_tuple(RNA) ->
+    [ReqID | NameArgs] = tuple_to_list(RNA),
+    case ?UI:request(ReqID,list_to_tuple (NameArgs)) of
+        ok -> ok;
+        error ->
+            io:format("Bad server request ~512P~n", [RNA, 6])
     end.
 
-
-show_msg({Type, Data}) ->
-    io:format("\2[~s ~s]~n", [Type, print_elisp(Data)]);
-show_msg(Msg) ->
-    show_msg({error,
-              lists:flatten(io_lib:format("Unknown message: ~p", [Msg]))}).
+show_msg(X) ->
+%    ?d(X),
+    io:format("\2~s~n",[print_elisp(X)]).
 
 print_elisp(Tuple) when is_tuple(Tuple) ->
     ["[",

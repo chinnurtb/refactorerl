@@ -38,10 +38,11 @@
           ((and (not wranglerp) (not (eq refac-buffer-state :ok)))
            (error "File is not ready for refactoring"))
           (t
-           (refac-send-command (if wranglerp 'wr_transform 'transform) name arglist)))))
+           (refac-send-command 'transform name arglist)))))
+;           (refac-send-command (if wranglerp 'wr_transform 'transform) name arglist)))))
 
 (defun refac-transform (name &rest args)
-  (apply #' refac-transform* nil name args))
+  (apply #' refac-transform* nil name (cons :ask_missing (cons 'true args))))
 
 (defun refac-transform/wrangler (name &rest args)
   (when (eq refactorerl-wrangler-path 'disabled)
@@ -59,7 +60,7 @@
   "Performs deprecated regexp module upgrade to new re module.
 
 2. Call the refactoring from the menu or with \\[refactorerl-upgrade-regexp-iface]."
-  (refac-transform 'reftr_upgrade_regexp
+  (refac-transform 'upgrade_regexp
                    :file buffer-file-name))
 
 ;; -----------------------------------------------------------------------------
@@ -73,7 +74,7 @@
 
 1. Position the cursor over a function application.
 2. Call the refactoring from the menu or with \\[refactorerl-inline-function]."
-  (refac-transform 'reftr_inline_fun
+  (refac-transform 'inline_fun
                    :file buffer-file-name
                    :position pos))
 
@@ -85,7 +86,7 @@
 
 1. Position the cursor over a macro usage.
 2. Call the refactoring from the menu or with \\[refactorerl-inline-macro]."
-  (refac-transform 'reftr_inline_mac
+  (refac-transform 'inline_mac
                    :file buffer-file-name
                    :position pos))
 
@@ -97,36 +98,7 @@
 
 1. Position the cursor over any instance of the variable.
 2. Call the refactoring from the menu or with \\[refactorerl-eliminate-variable]."
-  (refac-transform 'reftr_elim_var
-                   :file buffer-file-name
-                   :position pos))
-
-(define-refac-operation (refactorerl-extract-function :menu "Introduce function" :key "if"
-                                                      :menu-group introelim
-                                                      :precondition :buffer-state)
-  (((beg end) :region) (name "Function name"))
-  "Performs the Extract Function refactoring. Operates on the expression or
-expressions between the point and the mark.
-
-1. Mark the exact part of the source you want to extract.
-2. Call the refactoring from the menu or with \\[refactorerl-extract-function].
-3. Type the new function name."
-  (refac-transform 'reftr_extract_fun
-                   :file buffer-file-name
-                   :posrange (vector beg (1- end))
-                   :name name)
-  (deactivate-mark))
-
-(define-refac-operation (refactorerl-introduce-import :menu "Introduce import"
-                                                      :menu-group introelim
-                                                      :key "ii"
-                                                      :precondition :buffer-state)
-  ((pos :point))
-  "Performs the Introduce Import refactoring.
-
-1. Position the cursor over any instance of the module qualifier.
-2. Call the refactoring from the menu or with \\[refactorerl-introduce-import]."
-  (refac-transform 'reftr_introduce_import
+  (refac-transform 'elim_var
                    :file buffer-file-name
                    :position pos))
 
@@ -139,7 +111,51 @@ expressions between the point and the mark.
 
 1. Position the cursor over any import form.
 2. Call the refactoring from the menu or with \\[refactorerl-eliminate-import]."
-  (refac-transform 'reftr_eliminate_import
+  (refac-transform 'eliminate_import
+                   :file buffer-file-name
+                   :position pos))
+
+; todo This operation should be available under C-c C-r e f,
+;      the same as eliminate function; the system should tell them apart.
+(define-refac-operation (refactorerl-eliminate-funexpr :menu "Eliminate fun expression" :key "eu"
+                                                       :menu-group introelim
+                                                       :precondition :buffer-state)
+  ((pos :point))
+  "Performs the Eliminate Fun Expression refactoring
+   that expands the fun expression.
+
+1. Position the cursor over the name of the function to be expanded.
+2. Call the refactoring from the menu or with \\[refactorerl-eliminate-funexpr]."
+  (refac-transform 'expand_funexpr
+                   :file buffer-file-name
+                   :position pos))
+
+
+(define-refac-operation (refactorerl-extract-function :menu "Introduce function" :key "if"
+                                                      :menu-group introelim
+                                                      :precondition :buffer-state)
+  (((beg end) :region))
+  "Performs the Extract Function refactoring. Operates on the expression or
+expressions between the point and the mark.
+
+1. Mark the exact part of the source you want to extract.
+2. Call the refactoring from the menu or with \\[refactorerl-extract-function].
+3. Type the new function name."
+  (refac-transform 'extract_fun
+                   :file buffer-file-name
+                   :posrange (vector beg (1- end)))
+  (deactivate-mark))
+
+(define-refac-operation (refactorerl-introduce-import :menu "Introduce import"
+                                                      :menu-group introelim
+                                                      :key "ii"
+                                                      :precondition :buffer-state)
+  ((pos :point))
+  "Performs the Introduce Import refactoring.
+
+1. Position the cursor over any instance of the module qualifier.
+2. Call the refactoring from the menu or with \\[refactorerl-introduce-import]."
+  (refac-transform 'introduce_import
                    :file buffer-file-name
                    :position pos))
 
@@ -148,46 +164,89 @@ expressions between the point and the mark.
 ;; (define-refac-operation (refactorerl-introduce-macro :menu "Introduce macro" :key "mi"
 ;;                                                       :menu-group introelim
 ;;                                                       :precondition :buffer-state)
-;;   (((beg end) :region) (name "Macro name"))
+;;   (((beg end) :region))
 ;;   "Performs the Introduce Function refactoring. Operates on the expression or
 ;; expressions between the point and the mark.
 ;;
 ;; 1. Mark the exact part of the source you want to extract.
 ;; 2. Call the refactoring from the menu or with \\[refactorerl-introduce-macro].
 ;; 3. Type the new macro name."
-;;   (refac-transform 'reftr_introduce_macro
+;;   (refac-transform 'introduce_macro
 ;;                    :file buffer-file-name
-;;                    :posrange (vector beg (1- end))
-;;                    :name name)
+;;                    :posrange (vector beg (1- end)))
 ;;   (deactivate-mark))
 
 (define-refac-operation (refactorerl-introduce-rec :menu "Introduce record" :key "ir"
                                                    :menu-group introelim
                                                    :precondition :buffer-state)
-  (((beg end) :region) (name "The record name") (fields "The recored fields separated by whitespace"))
+  (((beg end) :region))
   "Performs the introduce record refactoring."
-  (refac-transform 'reftr_introduce_rec
+  (refac-transform 'introduce_rec
                     :file buffer-file-name
-                    :posrange (vector beg (1- end))
-                    :name name
-                    :text fields)
+                    :posrange (vector beg (1- end)))
   (deactivate-mark))
 
 (define-refac-operation (refactorerl-merge-expr :menu "Introduce variable" :key "iv"
                                                 :menu-group introelim
                                                 :help "Merges all instances of an expression"
                                                 :precondition :buffer-state)
-    (((beg end) :region) (varname "New variable name"))
+    (((beg end) :region))
   "Performs the Merge Expression Duplicates refactoring. Operates
 on the expression between the point and the mark.
 
 1. Mark the expression whose duplicates are to be merged.
 2. Call the refactoring from the menu or with \\[refactorerl-merge-expr].
 3. Type the new variable name."
-  (refac-transform 'reftr_merge
+  (refac-transform 'merge
                    :file buffer-file-name
-                   :posrange (vector beg (1- end))
-                   :varname varname)
+                   :posrange (vector beg (1- end)))
+  (deactivate-mark))
+
+
+(define-refac-operation (refactorerl-introduce-process :menu "Introduce process"
+                                                       :key "ip"
+                                                       :menu-group introelim
+                                                       :precondition :buffer-state)
+  ((pos :point))
+  "Performs the Introduce process refactoring.
+
+1. Position the cursor over the name of the function application to be delegated to a separate process.
+2. Call the refactoring from the menu or with \\[refactorerl-introduce-process]."
+  (refac-transform 'funapp_to_proc
+                   :file buffer-file-name
+                   :position pos))
+
+(define-refac-operation (refactorerl-introduce-function-argument :menu "Introduce function argument"
+                                                                 :key "ia"
+                                                                 :menu-group introelim
+                                                                 :precondition :buffer-state)
+  (((beg end) :region))
+  "Performs the Generalize Function refactoring. Operates on the expression or
+expressions between the point and the mark.
+
+1. Select the expression along which the generalization should be done.
+2. Call the refactoring from the menu or with \\[refactorerl-introduce-function-argument].
+3. Type the name for the new function argument."
+  (refac-transform 'gen
+                   :file buffer-file-name
+                   :posrange (vector beg (1- end)))
+  (deactivate-mark))
+
+
+(define-refac-operation (refactorerl-introduce-tuple :menu "Introduce tuple"
+                                                     :key "it"
+                                                     :menu-group introelim
+                                                     :help "Group parameters of the function into a tuple"
+                                                     :precondition :buffer-state)
+  (((beg end) :region))
+  "Performs the Tuple Function Parameters refactoring. Operates on the
+parameters of function which are marked.
+
+1. Mark the arguments to be tupled in the function definition.
+2. Call the refactoring from the menu or with \\[refactorerl-introduce-tuple]."
+  (refac-transform 'tuple_funpar
+                   :file buffer-file-name
+                   :posrange (vector beg (1- end)))
   (deactivate-mark))
 
 
@@ -203,7 +262,7 @@ on the expression between the point and the mark.
 
 1. Mark the expression to be transformed.
 2. Call the refactoring from the menu or with \\[refactorerl-transform-listcomp]."
-  (refac-transform 'reftr_list_comp
+  (refac-transform 'list_comp
                    :file buffer-file-name
                    :posrange (vector beg (1- end)))
   (deactivate-mark))
@@ -227,9 +286,9 @@ moved can be selected from a list.
   (cond ((not buffer-file-name)
          (error "No visited file"))
         ((not (eq refac-buffer-state :ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-move-fun-params))))
+         (error "File is not ready for refactoring")))
+  (refac-transform 'move_fun
+                   :file buffer-file-name))
 
 (define-refac-operation (refactorerl-move-macro :menu "Move macro" :key "mm"
                                                 :menu-group move
@@ -246,7 +305,8 @@ moved can be selected from a list.
     (error "No visited file"))
   (unless  (eq refac-buffer-state :ok)
     (error "File is not ready for refactoring"))
-  (refac-move-mac-params))
+  (refac-transform 'move_mac
+                   :file buffer-file-name))
 
 (define-refac-operation (refactorerl-move-record :menu "Move record" :key "mr"
                                                  :menu-group move
@@ -263,91 +323,47 @@ moved can be selected from a list.
     (error "No visited file"))
   (unless  (eq refac-buffer-state :ok)
     (error "File is not ready for refactoring"))
-  (refac-move-rec-params))
+  (refac-transform 'move_rec
+                   :file buffer-file-name))
 
 ;; -----------------------------------------------------------------------------
 ;; Functions
 
-(define-refac-operation (refactorerl-funapp-to-proc :menu "Delegate function application to new process" :key "fp"
-                                                    :menu-group func
-                                                    :precondition :buffer-state)
-  ((pos :point))
-  "Performs the Delegate function application to new process refactoring.
-
-1. Position the cursor over the name of the function application to be delegated to a separate process.
-2. Call the refactoring from the menu or with \\[refactorerl-funapp-to-proc]."
-  (refac-transform 'reftr_funapp_to_proc
-                   :file buffer-file-name
-                   :position pos))
-
-(define-refac-operation (refactorerl-expand-funexpr :menu "Expand fun expression" :key "xf"
-                                                    :menu-group func
-                                                    :precondition :buffer-state)
-  ((pos :point))
-  "Performs the Expand Fun Expression refactoring.
-
-1. Position the cursor over the name of the function to be expanded.
-2. Call the refactoring from the menu or with \\[refactorerl-expand-funexpr]."
-  (refac-transform 'reftr_expand_funexpr
-                   :file buffer-file-name
-                   :position pos))
-
-(define-refac-operation (refactorerl-generalize-function :menu "Generalize function definition" :key "gf"
-                                                         :menu-group func
-                                                         :precondition :buffer-state)
-  (((beg end) :region) (name "New parameter name"))
-  "Performs the Generalize Function refactoring. Operates on the expression or
-expressions between the point and the mark.
-
-1. Select the expression along which the generalization should be done.
-2. Call the refactoring from the menu or with \\[refactorerl-generalize-function].
-3. Type the name for the new function argument."
-  (refac-transform 'reftr_gen
-                   :file buffer-file-name
-                   :posrange (vector beg (1- end))
-                   :varname name)
-  (deactivate-mark))
 
 (define-refac-operation (refactorerl-reorder-funpar :menu "Reorder function parameters" :key "of"
                                                     :menu-group func
                                                     :precondition :buffer-state)
-  ((pos :point) (order "New order (e.g. 3 1 2)"))
+  ((pos :point))
   "Performs the Reorder Function Parameters refactoring.
 
 1. Position the cursor over the name of the function in any
       clause of the function definition.
 2. Call the refactoring from the menu or with \\[refactorerl-reorder-funpar].
 3. Type the name for the new order of the function arguments."
-  (refac-transform 'reftr_reorder_funpar
+  (refac-transform 'reorder_funpar
                    :file buffer-file-name
-                   :position pos
-                   :order (car (read-from-string
-                                (concat "(" order ")")))))
+                   :position pos))
 
-(define-refac-operation (refactorerl-tuple-funpar :menu "Tuple function parameters" :key "tf"
-                                                  :menu-group func
-                                                  :help "Group parameters of the function into a tuple"
-                                                  :precondition :buffer-state)
-  (((beg end) :region))
-  "Performs the Tuple Function Parameters refactoring. Operates on the
-parameters of function which are marked.
-
-1. Mark the arguments to be tupled in the function definition.
-2. Call the refactoring from the menu or with \\[refactorerl-tuple-funpar]."
-  (refac-transform 'reftr_tuple_funpar
-                   :file buffer-file-name
-                   :posrange (vector beg (1- end)))
-  (deactivate-mark))
 
 
 
 ;; -----------------------------------------------------------------------------
 ;; Rename
 
-(define-refac-operation (refactorerl-rename-function :menu "Rename function" :menu-group rename
-                                                     :key "rf"
+(define-refac-operation (refactorerl-rename-universal :menu "Universal renamer" :menu-group rename
+                                                     :key "r"
                                                      :precondition :buffer-state)
-  ((pos :point) (name "New function name"))
+  ((pos :point))
+  "Tries to rename the entity under the cursor,
+   using the appropriate rename operation."
+  (refac-transform 'rename
+                   :file buffer-file-name
+                   :position pos))
+
+(define-refac-operation (refactorerl-rename-function :menu "Rename function" :menu-group rename
+                                                     :key "xrf"
+                                                     :precondition :buffer-state)
+  ((pos :point))
   "Performs the Rename Function refactoring.
 
 1. Position the cursor over the name of the function in any
@@ -355,88 +371,87 @@ parameters of function which are marked.
       function or the function in an export list.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-function].
 3. Type the new function name."
-  (refac-transform 'reftr_rename_fun
+  (refac-transform 'rename_fun
                    :file buffer-file-name
-                   :position pos
-                   :name name))
+                   :position pos))
 
 (define-refac-operation (refactorerl-rename-header :menu "Rename header"
                                                    :menu-group rename
-                                                   :key "rh"
+                                                   :key "xrh"
                                                    :precondition :buffer-state)
-  ((name "New headerfile name"))
+  ()
   "Performs the Rename Header File refactoring.
 
 1. Position the cursor in the header file.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-header].
 3. Type the new header file name."
-  (refac-transform 'reftr_rename_header
-                   :file buffer-file-name
-                   :filename name))
+  (refac-transform 'rename_header
+                   :file buffer-file-name))
 
-(define-refac-operation (refactorerl-rename-macro :menu "Rename macro" :menu-group rename :key "rc"
-                                                   :precondition :buffer-state)
-  ((pos :point) (name "New macro name"))
+(define-refac-operation (refactorerl-rename-macro :menu "Rename macro"
+                                                  :menu-group rename
+                                                  :key "xrc"
+                                                  :precondition :buffer-state)
+  ((pos :point))
   "Performs the Rename Macro refactoring.
 
 1. Position the cursor over the name in the macro definition.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-macro].
 3. Type the new macro name."
-  (refac-transform 'reftr_rename_mac
+  (refac-transform 'rename_mac
                    :file buffer-file-name
-                   :position pos
-                   :macname name))
+                   :position pos))
 
 (define-refac-operation (refactorerl-rename-mod :menu "Rename module"
                                                 :menu-group rename
-                                                :key "rm"
+                                                :key "xrm"
                                                 :precondition :buffer-state)
-  ((name "New module name"))
+  ()
   "Performs the Rename Module refactoring.
 
 1. Position the cursor over the name in the module attribute.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-mod].
 3. Type the new module name."
-  (refac-transform 'reftr_rename_mod
-                   :file buffer-file-name
-                   :name name))
+  (refac-transform 'rename_mod
+                   :file buffer-file-name))
 
-(define-refac-operation (refactorerl-rename-record :menu "Rename record" :menu-group rename :key "rrd"
+(define-refac-operation (refactorerl-rename-record :menu "Rename record"
+                                                   :menu-group rename
+                                                   :key "xrrd"
                                                    :precondition :buffer-state)
-  ((pos :point) (name "New record name"))
+  ((pos :point))
   "Performs the Rename Record refactoring.
 
 1. Position the cursor over the name in the record definition.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-record].
 3. Type the new record name."
-  (refac-transform 'reftr_rename_rec
+  (refac-transform 'rename_rec
                    :file buffer-file-name
-                   :position pos
-                   :name name))
+                   :position pos))
 
-(define-refac-operation (refactorerl-rename-field :menu "Rename record field" :menu-group rename :key "rrf"
+(define-refac-operation (refactorerl-rename-field :menu "Rename record field"
+                                                  :menu-group rename
+                                                  :key "xrrf"
                                                   :precondition :buffer-state)
-  ((pos :point) (name "New field name"))
+  ((pos :point))
   "Performs the Rename Record Field refactoring.
 
 1. Position the cursor over the field name in the record definition.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-field].
 3. Type the new field name."
-  (refac-transform 'reftr_rename_recfield
+  (refac-transform 'rename_recfield
                    :file buffer-file-name
-                   :position pos
-                   :name name))
+                   :position pos))
 
 (define-refac-operation (refactorerl-rename-variable :menu "Rename variable" :menu-group rename
-                                                     :key "rv"
+                                                     :key "xrv"
                                                      :precondition :buffer-state)
-  ((pos :point) (name "New variable name"))
+  ((pos :point))
   "Performs the Rename Variable refactoring.
 
 1. Position the cursor over any instance of the variable.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-variable].
 3. Type the new variable name."
-  (refac-transform 'reftr_rename_var
+  (refac-transform 'rename_var
                    :file buffer-file-name
-                   :position pos
-                   :varname name))
+                   :position pos))

@@ -56,7 +56,7 @@
 %%% @todo Perhaps also consider fusion with move_fun?
 
 -module(reftr_move_mac).
--vsn("$Rev: 3820 $").
+-vsn("$Rev: 5496 $").
 
 %%% ============================================================================
 %%% Exports
@@ -108,12 +108,12 @@ error_text(delete, []) ->
 
 %% @private
 prepare(Args) ->
-    FromFile = ?Args:file(Args),
+    Macros   = ?Args:macros(Args),
+    [FromFile] = ?Query:exec(hd(Macros), ?Macro:file()),
     FromPath = ?File:path(FromFile),
     ToName   = ?Args:filename(Args),
     ToPath   = target_path(ToName, FromPath),
     ToFile   = ?Query:exec1(?File:find(ToPath), ?RefErr0r(target_not_found)),
-    Macros   = ?Args:macros(Args),
 
     {Names, Forms, Files} =
         lists:foldl(
@@ -136,7 +136,12 @@ prepare(Args) ->
     check_used_only_in_target(Info),
     check_no_using(Info),
 
-    fun() -> transform(Info) end.
+    [fun() ->
+        transform(Info)
+     end,
+     fun(_)->
+        Macros %@todo ok?
+     end].
 
 
 %%% ============================================================================

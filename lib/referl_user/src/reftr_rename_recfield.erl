@@ -53,7 +53,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_rename_recfield).
--vsn("$Rev: 4956 $"). % for emacs"
+-vsn("$Rev: 5496 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -73,31 +73,53 @@ error_text(name_collision, []) ->
 
 %% @private
 prepare(Args) ->
+    Field     = ?Args:record_field(Args),
+    [Record]  = ?Query:exec(Field, ?RecField:recorddef()),
+    RecName   = ?Rec:name(Record),
+    ArgsInfo  = add_info_text(Args, RecName, Field),
+    Names     = recfield_names(Field, Record),
+    % todo Add transformation info
+    NewName   = ?Args:ask(ArgsInfo, name, fun cc_rfname/2, fun cc_error/3,
+                          {RecName, Names}),
+    NameStr   = io_lib:write_atom(NewName),
 
-    NewName = ?Args:name(Args),
-    Field   = ?Args:record_field(Args),
-    Record  = ?Query:exec(Field, ?RecField:recorddef()),
+    Refs     = ?Query:exec(Field, ?RecField:references()),
+    ToFieldTypexp = [{fielddef, back}],
+    [TypExp] = ?Query:exec(Field, ToFieldTypexp),
 
-    %% Checking name collisions
+    ?Macro:check_single_usage([{[TypExp], [{tlex, 1}]}]),
 
-    Names = [Name || F <- ?Query:exec(Record, ?Rec:fields()) -- [Field],
-                     #field{name=Name} <- [?ESG:data(F)]],
-    ?Check(not lists:member(NewName, Names), ?LocalErr0r(name_collision)),
+    [?Transform:touch(Node) || Node <- [TypExp | Refs]],
+    [fun() ->
+        ?Macro:inline_single_virtuals(Refs, elex),
+        [?Macro:update_macro(Expr, {elex, 1}, NameStr) || Expr <- Refs],
+        ?Macro:update_macro(TypExp, {tlex, 1}, NameStr)
+    end,
+    fun(_)->
+        [Field] %@todo others?
+    end].
 
-    %% Collecting references
+add_info_text(Args, RecName, Field) ->
+    FieldName = ?RecField:name(Field),
+    Info      = ?MISC:format("Renaming record field #~p.~p", [RecName, FieldName]),
+    [{transformation_text, Info} | Args].
 
-    Refs   = ?Query:exec(Field, ?RecField:references()),
- %   ?Macro:check_macros(Refs, {elex, 1}),
-    [TypExp] = ?Query:exec(Field, [{fielddef, back}]),
-%    ?Macro:check_macros([TypExp], {tlex, 1}),
-    ?Macro:check_macros([{[TypExp], {tlex, 1}}, {Refs, {elex, 1}}]),
-    %%Data   = ?ESG:data(TypExp),
-    fun() ->
-  %%      [?Syn:replace(Expr, {elex,1}, [io_lib:write_atom(NewName)]) ||
-        [?Macro:update_macro(Expr, {elex, 1}, io_lib:write_atom(NewName)) ||
-                Expr <- Refs],
-  %%      ?Syn:replace(TypExp, {tlex,1}, [io_lib:write_atom(NewName)]),
-        ?Macro:update_macro(TypExp, {tlex, 1}, io_lib:write_atom(NewName)),
-        %%?ESG:update(TypExp, Data#typexp{tag = NewName}),
-        [?Transform:touch(Node) || Node <- [TypExp | Refs]]
-    end.
+%%% ============================================================================
+%%% Implementation
+
+%% Returns the record field names of `Record', except for `Field'.
+recfield_names(Field, Record) ->
+    [(?ESG:data(F))#field.name
+        ||  F <- ?Query:exec(Record, ?Rec:fields()),
+            F =/= Field].
+
+%%% ----------------------------------------------------------------------------
+%%% Checks
+
+cc_rfname(NewRecFieldName, {_RecName, Names}) ->
+    ?Check(not lists:member(NewRecFieldName, Names), ?LocalErr0r(name_collision)),
+    NewRecFieldName.
+
+cc_error(?LocalErr0r(name_collision), NewRecFieldName, {RecName, _Names}) ->
+    ?MISC:format("The record field name #~p.~p is already used.",
+                 [RecName, NewRecFieldName]).

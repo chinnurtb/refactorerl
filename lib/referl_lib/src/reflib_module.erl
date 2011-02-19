@@ -139,8 +139,13 @@ visible(Name, Ary)->
 %%          in case all the functions belong to the same module,
 %%          in this case a new import list will be created and added to the
 %%              file or the module.
-%% This function uses `ESG' queries!  The `ESG:close/0' has to be used
-%% after the transformation ends. (or use it in a new esg `batch')
+%% This function uses `ESG' queries!  `ESG:finalize/0' has to be used
+%% after the transformation ends. (or use it in a new esg `batch').
+%% The function does not create an import list if the given
+%% list of functions is empty.
+
+add_import(_To, []) ->
+    ok;
 
 add_import(To, Fun) when not is_list(Fun)->
     add_import(To, [Fun]);
@@ -155,7 +160,7 @@ add_import(To, FunList) ->
         form   ->
             add_import_items(To, FunList)
     end,
-    ok.
+	ok.
 
 add_import_form(File, FunList)->
     [Mod] = ?Query:exec(hd(FunList), ?Fun:module()),

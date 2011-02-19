@@ -33,7 +33,7 @@
 %%% ----------------------------------------------------------------------------
 
 -module(reftr_upgrade_iface).
--vsn("$Rev: 5075 $").%"
+-vsn("$Rev: 5134 $").%"
 
 %%% ----------------------------------------------------------------------------
 %%% Exports
@@ -303,7 +303,7 @@ upgrade(Expr, ToFun, CDs) ->
 
         %% Finding patterns to upgrade that belong to the expression
         Ps = lists:filter(fun is_pattern/1, patterns_with_df(Expr)),
-        
+
         ?Transform:touch(Expr),
 
         PCDs =  case ?Syn:class(Expr) of
@@ -892,8 +892,8 @@ keysearch(List, Key) ->
 simple_infix_expr(S) ->
     [{op,1,InfixOp,{var,1,'P'},{integer,1,C}}] = scan_and_parse(S),
     fun(Node) ->
-    		case ?Expr:type(Node) of
-    			Type when Type =/= joker ->
+            case ?Expr:type(Node) of
+                Type when Type =/= joker ->
                     New = ?Syn:construct({copy(Node), InfixOp, {integer, C}}),
                     replace(Node, New);
                 joker -> ok

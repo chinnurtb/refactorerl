@@ -54,7 +54,7 @@
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(reftr_elim_var).
--vsn("$Rev: 4705 $"). % for emacs"
+-vsn("$Rev: 5483 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -74,7 +74,7 @@ error_text(bind_not_in_match_expr, [_VarName]) ->
 error_text(side_effect, [VarName]) ->
     ["The definition of ", VarName, " has side effects"];
 error_text(macro, [VarName]) ->
-    ["Variable ", VarName, " is used as a macro argument"];
+    ["Variable ", VarName, " is used in a macro body"];
 error_text(shadowed_vars, [ShadowedVars]) ->
     ["Free variables of the definition would become shadowed: ", ShadowedVars].
 
@@ -83,15 +83,14 @@ error_text(shadowed_vars, [ShadowedVars]) ->
 
 %% @private
 prepare(Args) ->
-    Var     = ?Args:variable(Args),
+    Var     = ?Args:variable(Args, eliminate),
     VarName = ?Var:name(Var),
 
     Pattern = ?Query:exec1([Var], ?Var:bindings(),
                            ?LocalError(bindings, [VarName])),
-%    Match = ?Query:exec1([Pattern], [{esub, back}],
     Match = ?Query:exec1([Pattern], ?Expr:parent(),
                          ?LocalError(function, [VarName])),
-    ?Check(?Expr:type(Match) =:= match_expr, 
+    ?Check(?Expr:type(Match) =:= match_expr,
            ?LocalError(bind_not_in_match_expr, [VarName])),
     [Pattern, Def] = ?Query:exec([Match], ?Expr:children()),
     ?Check(not lists:any(fun ?Fun:is_dirty/1,

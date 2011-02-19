@@ -22,7 +22,7 @@
 %%% @author Dániel Horpácsi <daniel_h@inf.elte.hu>
 
 -module(refanal_dynfun).
--vsn("$Rev$ ").
+-vsn("$Rev: 5413 $ ").
 -behaviour(refcore_anal).
 
 -export([schema/0, externs/1, insert/4, remove/4, update/2]).
@@ -31,9 +31,9 @@
 
 %% @private
 schema() ->
-    [%{func, [{dynfuncall, func}]}, ??
-     {expr,   [{dynfuneref, func}, {ambdynfuneref, func},
-               {dynfunlref, func}, {ambdynfunlref, func}]}
+    [{func, [{may_be, func}]},
+     {expr, [{dynfuneref, func}, {ambfuneref, func},
+	     {dynfunlref, func}, {ambfunlref, func}]}
     ].
 
 %% @private
@@ -43,7 +43,6 @@ externs(_) -> [].
 
 %% @private
 insert(Parent, _, {Tag, Child}, _) ->
-    timer:sleep(100), %% waiting for the function analyser...
     case ?Anal:data(Parent) of
         #file{type=module} when Tag == form ->
             walk(fun add/3, [{Child, ?NodeSync:get_node(module, Parent)}]);
@@ -190,8 +189,7 @@ is_atom_expr(Node) -> (?Graph:data(Node))#expr.type == atom.
 is_fun_expr(Node) -> (?Graph:data(Node))#expr.type == implicit_fun.
 atom_value(Node) ->  #expr{type = atom, value = Val} = ?Graph:data(Node), Val.
 
--define(MultRefWarning,
-        io:format("~nrefanal_dynfun: multiple function names recognized.~n")).
+-define(MultRefWarning, ?d("multiple function names recognized")).
 
 lookup_funID(N, #expr{type=atom, value=Name}) ->
     {N, Name};
@@ -264,7 +262,7 @@ sum_lengths({LL}, {CL}) when is_integer(LL), is_integer(CL) -> {LL + CL};
 sum_lengths( LL,  {CL}) when is_integer(LL), is_integer(CL) -> {LL + CL};
 sum_lengths({LL},  CL ) when is_integer(LL), is_integer(CL) -> {LL + CL};
 sum_lengths( LL,   CL ) when is_integer(LL), is_integer(CL) ->  LL + CL.
-    
+
 listcons_length(ListExpr) -> listcons_length(ListExpr, ?Anal:data(ListExpr)).
 listcons_length(ListExpr, #expr{type=cons}) ->
     case ?Anal:children(ListExpr) of
@@ -273,7 +271,11 @@ listcons_length(ListExpr, #expr{type=cons}) ->
         [{esub, Head}] ->
             list_length(Head);
         [{esub, Head}, {esub, Tail}] ->
-            sum_lengths(list_length(Head), listcons_length(Tail))
+            case lists:member(Tail, ?Graph:path(ListExpr, [flow])) of 
+            %% eliminating infinite loops -- ? should be refined ?
+                true -> sum_lengths(list_length(Head), incalculable);
+                false -> sum_lengths(list_length(Head), listcons_length(Tail))
+            end
     end;
 listcons_length(N, #expr{type=T})
   when T == variable    ; T == block_expr  ;
@@ -421,16 +423,16 @@ del_dynref(App, Child) ->
     end.
 
 del_ambdynref(App, Child) ->
-    case ?Graph:path(App, [ambdynfunlref]) of
-        [Fun] -> ?NodeSync:del_ref(func, {ambdynlref, App}, Fun);
+    case ?Graph:path(App, [ambfunlref]) of
+        [Fun] -> ?NodeSync:del_ref(func, {amblref, App}, Fun);
         [] ->
-            case {?Graph:path(App, [ambdynfuneref]),
+            case {?Graph:path(App, [ambfuneref]),
                   ?Graph:path(Child, [modref])} of
                 {[Fun], [Mod] } ->
-                    ?NodeSync:del_ref(func, {ambdyneref, App}, Fun),
+                    ?NodeSync:del_ref(func, {amberef, App}, Fun),
                     ?NodeSync:del_ref(module, {ref, Child}, Mod);
                 {[Fun], []} ->
-                    ?NodeSync:del_ref(func, {ambdyneref, App}, Fun);
+                    ?NodeSync:del_ref(func, {amberef, App}, Fun);
                 {[], _} ->
                     ok
             end

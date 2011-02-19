@@ -21,16 +21,24 @@
 
 (defun refactorerl-cluster-agglom ()
   (interactive)
-  (cluster-ui-options-agglom))
+  (refac-send/callbacks ('transform 'clustering (list
+                   (vector 'algorithm 'agglom_attr)
+                   (vector 'entity 'module)))))
 
 (defun refactorerl-cluster-genetic ()
   (interactive)
-  (cluster-ui-options-genetic))
+  (refac-send/callbacks ('transform 'clustering (list
+                   (vector 'algorithm 'genetic)
+                   (vector 'entity 'module)))))
+
+(defun refactorerl-cluster-function ()
+  (interactive)
+  (refac-send/callbacks ('transform 'clustering (list
+                   (vector 'algorithm 'agglom_attr)
+                   (vector 'entity 'function)))))  
 
 (defvar cluster-ui-buffer nil)
-(defun cluster-ui-options-genetic()
-  (refac-send-command 'cl_options 'genetic))
-
+  
 (defun cluster-ui-options-agglom()
   (refac-send-command 'cl_options 'agglom_attr))
 

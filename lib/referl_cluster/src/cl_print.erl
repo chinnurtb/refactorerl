@@ -24,7 +24,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_print).
--vsn("$Rev: 4350 $").
+-vsn("$Rev: 5134 $").
 
 -export([print_clusterings/1, print_clusterings/2,
          print_clustering/1, print_clustering/2,

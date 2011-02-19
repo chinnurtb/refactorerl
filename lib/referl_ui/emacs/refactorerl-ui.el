@@ -69,12 +69,12 @@
   (set (make-local-variable 'config-start-marker) (point-marker))
   (widget-insert "------------------------------------------------\n")
   (widget-create 'push-button
-                 :notify (lambda (&rest args) (refac-server-reset-db))
+                 :notify (lambda (&rest args) (refactorerl-server-reset-db))
                  "Reset database")
-  (widget-create 'push-button :notify (lambda (&rest args) (refac-server-show-files))
+  (widget-create 'push-button :notify (lambda (&rest args) (refactorerl-list-files))
                  "Show files")
   (widget-insert "\n")
-  (widget-create 'push-button :notify (lambda (&rest args) (refac-server-show-parseerrors))
+  (widget-create 'push-button :notify (lambda (&rest args) (refactorerl-show-errors))
                  "Show parse errors")
   (widget-insert "\n")
   (widget-create 'push-button
@@ -89,7 +89,53 @@
   (current-buffer))
 
 (defun refac-show-config (&rest args)
-  (refac-send-command 'showconfig))
+  (refac-send/callbacks ('showconfig)
+                          (:reply (ok config)
+                                  (refac-handle-showconfig config))))
+
+
+(defun refac-handle-showconfig (config)
+  (with-current-buffer refac-server-buffer
+    (set (make-local-variable 'config-inc-dir) nil)
+    (set (make-local-variable 'config-app-dir) nil)
+    (set (make-local-variable 'config-out-dir) "/tmp")
+    (if (equal config "") (setq config nil))
+    (dolist (cfg config)
+      (cond ((eq (elt cfg 0) 'appbase)
+             (add-to-list 'config-app-dir (elt cfg 1)))
+            ((eq (elt cfg 0) 'include)
+             (add-to-list 'config-inc-dir (elt cfg 1)))
+            ((eq (elt cfg 0) 'output)
+             (setq config-out-dir (elt cfg 1)))))
+    (goto-char config-start-marker)
+    (widget-insert "Application directories:\n")
+    (set (make-local-variable 'appdir-list)
+         (widget-create 'editable-list
+                        :value config-app-dir
+                        '(editable-field)))
+    (widget-insert "\nInclude directories:\n")
+    (set (make-local-variable 'incdir-list)
+         (widget-create 'editable-list
+                        :value config-inc-dir
+                        '(editable-field)))
+    (widget-insert "\n")
+    (set (make-local-variable 'outdir-menu)
+         (widget-create 'menu-choice
+                        :value config-out-dir
+                        :tag "Output directory"
+                        '(const :tag "Original" original)
+                        '(editable-field :menu-tag "Specify" "")))
+    (widget-insert "\n")
+    (set (make-local-variable 'save-button)
+         (widget-create 'push-button
+                        :notify 'refac-save-config
+                        "Save"))
+    (set (make-local-variable 'cancel-button)
+         (widget-create 'push-button
+                        :notify 'refac-hide-config
+                        "Cancel"))
+    (widget-insert "\n")
+    (set (make-local-variable 'config-end-marker) (point-marker))))
 
 (defun refac-hide-config (&rest args)
   (widget-delete appdir-list)

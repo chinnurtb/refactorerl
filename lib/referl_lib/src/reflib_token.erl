@@ -28,10 +28,10 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(reflib_token).
--vsn("$Rev: 5020 $ ").
+-vsn("$Rev: 5356 $ ").
 
 %% Properties
--export([pos/1, pos/2, text/1, data/1, type/1]).
+-export([pos/1, pos/2, text/1, data/1, type/1, is_virtual/1]).
 -export([map_pos/2, map_pos/3]).
 
 %% Queries
@@ -405,3 +405,15 @@ escape_value(Num, [D|T]) when D >= $0, D =< $7, length(Num) < 3 ->
     escape_value(Num ++ [D], T);
 escape_value(Num, Tail) ->
     {erlang:list_to_integer(Num, 8), Tail}.
+
+%% @spec is_virtual(Token::node()) -> true|false
+%% @doc Returns true if the given token is a virtual token
+is_virtual(Node) ->
+    case ?Graph:class(Node) of
+        lex ->
+            case (?ESG:data(Node))#lex.data of
+                virtual -> true;
+                _ ->       false
+            end;
+        _   -> false
+    end.

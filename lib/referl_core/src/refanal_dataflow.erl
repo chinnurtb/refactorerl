@@ -1,4 +1,4 @@
-%%% -*- coding: latin-1 -*-
+%% -*- coding: latin-1 -*-
 
 %%% The  contents of this  file are  subject to  the Erlang  Public License,
 %%% Version  1.1, (the  "License");  you may  not  use this  file except  in
@@ -29,7 +29,7 @@
 
 -export([reach/2]).
 
--export([back_nodes/1]).
+-export([back_nodes/1, forw_tags/0, back_tags/0]).
 
 -include("core.hrl").
 
@@ -178,6 +178,10 @@ add_del(Dir, #expr{type=infix_expr, value = V}, Expr, _P) when (V == 'andalso')
     [{_, E2}] = ?Anal:children(C2),
     safe_link(Dir, [E1, E2], dep, Expr),
     [{E1, Expr}, {E2, Expr}];
+add_del(Dir, #expr{type=infix_expr,value='++'}, Expr, _P) ->
+    [{_, E1}, {_, E2}] = ?Anal:children(Expr),
+    safe_link(Dir, [E1, E2], flow, Expr),
+    [{E1, Expr}, {E2, Expr}];
 add_del(Dir, #expr{type=infix_expr}, Expr, _P) ->
     [{_, E1}, {_, E2}] = ?Anal:children(Expr),
     safe_link(Dir, [E1, E2], dep, Expr),
@@ -197,6 +201,7 @@ add_del(Dir, #expr{type=parenthesis}, Expr, _P) ->
 add_del(Dir, #expr{type=tuple, role=pattern}, Expr, _P) ->
     Children = ?Anal:children(Expr),
     [safe_link(Dir, Expr, sel, P) || {_, P} <- Children],
+
     [{P, Expr} || {_, P} <- Children];
 add_del(Dir, #expr{type=tuple}, Expr, _P) ->
     Children = ?Anal:children(Expr),
@@ -621,7 +626,7 @@ reach(From, Opts) ->
             false -> forw
         end,
     Init = set_addl(From, set_new()),
-    Reach = walk1(fun(Node) -> flow_step(Node, Dir) end, Init, Init),
+    Reach = walk1(fun(Node, Set) -> flow_step(Node, Dir, Set) end, Init, Init),
     Result = 
         case proplists:get_value(safe, Opts, false) of
             false ->
@@ -629,7 +634,7 @@ reach(From, Opts) ->
             true ->
                 Strict = set_filt(Reach,fun(N) -> is_strict(N, Reach, Dir) end),
                 Safe = set_filt(Strict, fun(N) -> is_safe(N, Strict, Dir) end),
-                Safe = walk1(fun(N) -> safe_step(N, Safe, Dir) end, Init, Init)
+                walk1(fun(N, _) -> safe_step(N, Safe, Dir) end, Init, Init)
         end,
     Fun = fun(Node) -> 
               ?Syn:class(Node) == expr andalso 
@@ -640,27 +645,27 @@ reach(From, Opts) ->
 is_strict(Node, Reach, Dir) ->
     lists:all(fun not_dep/1, edges(Node, rev(Dir)))
     andalso
-    lists:all(fun(N) -> set_has(N, Reach) end, flow_step(Node, rev(Dir))).
+    lists:all(fun(N) -> set_has(N, Reach) end, flow_step(Node, rev(Dir), [])).
 
 rev(forw) -> back;
 rev(back) -> forw.
 
-not_dep({dep, _}) -> false;
+not_dep({_, dep, _}) -> false;
 not_dep(_)      -> true.
 
 is_safe(Node, Strict, Dir) ->
     lists:all(fun not_depcomp/1, edges(Node, Dir))
     andalso
     lists:all(fun(N) -> set_has(N, Strict) end,
-              [N || {flow, N} <- edges(Node, Dir)]).
+              [N || {_, flow, N} <- edges(Node, Dir)]).
 
-not_depcomp({dep, _})      -> false;
-not_depcomp({{cons, _}, _}) -> false;
+not_depcomp({_, dep, _})      -> false;
+not_depcomp({_, {cons, _}, _}) -> false;
 not_depcomp(_)           -> true.
 
 safe_step(Node, Safe, Dir) ->
     case set_has(Node, Safe) of
-        true  -> [N || {flow, N} <- edges(Node, Dir)];
+        true  -> [N || {_, flow, N} <- edges(Node, Dir)];
         false -> []
     end.
 
@@ -670,50 +675,69 @@ walk1(NextF, Work, Set) ->
 %io:format("empty: ~p~n", [Set]),
             Set;
         {Sel, Rest} ->
-            New = [N || N <- NextF(Sel), not set_has(N, Set)],
+            New = [N || N <- NextF(Sel, Set), not set_has(N, Set)],
 %io:format("not empty, New: ~p~n", [New]),
             walk1(NextF, set_addl(New, Rest), set_addl(New, Set))
     end.
 
-flow_step(Node, Dir) ->
-    lists:flatmap(fun (N) -> flow_step1(N, Dir) end, edges(Node, Dir)).
+walk2(NextF, Work, Set, Orig) ->
+    case set_select(Work) of
+        empty ->
+%io:format("empty: ~p~n", [Set]),
+            Set;
+        {Sel, Rest} ->
+            New = [N || N <- NextF(Sel, Set), not set_has(N, Set), 
+                                              not set_has(N, Orig)],
+%io:format("not empty, New: ~p~n", [New]),
+            walk2(NextF, set_addl(New, Rest), set_addl(New, Set), 
+                  set_addl(New, Orig))
+    end.
 
-flow_step1({flow, Next}, _) ->
+flow_step(Node, Dir, Set) ->
+    lists:flatmap(fun (N) -> flow_step1(N, Dir, Set) end, edges(Node, Dir)).
+
+flow_step1({_, flow, Next}, _, _) ->
 %io:format("flow: ~p~n", [Next]),
     [Next];
-flow_step1({{cons, Ind}, Comp}, Dir=forw) ->
+flow_step1({_Orig, {cons, Ind}, Comp}, Dir=forw, Set) ->
 %io:format("cons: ~p~n", [Comp]),
-    [Next || Reach <- reach([Comp], [Dir]),
-             {{sel, I}, Next} <- edges(Reach, Dir),
+    [Next || Reach <- walk2(fun(Node, NewSet) -> 
+                                flow_step(Node, forw, set_addl(NewSet, Set)) 
+                            end, [Comp], [Comp], Set),
+             %reach([Comp], [Dir]),
+             {_, {sel, I}, Next} <- edges(Reach, Dir),
              I =:= Ind];
-flow_step1({{sel, Ind}, Comp}, Dir=back) ->
+flow_step1({_Orig, {sel, Ind}, Comp}, Dir=back, Set) ->
 %io:format("sel: ~p~n", [Comp]),
-    [Next || Reach <- reach([Comp], [Dir]),
-             {{cons, I}, Next} <- edges(Reach, Dir),
+    [Next || Reach <- walk2(fun(Node, NewSet) -> 
+                                flow_step(Node, back, set_addl(NewSet, Set))
+                            end, [Comp], [Comp], Set),
+             %reach([Comp], [Dir]),
+             {_, {cons, I}, Next} <- edges(Reach, Dir),
              I =:= Ind];
-flow_step1(_A, _B) ->
+flow_step1(_A, _B, _C) ->
 %io:format("A: ~p, B: ~p~n", [A, B]),
     [].
 
 edges(Node, forw) ->
-    [{flow, To} || To <- ?Graph:path(Node, [flow])] ++
-    [{dep, To} || To <- ?Graph:path(Node, [dep])] ++
-    [{{sel, ?Graph:index(Node, sel, To)}, To}
+    [{Node, flow, To} || To <- ?Graph:path(Node, [flow])] ++
+    [{Node, dep, To} || To <- ?Graph:path(Node, [dep])] ++
+    [{Node, {sel, ?Graph:index(Node, sel, To)}, To}
         || To <- ?Graph:path(Node, [sel])] ++
-    [{{cons, ?Graph:index(To, cons_back, Node)}, To}
+    [{Node, {cons, ?Graph:index(To, cons_back, Node)}, To}
         || To <- ?Graph:path(Node, [{cons_back, back}])] ++
-    [{{sel, e}, To} || To <- ?Graph:path(Node, [sel_e])] ++
-    [{{cons, e}, To} || To <- ?Graph:path(Node, [cons_e])];
+    [{Node, {sel, e}, To} || To <- ?Graph:path(Node, [sel_e])] ++
+    [{Node, {cons, e}, To} || To <- ?Graph:path(Node, [cons_e])];
 
 edges(Node, back) ->
-    [{flow, To} || To <- ?Graph:path(Node, [{flow, back}])] ++
-    [{{sel, ?Graph:index(Node, sel, To)}, To}
+    [{Node, flow, To} || To <- ?Graph:path(Node, [{flow, back}])] ++
+    [{Node, {sel, ?Graph:index(To, sel, Node)}, To}
         || To <- ?Graph:path(Node, [{sel, back}])] ++
-    [{{cons, ?Graph:index(To, cons_back, Node)}, To}
+    [{Node, {cons, ?Graph:index(Node, cons_back, To)}, To}
         || To <- ?Graph:path(Node, [cons_back])] ++
-    [{{sel, e}, To} || To <- ?Graph:path(Node, [{sel_e, back}])] ++
-    [{{cons, e}, To} || To <- ?Graph:path(Node, [{cons_e, back}])] ++
-    [{dep, To} || To <- ?Graph:path(Node, [{dep, back}])].
+    [{Node, {sel, e}, To} || To <- ?Graph:path(Node, [{sel_e, back}])] ++
+    [{Node, {cons, e}, To} || To <- ?Graph:path(Node, [{cons_e, back}])] ++
+    [{Node, dep, To} || To <- ?Graph:path(Node, [{dep, back}])].
 
 
 %% ---------------------------------------------------------------------------

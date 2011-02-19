@@ -20,9 +20,10 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq).
--vsn("$Rev: 5115 $ ").
+-vsn("$Rev: 5496 $ ").
 
 -export([run/3]).
+-export([format_nodes/2]).
 -export([prepare/1, error_text/2]).
 
 -include("user.hrl").
@@ -67,10 +68,12 @@ error_text(type_mismatch, Params) ->
 
 %% @spec run(DisplayOpt::proplist(), Params::proplist(), Query::string()) ->
 %%           QueryResult::term()
-%% @doc Returns the result of `Query' starting from the position given by
+%% @doc Returns the result of `Query' starting from the initial state given by
 %%      `Params'. The format of the result is determined by `DisplayOpt'.
 %%
-%%      `Params' optionally contains `file' and `position' keys.
+%%      `Params' contains either the
+%%          - (optional) `file' and `position' keys or
+%%          - the `node_list' key.
 %%
 %%      `DisplayOpt' contains the keys `positions' and `output'.
 %%      The possible values for
@@ -86,7 +89,8 @@ error_text(type_mismatch, Params) ->
 %%                           {chain, [{Posititon, Text}], PostWS} |
 %%                           {group_by, {Position, Text}}
 %%          - other: the same list that is otherwise sent by a message
-%%          - nodes: a simple list of nodes
+%%          - nodes: a proplist with the keys: `nodes' for a list of nodes and
+%%                                             `text' for a formatted text
 %%      The format of positions depends on the `positions' key in `DisplayOpt'.
 %%          - none: nopos
 %%          - scalar: {File::string(), PosFrom::integer(), PosTo::integer()}
@@ -97,7 +101,7 @@ run(DisplayOpt, Params, Query) when is_list(Query) ->
         {ok, Tokens, _} ->
             case refusr_sq_parser:parse(Tokens) of
                 {ok, Result} ->
-                    QueryRes = process_semantic_query(Params, Result),
+                    QueryRes = process_semantic_query(Params ++ [{ask_missing,false}], Result),
                     show(QueryRes, DisplayOpt);
                 {error, {_, _, Err}} -> throw(?LocalError(syntax_error, Err))
             end;
@@ -106,12 +110,15 @@ run(DisplayOpt, Params, Query) when is_list(Query) ->
     end.
 
 %% @private
-%todo: alapertelmezett? meggondolni mi kellene + eclipsenek nem biztos h ez kell
+%@todo alapertelmezett? meggondolni mi kellene + eclipsenek nem biztos h ez kell
 prepare(Args) ->
-    run([{positions, scalar},{output, msg}],
-        Args,
-        proplists:get_value(querystr, Args)),
-    fun () -> nomsg end.
+    fun () ->
+        [DisplayOpt,StartOpt,QueryStr] =
+            ?MISC:pgetu([display_opt,start_opt,querystr],Args),
+        run(DisplayOpt,
+            StartOpt,
+            QueryStr)
+    end.
 
 %%% ============================================================================
 %%% Implementation
@@ -136,7 +143,7 @@ process_query_seq(State, QuerySeq) ->
 %%          QuerySeq::list(), LastQuery::list()}
 preproc(Params, SemanticQuery) ->
     {InitSel, QuerySeq, LastQuery} = split_semantic_query(SemanticQuery),
-    {InitialType, InitialEntities} = ?Lib:init_sel(Params, InitSel),
+    {InitialType, InitialEntities} = initial_state(Params, InitSel),
 
     {Type1, QuerySeq1} = lists:foldl(fun check/2, {InitialType, []}, QuerySeq),
     {_Type, LastQuery0} = lists:foldl(fun check_last/2, {Type1, []}, LastQuery),
@@ -149,10 +156,15 @@ preproc(Params, SemanticQuery) ->
 
     {InitialEntities, InitialType, lists:flatten(QuerySeq1), LastQuery1}.
 
-split_semantic_query(SemanticQuery)->
-    [{initial_selection, InitialSelection}| Rest] = SemanticQuery,
+split_semantic_query(SemanticQuery) ->
+    {InitialSelection, Rest} =
+        case SemanticQuery of
+            [{initial_selection, InitSel}| Rst] -> {InitSel, Rst};
+            _ -> {[], SemanticQuery}
+        end,
+
     RevRest = lists:reverse(Rest),
-    {RevLastQuery, RevQuerySeq} = 
+    {RevLastQuery, RevQuerySeq} =
         case RevRest of
             [{closure, _}|_] ->
                 lists:splitwith(fun({closure,_})-> true; (_)-> false end,
@@ -167,7 +179,6 @@ split_semantic_query(SemanticQuery)->
             _ ->
                 lists:split(1, RevRest)
         end,
-
     LastQuery = lists:flatten([Lst|| {_, Lst} <- lists:reverse(RevLastQuery)]),
     QuerySeq = lists:flatten([Lst || {_, Lst} <- lists:reverse(RevQuerySeq)]),
 
@@ -175,7 +186,34 @@ split_semantic_query(SemanticQuery)->
         [{initial_selector, InitialSelector},Filter] ->
             {InitialSelector, [Filter|QuerySeq], LastQuery};
         [{initial_selector, InitialSelector}] ->
-            {InitialSelector, QuerySeq, LastQuery}
+            {InitialSelector, QuerySeq, LastQuery};
+        [] -> {[], QuerySeq, LastQuery}
+    end.
+
+%todo:  node list <-> query format check
+initial_state([{node_list, []}, _], []) ->
+    {none, []};
+initial_state([{node_list, NodeList=[FstNode|Nodes]}, _], []) ->
+    NodeType = node_type(FstNode),
+    DifferentTypes =
+        lists:filter(fun(Node) -> node_type(Node)/=NodeType end, Nodes),
+    ?Check(DifferentTypes == [],
+           ?LocalError(type_mismatch, [NodeType, hd(DifferentTypes)])),
+
+    {NodeType, NodeList};
+initial_state(Params, InitialSelector) ->
+    ?Lib:init_sel(Params, InitialSelector).
+
+node_type(Node) ->
+    case ?Syn:node_type(Node) of
+        form     -> macro;
+        variable -> variable;
+        field    -> field;
+        record   -> record;
+        module   -> file;
+        file     -> file;
+        func     -> function;
+        expr     -> expression %todo: check
     end.
 
 
@@ -440,7 +478,7 @@ filter({'and', Filter1, Filter2}, EntityType, Entities) ->
            EntityType,
            filter(Filter1, EntityType, Entities));
 
-%% todo: sq + list [a,s,d...] -> split
+%% @todo sq + list [a,s,d...] -> split
 %% filter({'in', Property, {query_seq, QuerySeq}}, EntityType, Entities) ->
 %%     FstInitialState = #state{res=[hd(Entities)], type=EntityType},
 %%     FstResultingState = process_query_seq(FstInitialState, QuerySeq),
@@ -471,8 +509,10 @@ filter({query_seq, QuerySeq}, EntityType, Entities) ->
     {_QSType, QSLst} = lists:foldl(fun check/2, {EntityType, []}, QS),
     lists:filter(
       fun(Entity) ->
-              {_QSType, Res} = process_query_seq({EntityType, [Entity]}, QSLst),
-              Res =/= []
+              case process_query_seq({EntityType, [Entity]}, QSLst) of
+                  {_QSType, Res} -> Res =/= [];
+                  _ -> false
+              end
       end,
       Entities);
 
@@ -605,6 +645,20 @@ state_to_disp(#state{action=closure, res = Chains} = State) ->
                    Chain <- Chains#chains.recursive] ]),
     {State#state.type, NodesToPosition, Disp}.
 
+%prop query + stat: error handling!!
+nodes_from_state(#state{action=selection, res=Res}) ->
+    flatsort(Res);
+nodes_from_state(#state{action=iteration, res = Chains}) ->
+    flatsort([lists:last(Chain)|| Chain <- Chains#chains.incomplete]);
+nodes_from_state(#state{action=closure, res = Chains}) ->
+    flatsort(Chains#chains.complete ++
+             Chains#chains.incomplete ++
+             Chains#chains.recursive);
+nodes_from_state(#state{action=statistics, res=Values}) ->
+    Values;
+nodes_from_state(#state{action=property_query, res=Props}) ->
+    Props;
+nodes_from_state(_) -> [].
 
 positions(_Type, _Nodes, none) ->
     dict:new();
@@ -640,6 +694,7 @@ positions(Type, Nodes, PositionOpt) ->
             end,
             dict:new(),
             lists:keysort(2, NodesWithTokens))),
+    ?d(PositionOpt),
     TokenPos = lists:flatten([?Token:map_pos(File, Tokens, PositionOpt)||
                                  {File, Tokens} <- CollTokens]),
     lists:foldl(
@@ -661,28 +716,28 @@ show(State, DisplayOpt) ->
     {NodeType, NodesToPosition, Display} = state_to_disp(State),
     Dict = positions(NodeType, NodesToPosition, PositionsOpt),
 
-    %todo: message handling in emacs
-    display(Dict, Display, OutputOpt, PositionsOpt).
+    case OutputOpt of
+        nodes ->
+            Nodes = nodes_from_state(State),
+            [{nodes, Nodes}, {text, display(Dict, Display, stdio, PositionsOpt)}];
+        _ ->
+            %todo: message handling in emacs
+            display(Dict, Display, OutputOpt, PositionsOpt)
+    end.
 
 
 display(Dict, Display, stdio, _) ->
     TextPos = lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]),
     DispText = [[Text, pos_text(Pos)] || {Pos, Text} <- TextPos],
-    io:put_chars(lists:flatten(DispText));
-
-display(Dict, Display, {iodev, Dev}, _) ->
-    TextPos = lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]),
-    DispText = [[Text, pos_text(Pos)] || {Pos, Text} <- TextPos],
-    io:put_chars(Dev, lists:flatten(DispText));
+    lists:flatten(DispText);
 
 display(Dict, Display, other, _) ->
     [format(Dict, Disp, msg) || Disp <- Display];
 
 display(Dict, Display, msg, scalar) ->
-    ?UI:message(queryres,
-                lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]));
+    lists:flatten([format(Dict, Disp, stdio) || Disp <- Display]);
 display(Dict, Display, msg, _) ->
-    ?UI:message(queryres, [format(Dict, Disp, msg) || Disp <- Display]).
+    [format(Dict, Disp, msg) || Disp <- Display].
 
 fetch(Entity, Dict) ->
     case dict:find(Entity, Dict) of
@@ -786,3 +841,21 @@ pos_text({File, {Pos11, Pos12}, {Pos21, Pos22}}) ->
     ["   ", File, io_lib:format(": ~p,~p-~p,~p", [Pos11, Pos12, Pos21, Pos22])];
 pos_text({File, Pos1, Pos2}) ->
     ["   ", File, io_lib:format(": ~p-~p", [Pos1, Pos2])].
+
+
+%% @spec format_nodes(Nodes::[entity()], Positions::atom()) -> string()
+%%       Positions = none|scalar|linecol
+%% @doc Returns a textual representation for a list of nodes.
+format_nodes([], _) -> [];
+format_nodes(Nodes, Positions) ->
+    NodeType = node_type(hd(Nodes)),
+
+    DifferentTypes =
+        lists:filter(fun(Node) -> node_type(Node)/=NodeType end, tl(Nodes)),
+    ?Check(DifferentTypes == [],
+           ?LocalError(type_mismatch, [NodeType, hd(DifferentTypes)])),
+
+    Dict = positions(NodeType, Nodes, Positions),
+
+    lists:flatten([[text(NodeType, Node), pos_text(fetch(Node, Dict)), "\n"]||
+                      Node <- Nodes]).

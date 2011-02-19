@@ -25,7 +25,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_db).
--vsn("$Rev: 4721 $").
+-vsn("$Rev: 5134 $").
 
 -export([init/0, delete_all/0, exists/1, create/3, exec/1, exec/2]).
 -export([backup/0, restore/1, undo/0, redo/0, clean/0]).

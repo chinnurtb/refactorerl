@@ -24,7 +24,8 @@
 %%% other in a string metric (Levenshtein or modified soundex).
 %%% Usage:
 %%%  searchFunction("FuncName")
-%%%  searchByPos("path",
+%%%  searchByPos("path",Position)
+%%%  searchByPos
 
 %%% == Implementation status ==
 %%% This feature is _not_ fully implemented.
@@ -32,122 +33,100 @@
 %%% @author Gabor Olah <olikas.g@gmail.com>
 
 -module(refusr_strm).
--vsn("$Rev: 4721 $"). %for emacs"
+-vsn("$Rev: 5375 $"). %for emacs"
 
 
 
 -include("user.hrl").
 
--import(lists, [foreach/2]).
-
--export([ searchByPos/2, searchByPos/3, searchFunction/1, searchFunction/2 ]).
+% removed because these functions are unnecessary
+% -export([ searchByPos/2, searchByPos/3, searchFunction/1, searchFunction/2 ]).
 -export([ getDistance/2 ]).
--export([ levenshtein/2 , soundex/1 , uniq/1 ]).
-
-
-searchByPos(File, Pos) ->
-    searchByPos(File, Pos, 1).
-
-searchByPos(File, Pos, Limit) ->
-    try ?Args:variable([{file, File}, {position, Pos}]) of
-        Var -> getVar(Var,Limit)
-    catch
-        {_, pos_bad_type, [variable, _ ]} ->
-            try ?Args:function([{file, File}, {position, Pos}]) of
-                Fun -> getFun( atom_to_list(?Fun:name(Fun)) , Limit)
-            catch
-                _ -> {error, not_fun}
-            end;
-        _ -> {error, not_var_fun}
-    end.
-
-getVar(Var,Limit) ->
-    VarName  = ?Var:name(Var),
-    Scopes   = ?Query:exec([Var], ?Query:seq(?Var:scopes(), ?Clause:variables())),
-    DistList = [{VarName,getDistance(VarName, ?Var:name(X))}|| X<-Scopes],
-    lists:filter(fun({_, {_, N}}) ->
-                             N =< Limit
-                 end,
-                     DistList).
-
-searchFunction(Name) when is_list(Name) ->
-    getFun(Name, 1).
-
-searchFunction(Name, Limit) when is_list(Name) ->
-    getFun(Name, Limit).
-
-getFun(FunName, Limit) when is_list(FunName) ->
-    Functions = ?Query:exec(?Query:seq(?Mod:all(),?Mod:locals())),
-    DistList = lists:map(fun(Func) ->
-                                 FuncName = ?Fun:name(Func),
-                                 {FuncName,
-                                  getDistance(FunName, atom_to_list(FuncName))} end,
-                         Functions),
-    lists:filter(fun({_, {_, N}}) ->
-                             N =< Limit
-                 end,
-                     DistList).
-
+-export([ levenshtein/2 , soundex/1 ]).
 
 %% ============================================================================
 
-getDistance([],X) ->
-    levenshtein([],X);
-getDistance(X,[]) ->
-    levenshtein(X,[]);
-getDistance(X,Y) ->
-    {lev, levenshtein(X,Y)}.
+%% @spec getDistance(string(), string()) -> {'lev', integer()}
+%% @doc Calculates the distance between two strings
+getDistance([],X) when is_list(X) ->
+    {'lev', levenshtein([],X)};
+getDistance(X,[]) when is_list(X) ->
+    {'lev', levenshtein(X,[])};
+getDistance(X,Y) when is_list(X) and is_list(Y) ->
+    {'lev', levenshtein(X,Y)}.
 
-% renamed for debug purposes
-%getDistance2(X,Y) when (is_list(X) and is_list(Y)) ->
-%    A=levenshtein(X,Y),
-%    B=levenshtein(soundex(X),soundex(Y)),
-%    case A<B of
-%        true ->
-%            {lev,A};
-%        _ ->
-%            {sou,B}
-%    end.
+%% renamed for debug purposes
+%% getDistance2(X,Y) when (is_list(X) and is_list(Y)) ->
+%%    A=levenshtein(X,Y),
+%%    B=levenshtein(soundex(X),soundex(Y)),
+%%    case A<B of
+%%        true ->
+%%            {lev,A};
+%%        _ ->
+%%            {sou,B}
+%%    end.
 
 %% ============================================================================
 
 
-
-%% Calculates the Levenshtein distance between two strings
+%% @spec levenshtein(string(), string()) -> integer()
+%% @doc Calculates the Levenshtein distance between two strings
 levenshtein(Samestring, Samestring) -> 0;
 levenshtein(String, []) -> length(String);
 levenshtein([], String) -> length(String);
 levenshtein(Source, Target) ->
     levenshtein_rec(Source, Target, lists:seq(0, length(Target)), 1).
 
-%% Recurses over every character in the source string and calculates a list of distances
+%% @private
+%% Recurses over every character in the source string
+%% and calculates a list of distances
 levenshtein_rec([SrcHead|SrcTail], Target, DistList, Step) ->
-    levenshtein_rec(SrcTail, Target, levenshtein_distlist(Target, DistList, SrcHead, [Step], Step), Step + 1);
+    levenshtein_rec(SrcTail,
+                    Target,
+                    levenshtein_distlist(Target,
+                                         DistList,
+                                         SrcHead,
+                                         [Step],
+                                         Step),
+                    Step + 1);
 levenshtein_rec([], _, DistList, _) ->
     lists:last(DistList).
 
-%% Generates a distance list with distance values for every character in the target string
-levenshtein_distlist([TargetHead|TargetTail], [DLH|DLT], SourceChar, NewDistList, LastDist) when length(DLT) > 0 ->
-    Min = lists:min([LastDist + 1, hd(DLT) + 1, DLH + dif(TargetHead, SourceChar)]),
-    levenshtein_distlist(TargetTail, DLT, SourceChar, NewDistList ++ [Min], Min);
+%% @private
+%% Generates a distance list with distance values for every character
+%% in the target string
+levenshtein_distlist([TargetHead|TargetTail],
+                     [DLH|DLT],
+                     SourceChar,
+                     NewDistList,
+                     LastDist) when length(DLT) > 0 ->
+    Min = lists:min([LastDist + 1,
+                     hd(DLT) + 1,
+                     DLH + dif(TargetHead, SourceChar)]),
+    levenshtein_distlist(TargetTail,
+                         DLT,
+                         SourceChar,
+                         NewDistList ++ [Min],
+                         Min);
 levenshtein_distlist([], _, _, NewDistList, _) ->
     NewDistList.
 
-% Calculates the difference between two characters or other values
+%% @private
+%% Calculates the difference between two characters or other values
 dif(C, C) -> 0;
 dif(_C1, _C2) -> 1.
 
 
-%% ============================================================================
-%% SoundEx Algorithm
-%%
-%% 1st step: Turn string to uppercase and separate the first letter
-%% 2nd step: Make the character changes to the uppercase string made in
-%%           fun changeLetters/1.
-%% 3rd step: Make the remain string uniq
-%% 4th step: Leave out the zeros
-%% 5th step: Enjoy.
-
+%% @spec soundex(string()) -> list()
+%% @doc Returns the soundex numeric code of a string. The generation algorithm
+%% is the following.
+%% <ol>
+%%    <li>Turn string to uppercase and separate the first letter</li>
+%%    <li> Make the character changes to the uppercase string made in
+%%           fun changeLetters/1. </li>
+%%    <li>Make the remain string uniq</li>
+%%    <li>Leave out zeros</li>
+%% </ol>
 
 soundex(Input) ->
     [Head|Tail] = string:to_upper( Input),
@@ -155,11 +134,15 @@ soundex(Input) ->
     [Head|lists:filter(fun(X) -> X /= 0 end,
                        lists:flatten(Post))].
 
-changeLetters(C) when (C == $A);(C==$E);(C==$I);(C==$O);(C==$U);(C==$H);(C==$H);(C==$Y)->
+
+%% @private
+changeLetters(C) when (C == $A);(C==$E);(C==$I);(C==$O);
+                      (C==$U);(C==$H);(C==$H);(C==$Y)->
     0;
 changeLetters(C) when (C==$B);(C==$F);(C==$P);(C==$V) ->
     1;
-changeLetters(C) when (C==$C);(C==$G);(C==$J);(C==$K);(C==$Q);(C==$S);(C==$X);(C==$Z) ->
+changeLetters(C) when (C==$C);(C==$G);(C==$J);(C==$K);
+                      (C==$Q);(C==$S);(C==$X);(C==$Z) ->
     2;
 changeLetters(C) when (C==$D);(C==$T) ->
     3;
@@ -170,8 +153,9 @@ changeLetters(C) when (C==$M);(C==$N) ->
 changeLetters(C) when (C==$R) ->
     6;
 changeLetters(_) ->
-    {error, not_meant_to_implement}.
+    {error, not_meant_to_be_implemented}.
 
+%% @private
 uniq([]) ->
     [];
 uniq([X]) ->
@@ -187,7 +171,52 @@ uniqacc(Head,[NotHead|Tail]) ->
     [Head,uniq([NotHead|Tail])].
 
 
+%% Deprecated functions
 
+% searchByPos(File, Pos) ->
+%     searchByPos(File, Pos, 1).
+%
+% searchByPos(File, Pos, Limit) ->
+%     try ?Args:variable([{file, File}, {position, Pos}]) of
+%         Var -> getVar(Var,Limit)
+%     catch
+%         {_, pos_bad_type, [variable, _ ]} ->
+%             try ?Args:function([{file, File}, {position, Pos}]) of
+%                 Fun -> getFun( atom_to_list(?Fun:name(Fun)) , Limit)
+%             catch
+%                 _ -> {error, not_fun}
+%             end;
+%         _ -> {error, not_var_fun}
+%     end.
+%
+% getVar(Var,Limit) ->
+%     VarName = ?Var:name(Var),
+%     Scopes = ?Query:exec([Var], ?Query:seq(?Var:scopes(),
+%                                            ?Clause:variables())),
+%     DistList = [{VarName,getDistance(VarName, ?Var:name(X))}|| X<-Scopes],
+%     lists:filter(fun({_, {_, N}}) ->
+%                              N =< Limit
+%                  end,
+%                      DistList).
+%
+% searchFunction(Name) when is_list(Name) ->
+%     getFun(Name, 1).
+%
+% searchFunction(Name, Limit) when is_list(Name) ->
+%     getFun(Name, Limit).
+%
+% getFun(FunName, Limit) when is_list(FunName) ->
+%     Functions = ?Query:exec(?Query:seq(?Mod:all(),?Mod:locals())),
+%     DistList = lists:map(fun(Func) ->
+%                                  FuncName = ?Fun:name(Func),
+%                                  {FuncName,
+%                                   getDistance(FunName,
+%                                               atom_to_list(FuncName))}
+%                          end, Functions),
+%     lists:filter(fun({_, {_, N}}) ->
+%                              N =< Limit
+%                  end,
+%                      DistList).
 
 
 

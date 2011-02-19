@@ -58,7 +58,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reftr_rename_mac).
--vsn("$Rev: 4408 $").
+-vsn("$Rev: 5496 $").
 
 %% Callbacks
 -export([prepare/1]).
@@ -79,49 +79,52 @@ error_text(_,_) -> unknown.
 
 %% @private
 prepare(Args) ->
-    NewName = ?Args:macname(Args),
-    Macro   = ?Args:macro(Args),
-    check_conflicts(Macro,NewName),
-    Refs    = query_mac_replacers(Macro,NewName),
+    Macro    = ?Args:macro(Args),
+    [File]   = ?Query:exec(Macro, ?Macro:file()),
+    Files    = lists:usort(?Query:exec(File, {all, [incl], [{incl,back}]})),
+    Macros   = ?Query:exec(Files,?File:macros()),
+    MacNames = [?Macro:name(M) || M <- Macros],
+    ArgsInfo = add_transformation_info(Args, Macro, File),
+    NewName  = ?Args:ask(ArgsInfo, macname, fun cc_newmacname/2, fun cc_error/3, MacNames),
 
-    MacD    = ?ESG:data(Macro),
-    NewMacD = MacD#form{tag=NewName},
+    Refs     = query_mac_replacers(Macro,NewName),
 
-    fun() ->
-%%        ?Syn:replace(Macro, {flex,4}, [NewName]),
+    MacD     = ?ESG:data(Macro),
+    NewMacD  = MacD#form{tag=NewName},
+
+    ?Transform:touch(Macro),
+    [?Transform:touch(Parent) || {Parent, _, _} <- Refs],
+    [fun() ->
         ?ESG:update(Macro, NewMacD),
-        ?Transform:touch(Macro),
-        lists:foreach(fun replace_macname/1, Refs)
-%%        ?Syn:replace(Subst, {llex,2}, [NewName]),
-%        ?ESG:finalize()
-    end.
+        [?ESG:update(NameN, NewNameND) || {_, NameN, NewNameND} <- Refs]
+    end,
+    fun(_)->
+        [Macro]
+    end].
+
+add_transformation_info(Args, Macro, File) ->
+    MacName = ?Macro:name(Macro),
+    Path    = ?File:path(File),
+    Info    = ?MISC:format("Renaming macro: ~p (Location: ~p)",
+                           [MacName, Path]),
+    [{transformation_text, Info} | Args].
+
 
 %%% ============================================================================
 %%% Implementation
 
-%% @doc Checks for the existance possible naming conflicts after the rename.
-check_conflicts(Macro,NewName) ->
-    File   = ?Query:exec([Macro], ?Macro:file()),
-    Files  = lists:usort(?Query:exec(
-             File, {all, [incl], [{incl,back}]})),
-    Macros = ?Query:exec(Files,?File:macros()),
-    Names  = [?Macro:name(M) || M <- Macros],
-    ?Check(not lists:member(NewName,Names),
-           ?RefError(mac_exists,[NewName])).
-    
 %% @doc Gathers the lexical nodes corresponding to both the definition and
 %% the usages of the macro.
 query_mac_replacers(Macro,NewName) ->
-    Refs = ?Query:exec([Macro],[{mref,back}]),
+    Refs = ?Query:exec(Macro, [{mref,back}]),
     [  replacer_of_macname(Macro, {flex,4}, NewName) |
      [ replacer_of_macname(Subst, {llex,2}, NewName) ||
        Subst <- Refs ] ].
 
-%% @doc It dereferences the leaf to handle both macro definition and uses.
+%% @doc It follows `Path' from `Parent' to handle both macro definition and uses.
 %% It also handles virtual nodes caused by included macros.
-replacer_of_macname(Parent, Leaf, New) ->
-    NameNode = ?Query:exec1([Parent], [Leaf],
-                            ?LocalError(int_graph,[])),
+replacer_of_macname(Parent, LexWIdx, New) ->
+    NameNode = ?Query:exec1([Parent], [LexWIdx], ?LocalErr0r(int_graph)),
     ?Check(?Graph:class(NameNode)==lex,
            ?LocalError(expected_node,[lex,NameNode])),
     NameNodeD=#lex{data=NND} = ?ESG:data(NameNode),
@@ -129,16 +132,20 @@ replacer_of_macname(Parent, Leaf, New) ->
         virtual ->
             replacer_of_macname(NameNode,{orig,1},New);
         _ ->
-            NewNameNodeD = NameNodeD#lex{
-                             data=NND#token{value=New,text=New}},
-            case ?Query:exec([NameNode],[{flex,back}]) of
-                 []           -> {Parent,    NameNode,NewNameNodeD};
-                 [RealParent] -> {RealParent,NameNode,NewNameNodeD}
-            end
+            NewNameNodeD = NameNodeD#lex{data=NND#token{value=New,text=New}},
+            case ?Query:exec(NameNode, [{flex,back}]) of
+                 []           -> RealParent = Parent;
+                 [RealParent] -> ok
+            end,
+            {RealParent,NameNode,NewNameNodeD}
     end.
 
-%% @doc Commences the rename given in the parameter on a single node
-%% of the appropriate type.
-replace_macname({Parent,NameNode,NewNameNodeD}) ->
-    ?ESG:update(NameNode, NewNameNodeD),
-    ?Transform:touch(Parent).
+%%% ============================================================================
+%%% Checks
+
+cc_newmacname(NewName, MacNames) ->
+    ?Check(not lists:member(NewName, MacNames), ?RefError(mac_exists,[NewName])),
+    NewName.
+
+cc_error(?RefError(mac_exists,[NewName]), NewName, Macro) ->
+    ?MISC:format("The macro ~p is already used.", [Macro]).

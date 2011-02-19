@@ -20,7 +20,7 @@
 %%% @doc Record properties and record based queries
 
 -module(reflib_record).
--vsn("$Rev: 4692 $ ").
+-vsn("$Rev: 5455 $ ").
 
 %% =============================================================================
 %% Exports
@@ -32,8 +32,8 @@
 %% =============================================================================
 
 
-%% @spec find(atom()) -> query(#file{}, #record{}) 
-%% @doc The result query returns the record with name `Name' 
+%% @spec find(atom()) -> query(#file{}, #record{})
+%% @doc The result query returns the record with name `Name'
 find(Name) ->
     [{record, {name, '==', Name}}].
 

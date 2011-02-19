@@ -23,7 +23,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 %%% @author Máté Tejfel <matej@inf.elte.hu>
 -module(reflib_draw_graph).
--vsn("$Rev: 5076 $ ").
+-vsn("$Rev: 5421 $ ").
 
 -include("lib.hrl").
 -include_lib("referl_core/src/refcore_schema.hrl").
@@ -334,6 +334,10 @@ color(funexp) -> magenta;
 color(funimp) -> magenta;
 color(funlref) -> magenta;
 color(funeref) -> magenta;
+color(dynfunlref) -> magenta;
+color(dynfuneref) -> magenta;
+color(ambfunlref) -> magenta;
+color(ambfuneref) -> magenta;
 color(funcall) -> magenta;
 
 color(vardef) -> brown;
@@ -383,7 +387,9 @@ color(_) -> black.
 %% The `URL' tag is required by some SVG viewer to show the tooltip on hoover.
 tooltipStr(Node, Data) ->
     LineSeparator = "&#13;&#10;",
-    Props = [{node,Node}|?MISC:record_to_proplist(Data,nodedata_fields(Data))],
+    DataRec = element(1, Data),
+    Props = [{node,Node}, {record, DataRec}
+                | ?MISC:record_to_proplist(Data,nodedata_fields(Data))],
     Txt1 = [?MISC:format("~p=~p", [Key, Val]) || {Key, Val} <- Props],
     Txt2 = [?MISC:string_replace(Txt, ["\""], "&quot;", 0) || Txt <- Txt1],
     PropStr = ?MISC:join(Txt2, LineSeparator),

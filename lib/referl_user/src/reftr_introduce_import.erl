@@ -84,8 +84,10 @@ error_text(name_conflict, FunInfo)->
 
 %%% @private
 prepare(Args) ->
-    File    = ?Args:file(Args),
-    Module  = ?Args:module(Args),
+    File        = ?Args:file(Args),
+    % todo Add transformation info
+    Module      = ?Args:ask(Args, module, fun cc_module/2, fun cc_error/3, File),
+
     ImportForms = import_forms(File, Module),
     FunRefs     = funrefs(File, Module),
     FunList     = funs_to_import(File, Module, FunRefs),
@@ -99,6 +101,7 @@ prepare(Args) ->
                     [ ?File:del_form(File,Form) || Form <- tl(ImportForms) ]
             end,
             lists:foreach( fun ?Expr:del_modq/1, FunRefs),
+
             ?Transform:touch(File)
     end.
 
@@ -110,7 +113,7 @@ prepare(Args) ->
 import_forms(File, Module) ->
     [ Form || Form <- ?Query:exec(File, ?File:forms()),
               ?Form:type(Form) == import,
-              ?Query:exec(Form, ?Query:seq(?Form:expr(1), ?Expr:module())) 
+              ?Query:exec(Form, ?Query:seq(?Form:expr(1), ?Expr:module()))
                   == [Module] ]. %@todo
 
 %%@doc Funs of `Mod' which are called from `File' with module qualifiers.
@@ -129,7 +132,7 @@ funrefs(File, Mod) ->
 
 %%@doc Funs used or imported in `File' which belong to the right module.
 funs_to_import(File, Module, FunRefs) ->
-    ImportedFunsFromMod = 
+    ImportedFunsFromMod =
         [ Fun ||
             Fun <- ?Query:exec(File, ?Query:seq(?File:module(),?Mod:imports())),
             ?Query:exec(Fun, ?Fun:module()) =:= [Module] ],
@@ -152,3 +155,16 @@ check_name_conflicts(File, Module, FunList) ->
 
 name_arity(Funs) ->
     [ {?Fun:name(Fun),?Fun:arity(Fun)} || Fun <- Funs ].
+
+%%% ===========================================================================
+%%% Checks
+
+cc_module(Module, File) ->
+    [FromModule] = ?Query:exec(File, ?File:module()),
+    FromName     = ?Mod:name(FromModule),
+    ToName       = ?Mod:name(Module),
+    ?Check(FromName =/= ToName, ?RefError(source_and_target_equals, [FromName])),
+    Module.
+
+cc_error(?RefError(source_and_target_equals, [FromName]), _Module, _File) ->
+    ?MISC:format("Module ~p is the source itself.", [FromName]).

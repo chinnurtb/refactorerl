@@ -31,7 +31,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reftr_apply_funcluster).
--vsn("$Rev: 4968 $"). % for emacs "
+-vsn("$Rev: 5455 $"). % for emacs "
 
 -export([do/1]).
 -export([get_operations/2,commit/1,main/0,
@@ -195,11 +195,11 @@ catch_referr(Fun) when is_function(Fun,0) ->
 %%% @private
 get_operations(Clusters,Path) ->
     Ops    = get_fun_recmac(Clusters),
-io:format("~p~n", [Ops]), %%% TODO: delete this DEBUG line
     Fun    = [ #movs{type=func,source=S,target=T,items=FL} ||
                  #ops{source=S,target=T,funs=FL} <- Ops ],
     RecMac = get_hrl_recmac(Path,Ops),
-    Movs   = RecMac ++ Fun,
+    NewRecMac = [check_hrl(HrlFile) || HrlFile <- RecMac],
+    Movs   = NewRecMac ++ [ check_modfile(F) || F <- Fun],
 %% TODO: renames if a clash would occur at the target site
     Create1 =
         [ begin
@@ -212,6 +212,41 @@ io:format("~p~n", [Ops]), %%% TODO: delete this DEBUG line
         || #movs{target=T} <- Movs ],
     Create = lists:usort(Create1),
     Create ++ Movs.
+
+check_hrl(HrlFile) ->
+    FName = HrlFile#movs.target,
+    case filelib:is_file(FName) of
+        true  ->
+            NewName    = ui_get_new_name(FName, "header"),
+            % todo Is `FName' all right on the next line?
+            %      Shouldn't it be `NewName'?
+            Path       = filename:dirname(FName),
+            NewHrl     = filename:join(Path, atom_to_list(NewName) ++ ".hrl"),
+            _NewHrlFile = check_hrl(HrlFile#movs{target=NewHrl});
+        false ->
+            HrlFile
+    end.
+
+%% Gets a new name from the UI.
+ui_get_new_name(FName, NameType) ->
+    Info    = [{format,info},{text, FName ++ ": This file already exists!"}],
+    Textbox =   [{format,textbox},
+                 {text, "Please specify a new " ++ NameType ++ "name"},
+                 {validator,file},
+                 {default,-1}],
+    Question = [Info, Textbox],
+    [NewName] = ?Transform:question(Question),
+    NewName.
+
+check_modfile(ModFile) ->
+    FileName = atom_to_list(ModFile#movs.target) ++ ".erl",
+    case filelib:is_file(FileName) of
+        true  ->
+            NewName     = ui_get_new_name(FileName, "module"),
+            _NewModFile = check_modfile(ModFile#movs{target=list_to_atom(NewName)});
+        false ->
+            ModFile
+    end.
 
 get_hrl_recmac(Path,Ops) ->
     Uses =
@@ -304,7 +339,7 @@ autonumber(Ls,F) ->
     lists:flatten(Res).
 
 get_type_name(Obj) ->
-	case ?Syn:class(Obj) of 
+	case ?Syn:class(Obj) of
 		record -> {rec, ?Rec:name(Obj)};
 		form   -> {mac, ?Macro:name(Obj)}
 	end.

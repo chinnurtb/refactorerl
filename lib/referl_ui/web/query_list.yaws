@@ -1,0 +1,11 @@
+<html>
+  <body>		
+    <erl>
+        out(Args) ->
+            web_helper:init_tab(),
+            Usr = 
+                web_helper:get_value("user",yaws_api:parse_query(Args)),
+            web_helper:query_list_from_tab(Usr).
+    </erl>  
+  </body>
+</html>

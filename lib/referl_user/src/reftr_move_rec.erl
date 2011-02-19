@@ -70,7 +70,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_move_rec).
--vsn("$Rev: 3820 $").
+-vsn("$Rev: 5496 $").
 
 
 %%% ============================================================================
@@ -123,13 +123,12 @@ error_text(delete, []) ->
 
 %% @private
 prepare(Args) ->
-    FromFile = ?Args:file(Args),
+    Records  = ?Args:records(Args),
+    [FromFile] = ?Query:exec(hd(Records), ?Rec:file()),
     FromPath = ?File:path(FromFile),
     ToName   = ?Args:filename(Args),
     ToPath   = target_path(ToName, FromPath),
     ToFile   = ?Query:exec1(?File:find(ToPath), ?RefErr0r(target_not_found)),
-    Records  = ?Args:records(Args),
-
     {Names, Forms, Files} =
         lists:foldl(
           fun(#recinfo{name=Name, form=Form, files=Files},
@@ -151,7 +150,12 @@ prepare(Args) ->
     check_used_only_in_target(Info),
     check_no_using(Info),
 
-    fun() -> transform(Info) end.
+    [fun() ->
+        transform(Info)
+     end,
+     fun(_)->
+        Records %@todo ok?
+     end].
 
 
 %%% ============================================================================

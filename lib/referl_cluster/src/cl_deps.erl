@@ -28,7 +28,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_deps).
--vsn("$Rev: 5049 $").
+-vsn("$Rev: 5296 $").
 
 -include("cluster.hrl").
 
@@ -216,7 +216,7 @@ fun_fun_deps({ModName,FunNode}) ->
 %% @doc  Calculate the function-record dependencies.
 fun_rec_deps({ModName,FunNode}) -> 
     FunName = ?Fun:name(FunNode), 
-    FunArity = ?Fun:arit(FunNode),
+    FunArity = ?Fun:arity(FunNode),
     lists:map(
         fun(RecRefNode) ->
             ModRefNode = get_rec_module(RecRefNode),
@@ -235,7 +235,7 @@ fun_rec_deps({ModName,FunNode}) ->
 %%       `RecNode' is also may be a semantical record node or a semantical 
 %%       record field node.
 get_rec_module(RecNode) ->
-    case ?GR_UTILS:get_node_type(RecNode) of
+    case element(2,RecNode) of
         record -> hd( ?Query:exec(RecNode, ?Query:seq([?Rec:file(), ?File:included(), ?File:module()])));
         field  -> hd( ?Query:exec(RecNode, ?Query:seq([?RecField:recorddef(), ?Rec:file(), ?File:included(), ?File:module()])))
     end.

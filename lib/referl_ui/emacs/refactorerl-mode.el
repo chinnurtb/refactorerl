@@ -65,12 +65,18 @@
          ("Start server" refactorerl-restart :enable (lambda () (not (refac-server-is-running))))
          ("Stop server" refactorerl-quit :enable :server)
          "--"
-         ("Reset database"  refac-server-reset-db :enable :server)
-         ("Show files" refac-server-show-files :enable :server)
-         ("Show parse errors" refac-server-show-parseerrors :enable :server)
-         "--"
+         ("Configure" refactorerl-configure)
          ("Select control buffer" refactorerl-control-buffer :enable :server))
-        ("Configure" refactorerl-configure)
+        (("Files")
+         ("Load directory" refactorerl-load-dir :enable :server)
+         "--"
+         ("Database contents" refactorerl-list-files :enable :server)
+;; TODO         ("Show file details" refactorerl-server-show-files :enable :server)
+         ("Show parse errors" refactorerl-show-errors :enable :server)
+         ("Draw graph" refactorerl-draw-graph :enable :server)
+         "--"
+         ("Reset database"  refactorerl-server-reset-db :enable :server)
+         )
         "--"
         ("Add file" refactorerl-add-file :enable :buffer-file)
         ("Drop file" refactorerl-drop-file :enable :buffer-file)
@@ -79,14 +85,10 @@
          :enable (lambda () (file-exists-p (concat (refactorerl-data-dir) "data/backup.1")))
          :help "Steps back on the database")
         "--"
-        ("Draw graph" refactorerl-draw-graph :enable :server)
-        ("Load directory" refactorerl-load-dir :enable :server)
-        ("Database contents" refactorerl-list-files :enable :server)
-        ("Show parse errors" refactorerl-show-errors :enable :server)
-        "--"
         (("Module clustering")
          ("Agglomerative" refactorerl-cluster-agglom :enable :server)
          ("Genetic" refactorerl-cluster-genetic :enable :server))
+        ("Function clustering" refactorerl-cluster-function :enable :server)
         "--"
         ,(menu-from-group 'query)
         "--"

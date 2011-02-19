@@ -53,7 +53,7 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(reftr_expand_funexpr).
--vsn("$Rev: 3984 $ ").
+-vsn("$Rev: 5134 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).

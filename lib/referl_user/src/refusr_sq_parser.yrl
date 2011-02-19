@@ -13,6 +13,9 @@ semantic_query -> initial_selection
                   : [{initial_selection, '$1'}].
 semantic_query -> initial_selection '.' query_seq
                   : [{initial_selection, '$1'}| '$3'].
+semantic_query -> '.' query_seq
+                  : '$2'.
+
 
 query_seq      -> query                   : ['$1'].
 query_seq      -> query ':' statistics    : ['$1', '$3'].

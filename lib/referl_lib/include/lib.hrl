@@ -30,3 +30,8 @@
 
 %% Transformation server
 -define(TRANSFORM_SERVER, transform_server).
+
+%%% ===========================================================================
+%%% UI message callback
+-record(msg_cb,{unicast,broadcast}).
+

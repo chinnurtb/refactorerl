@@ -22,133 +22,123 @@
 
 %%% @doc This module implements a common renamer refactoring.
 %%%
-%%% @author Csaba Imre Zempleni <zecoaat@inf.elte.hu>
+%%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(reftr_rename).
--vsn("$Rev$").
+-vsn("$Rev$ ").
 
 %% Callbacks
 -export([prepare/1]).
+-export([error_text/2]).
 
 %% Includes and definitions
 -include("user.hrl").
 
--define(Rename, reftr_rename_).
--define(Return(RThis), {return, RThis}).
-
 %%% ============================================================================
 %%% Callbacks
 
+%% todo Move this to another module.
+convert_data(Node) ->
+    case ?ESG:data(Node) of
+        #lex{data=#token{type=T}}   -> T;
+        L=#lex{}                    -> L;
+        #expr{type=T}               -> T;
+        #clause{type=T}             -> T;
+        #form{type=Type, tag=Tag}   -> {Type, Tag};
+        #typexp{type=T}             -> T;
+        #file{}                     -> file;
+        _                           -> unknown
+    end.
+
 %% @private
+%% todo ?LocalErrors thrown in the chosen module won't reach their destination,
+%%      as their ?MODULE is different from this one.
+%%      Perhaps ?LocalErrors should be eliminated altogether.
 prepare(Args) ->
-    try try_functions(Args)
-    catch
-	?Return(Fun) -> Fun
-    end.
+    File        = ?Args:file(Args),
+    ?Check(proplists:is_defined(position, Args), ?RefErr0r(bad_kind)),
+    Pos         = proplists:get_value(position, Args),
+    Tokens      = ?Query:exec(File, ?File:token(Pos)),
+    ?Check(length(Tokens) == 1, ?RefErr0r(bad_kind)),
+    [Token]     = Tokens,
+    RootPath    = ?Syn:root_path(Token),
+    Datas       = [convert_data(Node) || {_PLink, Node} <- RootPath],
+    RevDatas    = lists:reverse(Datas),
+    HasVirtual  = [] =/= [true || #lex{data=virtual} <- Datas],
 
-try_functions(Args) ->
-    try_type(function, Args),
-    try_type(record_field, Args),
-    try_type(record, Args),
-    try_type(variable, Args),
-    try_type(macro, Args),
+    RenameMod =
+        case {HasVirtual, RevDatas, Datas} of
+            {_, _, [_File, {_, include}|_]} ->
+                throw(?RefErr0r(bad_kind));
 
-    try_module(Args),
-    try_include(Args),
+            {true, _, _} ->
+                reftr_rename_mac;
+            {false, [_Lex, {macro, _}|_], _} ->
+                reftr_rename_mac;
 
-    throw(?RefErr0r(bad_kind)).
+            {false, [_Lex, variable|_], _} ->
+                reftr_rename_var;
 
-try_type(Type, Args) ->
-    try ?Args:Type(Args) of
-	_Return -> 
-	    Fun = call_type(Type, transform_args(Type, Args)),
-	    throw(?Return(Fun))
-    catch
-	?RefError(ThrowType, ThrowArgs) -> 
-	    check_throw_type(Type, ThrowType, ThrowArgs)
-    end.
+            {false, [atom, spec_field|_], _} ->
+                reftr_rename_recfield;
+            {false, [atom, record_field|_], _} ->
+                reftr_rename_recfield;
+            {false, [atom, atom, record_access|_], _} ->
+                reftr_rename_recfield;
+            {false, [atom, atom, record_index|_], _} ->
+                reftr_rename_recfield;
 
-try_module(Args) ->
-    Form = get_form_by_pos(Args),
-    case ?Form:type(Form) of
-	module -> Fun = call_type(module, transform_args(module, Args)),
-		  throw(?Return(Fun));
-	_Else -> void
-    end.
+            {false, [atom, {record, _}|_], _} ->
+                reftr_rename_rec;
+            {false, [atom, record_expr|_], _} ->
+                reftr_rename_rec;
+            {false, [atom, record_update|_], _} ->
+                reftr_rename_rec;
+            {false, [atom, record_access|_], _} ->
+                reftr_rename_rec;
+            {false, [atom, record_index|_], _} ->
+                reftr_rename_rec;
 
-try_include(Args) ->
-    Form = get_form_by_pos(Args),
-    FdepIref = ?Query:exec(Form, ?Query:seq([fdep], [iref])),
-    Iref = ?Query:exec(Form, [iref]),
-    case  FdepIref ++ Iref of
-	[File] -> 
-	    Path = ?File:path(File),
-	    Fun = call_type(include, transform_args_include(Args, Path)),
-	    throw(?Return(Fun));
-	[] -> void
-    end.
+            {false, [atom, atom, infix_expr, implicit_fun|_], _} ->
+                [_, {_, Atom}, {Lex, Infix}|_] = lists:reverse(RootPath),
+                case ?ESG:path(Infix, [Lex]) of
+                    [Atom, _] -> reftr_rename_mod;
+                    [_, Atom] -> reftr_rename_fun
+                end;
 
-transform_args(variable, Args) ->
-    Name = ?MISC:to_list(?Args:string(Args)),
+            {false, [_Lex, atom, fundef|_], _} ->
+                reftr_rename_fun;
+            {false, [_Lex, atom, application|_], _} ->
+                reftr_rename_fun;
+            {false, [atom, atom, implicit_fun|_], _} ->
+                reftr_rename_fun;
+            {false, [atom, atom, funref|_], _} ->
+                reftr_rename_fun;
+
+            {false, [atom, {module, _}|_], _} ->
+                reftr_rename_mod;
+
+            _ -> throw(?RefErr0r(bad_kind))
+        end,
+    NewArgs = transform_args(?Args:string(Args), RenameMod, Args),
+    RenameMod:prepare(NewArgs).
+
+%% Transforms the non-interactive string representation to appropriate properties.
+transform_args(String, reftr_rename_var, Args) ->
+    Name = ?MISC:to_list(String),
     VarName = case ?Var:valid_name(Name) of
-		  true  -> Name;
-		  false -> throw(?RefErr0r(bad_var_name))
-	      end,
+                  true  -> Name;
+                  false -> throw(?RefErr0r(bad_var_name))
+              end,
     [{varname, VarName} | Args];
-transform_args(macro, Args) ->
-    Name = ?MISC:to_list(?Args:string(Args)),
-    [{macname, Name} | Args];
-transform_args(module, Args) ->
-    String = ?Args:string(Args),
-    NewArgs = proplists:delete(position, Args),
-    [{name, String} | NewArgs];
-transform_args(_Type, Args) -> 
-    String = ?Args:string(Args),
+transform_args(String, reftr_rename_mac, Args) ->
+    [{macname, ?MISC:to_list(String)} | Args];
+transform_args(String, reftr_rename_mod, Args) ->
+    [{name, String} | proplists:delete(position, Args)];
+transform_args(String, _RenameMod, Args) ->
     [{name, String} | Args].
 
-transform_args_include(Args, Path) ->
-    String = ?Args:string(Args),
-    [{file, Path}, {filename, String}].
 
-check_throw_type(function, Type, _Args) when 
-  Type =:= fun_not_found; Type =:= pos_bad_type -> void;
-check_throw_type(record, Type, _Args) when 
-  Type =:= rec_not_found; Type =:= pos_bad_type -> void;
-check_throw_type(record_field, Type, _Args) when 
-  Type =:= rec_not_found; 
-  Type =:= recfld_not_found; 
-  Type =:= pos_bad_type -> void;
-check_throw_type(macro, Type, _Args) when 
-  Type =:= mac_not_found; Type =:= pos_bad_type -> void;
-check_throw_type(variable, pos_bad_type, _Args) -> void;
-check_throw_type(module, Type, _Args) when
-  Type =:= mod_not_found;
-  Type =:= pos_bad_type;
-  Type =:= file_not_module -> void;
-check_throw_type(_Else, Throw, Args) ->
-    throw(?RefError(Throw, Args)).
-
-call_type(Type, Args) ->
-    ModName = make_modname(Type),
-    ModName:prepare(Args).
-
-make_modname(Type) ->
-    PrefixStr = ?MISC:to_list(?Rename),
-    TypeAtom = get_type_modatom(Type),
-    TypeStr = ?MISC:to_list(TypeAtom),
-    ?MISC:to_atom(PrefixStr ++ TypeStr).
-
-get_type_modatom(function) -> 'fun';
-get_type_modatom(record) -> rec;
-get_type_modatom(record_field) -> recfield;
-get_type_modatom(variable) -> var;
-get_type_modatom(macro) -> mac;
-get_type_modatom(module) -> mod;
-get_type_modatom(include) -> header.
-
-get_form_by_pos(Args) ->
-    File = proplists:get_value(file, Args),
-    Pos = proplists:get_value(position, Args),
-    [Lex] = ?Query:exec(?Query:seq(?File:find(File), ?File:token(Pos))),
-    [Form] = ?Query:exec(Lex, ?Token:form()),
-    Form.
+error_text(_, _) ->
+    "The universal renamer currently does not support " ++
+    "relaying the error messages of the specific renamings.".

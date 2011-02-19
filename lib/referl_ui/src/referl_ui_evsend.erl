@@ -47,7 +47,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_ui_evsend).
--vsn("$Rev: 5002 $ ").
+-vsn("$Rev: 5134 $ ").
 -behaviour(gen_event).
 
 -export([start/1, start/2]).
@@ -79,7 +79,7 @@ sender(Pid, Tag) ->
     end.
 
 add_handler() ->
-    try ?UI:add_msg_handler(?MODULE, self()) of
+    try ?UI:add_msg_handler(self()) of
         ok -> ok
     catch
         exit:noproc -> timer:sleep(100), add_handler()

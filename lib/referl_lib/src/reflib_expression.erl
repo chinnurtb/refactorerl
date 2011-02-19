@@ -21,7 +21,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reflib_expression).
--vsn("$Rev: 5103 $ ").
+-vsn("$Rev: 5356 $ ").
 
 -export([role/1, type/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
@@ -35,7 +35,7 @@
 -export([is_same_expr/1, is_leaf/1]).
 -export([has_side_effect/1, has_message_passing/1, has_dirty_fun/1]).
 -export([fun_app_args/1, app_has_modq/1]).
--export([virtuals/1]).
+-export([tokens/1, virtuals/1]).
 
 
 -include("lib.hrl").
@@ -286,17 +286,17 @@ is_top(Node)->
 %% @spec clauses() -> query(#expr{}, #clause{})
 %% @doc The result query returns every clause of an expression.
 clauses() ->
-    ?Query:all([headcl], ?Query:all([exprcl], ?Query:all([catchcl], [aftercl]))).
-    % [clause].
+    % ?Query:all([headcl], ?Query:all([exprcl], ?Query:all([catchcl], [aftercl]))).
+    [clause].
 
 %% @spec clause(integer()) -> query(#expr{}, #clause{})
 %% @doc The result query returns the I-th clause of an expression.
 clause(I) ->
-    fun (Expr) ->
-        AllClauses = ?Query:exec(Expr, clauses()),
-        lists:nth(I, AllClauses)
-    end.
-    % ~ [{clause, I}].
+    %fun (Expr) ->
+    %    AllClauses = ?Query:exec(Expr, clauses()),
+    %    [lists:nth(I, AllClauses)]
+    %end.
+    [{clause, I}].
 
 %% @spec modq() -> query(#expr{}, #expr{})
 %% @doc The result query returns the module qualifier part of
@@ -454,3 +454,8 @@ app_has_modq(App) ->
 %% @doc Returns every virtual token under the expression.
 virtuals(Exp) ->
     [Token || Token <- ?Query:exec(Exp, ?Query:seq(deep_sub(), [elex])), (?Graph:data(Token))#lex.data =:= virtual].
+
+%% @spec tokens(#expr{}) -> [#lex{}]
+%% @doc Returns every token under the expression
+tokens(Exp) ->
+    ?Query:exec(Exp, ?Query:seq(deep_sub(), [elex])).

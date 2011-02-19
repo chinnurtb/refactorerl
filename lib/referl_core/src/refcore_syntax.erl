@@ -29,7 +29,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_syntax).
--vsn("$Rev: 5076 $ ").
+-vsn("$Rev: 5455 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -46,6 +46,7 @@
          tree_text/1, flat_text/1,
          root_path/1, root_path/2, get_file/1]).
 -export([construct/1, create/2, replace/3, replace/2, copy/1]).
+-export([is_virtual/1]).
 %% Syntax tree manipulation
 -export([build/2]).
 %% Graph walk
@@ -53,7 +54,7 @@
 %% Link filtering
 -export([filter_fun/1, reindex_links/1]).
 %% Environment nodes
--export([create_env/2]).
+-export([create_env/2, create_lex/2]).
 -export([add_env/2, set_env/2, get_envs/0, get_env/1, get_env/2,
          del_envs/0, del_env/1, del_env_sub/2, del_env_val/2, env_type/1]).
 
@@ -176,7 +177,7 @@ addcomment(WS, Cmt, Place) ->
          "" when Place =:= post ->
              lists:reverse(Post) ++ Cmt;
          [$\n|Tail] ->
-             lists:reverse(Tail) ++ Cmt ++ lists:reverse(Post)
+             "\n" ++ lists:reverse(Tail) ++ Cmt ++ lists:reverse(Post)
      end,
      ""}.
 
@@ -495,6 +496,11 @@ build(Data, Links) ->
 %%       Example: {list_gen, Pattern, Generator} instead of
 %%                {list_gen, {pexpr, Pattern}, {clause_expr, Generator}}
 construct(Node = {'$gn', _, _}) -> Node;
+construct({Node1, InfixAtom, Node2}) when (InfixAtom == 'orelse') or
+					  (InfixAtom == 'andalso') ->
+    L = create(#clause{type=expr}, [{body, construct(Node1)}]),
+    R = create(#clause{type=expr}, [{body, construct(Node2)}]),
+    create(#expr{type=infix_expr, value=InfixAtom}, [{exprcl, L}, {exprcl, R}]);
 construct({Node1, InfixAtom, Node2}) when is_atom(InfixAtom) ->
     GNode1 = case Node1 of %% needed by upgrade_iface:simple_infix_expr/1
                  {'$gn', _, _} -> Node1; %% TODO: a more general solution
@@ -806,6 +812,7 @@ next_sym([],                _)   -> [].
 %% @spec copy(node()) -> [{node(),node()}]
 %% @doc Makes a copy of a subtree. `Root' is the root node of the subtree. The
 %% return value is a mapping from the original nodes to the copied nodes.
+%% @todo support macros inside the subtree
 copy(Root) ->
     Tree = ets:new(copytree, []),
     try
@@ -841,10 +848,44 @@ collect_tree(Tree, Root) ->
 
 collect_children(Tree, Root) ->
     Data = ?ESG:data(Root),
-    Children = [{Tag, ?ESG:path(Root, [Tag])} || Tag <- children_tags(Data)],
+    Children = [get_children(Root, Tag) || Tag <- children_tags(Data)],
     ets:insert(Tree, {Root, Data, Children}),
     [collect_tree(Tree, Node) || {_, Nodes} <- Children, Node <- Nodes],
     ok.
+
+get_children(Root, Tag) ->
+    case Tag == elex andalso is_module_mac(Root) of
+        true ->
+            Mod = (?ESG:data(Root))#expr.value,
+            Children = [?ESG:create(#lex{type=token,
+                               data=(?Token:build(atom, atom_to_list(Mod)))})];
+        _    ->
+            Nodes = ?ESG:path(Root, [Tag]),
+            Children = [case is_virtual(Node) of
+                true ->
+                    [Token] = ?ESG:path(Node, [orig]),
+                    Token;
+                _   ->
+                    Node
+            end || Node <- Nodes]
+    end,
+    {Tag, Children}.
+
+%% Returns whether the node is a virtual token.
+is_virtual(Node) ->
+    ?Graph:class(Node) == lex andalso
+    (?ESG:data(Node))#lex.data == virtual andalso
+    ?ESG:path(Node, [orig]) =/= [].
+
+is_module_mac(Node) ->
+    Lexes = ?ESG:path(Node, [elex, llex, llex]),
+    if
+        length(Lexes) == 2 ->
+	    [Q, M] = Lexes,
+            ((?ESG:data(Q))#lex.data)#token.type == '?' andalso
+                ((?ESG:data(M))#lex.data)#token.value == "MODULE";
+        true -> false
+    end.
 
 children_tags(#lex{}) -> [llex];
 children_tags(Data) ->

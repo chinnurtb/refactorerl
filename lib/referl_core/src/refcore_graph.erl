@@ -23,7 +23,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_graph).
--vsn("$Rev: 4979 $").
+-vsn("$Rev: 5447 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
@@ -50,14 +50,15 @@
 -include_lib("stdlib/include/qlc.hrl").
 
 -define(NODETAG, '$gn').
--define(TIMEOUT, 60000).
+
+-define(GRAPH_TIMEOUT, infinity).
 
 -define(IS_NODE(Node), element(1, Node) =:= ?NODETAG).
 
 -define(Call(Req, Args),
         begin
             Request = list_to_tuple([Req | Args]),
-            case gen_server:call(?GRAPH_SERVER, Request, ?TIMEOUT) of
+            case gen_server:call(?GRAPH_SERVER, Request, ?GRAPH_TIMEOUT) of
                 ok             -> ok;
                 {ok, Reply}    -> Reply;
                 {error, Error} -> erlang:error(Error, Args)
@@ -100,14 +101,14 @@ start_link() ->
 %% persistent storage has the same schema as given here, and initialises it
 %% if neccessary.
 schema(Schema) ->
-    gen_server:call(?GRAPH_SERVER, {schema, Schema}).
+    gen_server:call(?GRAPH_SERVER, {schema, Schema}, ?GRAPH_TIMEOUT).
 
 %% @spec reset_schema() -> ok
 %% @doc This function can be used to erase the current graph schema when a new
 %% schema has to be used. Erases all data from the database.
 %% @see erase_graph/0
 reset_schema() ->
-    gen_server:cast(?GRAPH_SERVER, {reset_schema}).
+    gen_server:call(?GRAPH_SERVER, {reset_schema}, ?GRAPH_TIMEOUT).
 
 %% @spec erase_nodes() -> ok
 %% @doc This function erases the contents of the database while retaining the
@@ -257,6 +258,18 @@ is_gnode(_)             -> false.
 %%% element, and there is a mnesia index on the To element for backward
 %%% links.
 
+
+%%% ----------------------------------------------------------------------------
+%%% Data types
+
+%% Class table: stores the attribute names for every node class
+-record(class, {name, attribs, links}).
+%% Target table: stores the link target class name for every starting class,
+%% link tag pair
+-record(target, {start, next}).
+%% Nextid table: stores the next available ID for every node class
+-record(nextid, {class, id}).
+
 %%% ----------------------------------------------------------------------------
 %%% Callback functions
 
@@ -265,28 +278,16 @@ is_gnode(_)             -> false.
 %% @private
 init(_) ->
     process_flag(trap_exit, true),
-    case ?Db:init() of
-        empty ->
-            init_graph(),
-            %% no_schema means we should create more tables to store the graph
-            %% itself
-            {ok, no_schema};
-        exists ->
-            case ?Db:exists(class) and ?Db:exists(target) and
-                 ?Db:exists(nextid) of
-                true ->
-                    %% has_schema means that the existing schema should be
-                    %% checked against the needed schema
-                    {ok, has_schema};
-                false ->
-                    init_graph(),
-                    {ok, no_schema}
-            end
+    Init = ?Db:init(),
+    case Init == exists andalso ?Db:exists(class) andalso ?Db:exists(target) andalso ?Db:exists(nextid) of
+        true ->
+            {ok, has_schema};
+        false ->
+            ?Db:create( class, record_info(fields,  class), []),
+            ?Db:create(nextid, record_info(fields, nextid), []),
+            ?Db:create(target, record_info(fields, target), []),
+            {ok, no_schema}
     end.
-
-%% @private
-handle_cast({reset_schema}, S)   -> handle_reset_schema(S).
-
 
 %% @private
 handle_call({schema, Schema}, _F, S) ->
@@ -311,7 +312,12 @@ handle_call({setp,   Node,Key,Val},  _F, S) -> handle_setp(Node, Key, Val, S);
 handle_call({getp,   Node, Key},     _F, S) -> handle_getp(Node, Key, S);
 handle_call({getp,   Node},          _F, S) -> handle_getp(Node, S);
 handle_call({delp,   Node, Key},     _F, S) -> handle_delp(Node, Key, S);
-handle_call({erase_nodes},           _F, S) -> handle_erase(S).
+handle_call({erase_nodes},           _F, S) -> handle_erase(S);
+handle_call({reset_schema},          _F, S) -> handle_reset_schema(S).
+
+%%% @private
+handle_cast(_, State) ->
+    {noreply, State}.
 
 %% @private
 handle_info(_Info, State) ->
@@ -327,48 +333,87 @@ code_change(_Old, State, _Extra) ->
     {ok, State}.
 
 
-%%% ----------------------------------------------------------------------------
-%%% Data types
-
-%% Class table: stores the attribute names for every node class
--record(class, {name, attribs}).
-%% Target table: stores the link target class name for every starting class,
-%% link tag pair
--record(target, {start, next}).
-%% Nextid table: stores the next available ID for every node class
--record(nextid, {class, id}).
 
 %%% ----------------------------------------------------------------------------
 %%% Schema handling
 
-init_graph() ->
-    %% In a new database, some tables are always created: node class table
-    ?Db:create(class, record_info(fields, class), []),
-    %% node id table
-    ?Db:create(nextid, record_info(fields, nextid), []),
-    %% link target class table
-    ?Db:create(target, record_info(fields, target), []).
+%% Recovers the schema from the #class{} elements stored in Mnesia.
+mnesia_get_schema() ->
+    mnesia:foldl(
+        fun(#class{name='$hash'}, Acc) -> Acc;
+           (Elem,                 Acc) -> [Elem|Acc]
+        end, [], class).
 
 handle_reset_schema(_) ->
-    error_logger:info_msg("Resetting database schema, restart follows\n"),
     save_envs(),
+    Schema = get_schema_from_mnesia(),
+    propagate_reset_to_servers(),
+    ResetSchema = reset_schema(Schema),
+    restore_envs(),
+    ResetSchema.
+
+%% Notify all servers about the pending reset that require it.
+propagate_reset_to_servers() ->
+    refcore_funprop:reset().
+
+%% Resets the schema to the one given in the parameter.
+reset_schema(Schema) ->
     ?Db:delete_all(),
-    {stop, normal, no_schema}.
+
+    {ok, HasSchema} = init(dummy_param),
+    handle_schema(Schema, HasSchema).
+
+
+get_schema_from_mnesia() ->
+    {atomic, SchemaClasses} = mnesia:transaction(fun() -> mnesia_get_schema() end),
+    [{C, As, Ls} || #class{name=C, attribs=As, links=Ls} <- SchemaClasses].
 
 %% Saves the environment configuration to `EnvConfFile'.
 save_envs() ->
     EnvConfFile = "refactorerl.emacs.configuration",
-    {reply, {ok, Root}, off} = handle_root(off),
-    {reply, {ok, Envs}, off} = handle_path(Root, [env], off),
+    {reply, {ok, Root}, dummy} = handle_root(dummy),
+    {reply, {ok, Envs}, dummy} = handle_path(Root, [env], dummy),
     EnvDatas = [Data || Env <- Envs,
-                        {reply, {ok, Data}, off} <- [handle_data(Env, off)]],
-    {ok, Dev} = file:open(EnvConfFile, [write]),
-    io:format(Dev, "~p.~n", [EnvDatas]),
-    file:close(Dev).
+                        {reply, {ok, Data}, dummy} <- [handle_data(Env, dummy)]],
+    case EnvDatas of
+        [] ->
+            no_envs_saved;
+        _ ->
+            {ok, Dev} = file:open(EnvConfFile, [write]),
+            io:format(Dev, "~p.~n", [EnvDatas]),
+            file:close(Dev)
+    end.
+
+%% Restores the environment nodes saved by `save_envs/0'.
+restore_envs() ->
+    {reply, {ok, Root}, dummy} = handle_root(dummy),
+    {reply, {ok, OldEnvs}, dummy} = handle_path(Root, [env], dummy),
+    case OldEnvs of
+        [] ->
+            EnvConfFile = "refactorerl.emacs.configuration",
+            Envs =
+                case filelib:is_file(EnvConfFile) of
+                    true ->
+                        {ok, [Envs2]} = file:consult(EnvConfFile),
+                        Envs2;
+                    false ->
+                        [#env{name=appbase, value=code:lib_dir()},
+                         #env{name=output, value=original}]
+                end,
+            {reply, {ok, Root}, dummy} = handle_root(dummy),
+            EnvNodes = [handle_create(Env, dummy) || Env <- Envs],
+            [handle_mklink(Root, env, Env, dummy) || {reply, {ok, Env}, dummy} <- EnvNodes];
+        _ ->
+            envs_already_present
+    end.
+
 
 handle_schema(Schema, no_schema) ->
-    init_schema(Schema),
-    ?Exec(mnesia:write(#class{name='$hash', attribs=erlang:phash2(Schema)})),
+    init_schema(lists:usort(Schema)),
+    ?Exec(mnesia:write(#class{name='$hash', attribs=schema_hash(Schema)})),
+
+    restore_envs(),
+
     {reply, init, has_schema};
 
 handle_schema(Schema, has_schema) ->
@@ -376,21 +421,27 @@ handle_schema(Schema, has_schema) ->
         [#class{attribs=OldHash}] -> ok;
         _                         -> OldHash = unknown
     end,
-    NewHash = erlang:phash2(Schema),
-    if
-        OldHash =:= NewHash ->
+    NewHash = schema_hash(Schema),
+    case {OldHash =:= NewHash, ?autoreset_schema} of
+        {true, _} ->
             {reply, match, has_schema};
-        true ->
+        {false, true} ->
+            error_logger:info_msg("Schema is changed, resetting database.\n"),
+            reset_schema(Schema),
+            {reply, init, has_schema};
+        {false, false} ->
             error_logger:error_report(
               [{module, ?MODULE},
-               {message,
-                "Required and stored graph schemas are different."}]),
-            {reply, mismatch, schema_error}
+               {message, "Required and stored graph schemas are different.\n"}]),
+            {reply, init, has_schema}
     end.
 
-init_schema([]) ->
-    ok;
-init_schema([{Class, Attribs, Links} | Tail]) ->
+schema_hash(Schema) ->
+    erlang:phash2(lists:usort(Schema)).
+
+init_schema(SchemaElems) when is_list(SchemaElems) ->
+    [init_schema(Elem) || Elem <- SchemaElems];
+init_schema({Class, Attribs, Links}) ->
     if
         Class =/= root ->
             ?Db:create(Class, [id, attribs, props], []);
@@ -401,12 +452,10 @@ init_schema([{Class, Attribs, Links} | Tail]) ->
 
     ?Exec(
        begin
-           mnesia:write(#class{name=Class, attribs=Attribs}),
+           mnesia:write(#class{name=Class, attribs=Attribs, links=Links}),
            [ mnesia:write(#target{start={Class, Tag}, next=To}) ||
                {Tag, To} <- Links]
-       end),
-
-    init_schema(Tail).
+       end).
 
 handle_erase(S) ->
     Q = qlc:q([{Name, linktab(Name)} ||
@@ -562,8 +611,7 @@ handle_mklink({?NODETAG, FCl, FId}, TagInfo, {?NODETAG, TCl, TId}, S) ->
     case link_target(FCl, Tag, fwd) of
         {class, TCl} ->
             ?Exec(
-               case node_exists(FCl, FId) andalso
-                   node_exists(TCl, TId) of
+               case node_exists(FCl, FId) andalso node_exists(TCl, TId) of
                    true ->
                        do_mklink(FCl, FId, Tag, Ind, TId),
                        {reply, ok, S};

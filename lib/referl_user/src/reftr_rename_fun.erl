@@ -65,7 +65,7 @@
 %%% @author Atilla Erdodi <erdodi@elte.hu>
 
 -module(reftr_rename_fun).
--vsn("$Rev: 4882 $ ").
+-vsn("$Rev: 5496 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -77,66 +77,91 @@
 
 %% @private
 prepare(Args) ->
-    FunNode = ?Args:function(Args),
-    NewFunNameAtom = ?Args:name(Args),
+    FunNode  = ?Args:function(Args),
+    ArgsInfo = add_transformation_info(Args, FunNode),
+    Name     = ?Args:ask(ArgsInfo, name, fun cc_funname/2, fun cc_error/3, FunNode),
+    NameStr  = io_lib:write_atom(Name),
 
-    check_fun(FunNode, NewFunNameAtom),
+    FunNameNodes      = fun_name_nodes(FunNode),
+    ImpExpNameNodes   = imp_exp_name_nodes(FunNode),
+    AppNameNodes      = app_name_nodes(FunNode),
+    ImplicitNameNodes = imp_name_nodes(FunNode),
+    Updates = FunNameNodes ++ ImpExpNameNodes ++ AppNameNodes ++ ImplicitNameNodes,
 
-    %% calculating the updates
-    Updates = calc_update(FunNode),
-    ?Macro:check_macros(Updates, {elex, 1}),
+%    ?Macro:check_single_usage(Updates, [{elex, 1}]),
 
-    fun() ->
-	 lists:foreach(
-	      fun(Node) ->
-		      ?Macro:update_macro(Node, {elex, 1},
-                                          io_lib:write_atom(NewFunNameAtom))
-	      end, Updates)
-    end.
+    [FunDefNode] = ?Query:exec(FunNode, ?Query:seq(?Fun:definition(), ?Form:func())),
+    DynUpdates   = reflib_dynfun:collect({rename, func}, FunDefNode, Name),
 
-%% @spec calc_update(node()) -> [node()]
-%%
-%% @doc Returns a list of name nodes that should be updated
-calc_update(FunNode) ->
+    [fun() ->
+        ?Macro:inline_single_virtuals(Updates, elex),
 
-    %function definition
+        % updating virtuals and non-virtuals in arbitrary order caused problems
+        % todo check whether such a condition is still necessary
+        %        if yes, document it in test cases
+        {Virts, NonVirts} = lists:partition(fun(Node) -> ?Macro:is_virtual(Node, {elex, 1}) end, Updates),
+        [?Macro:update_macro(Node, {elex, 1}, NameStr) || Node <- Virts],
+        [?Macro:update_macro(Node, {elex, 1}, NameStr) || Node <- NonVirts],
+
+        reflib_dynfun:transform(DynUpdates)
+    end,
+    fun(_)->
+        [FunNode] %@todo where is it updated...?
+    end].
+
+%% Adds a `transformation_info' field to `Args'
+%% that describes the current transformation.
+add_transformation_info(Args, Fun) ->
+    [Mod]   = ?Query:exec(Fun, ?Fun:module()),
+    ModName = ?Mod:name(Mod),
+    FunName = ?Fun:name(Fun),
+    FunAr   = ?Fun:arity(Fun),
+    Info    = ?MISC:format("Renaming function ~p:~p/~p", [ModName, FunName, FunAr]),
+    [{transformation_text, Info} | Args].
+
+%%% ============================================================================
+%%% Implementation
+
+imp_name_nodes(FunNode) ->
+    ImplicitNodes = ?Query:exec(FunNode, ?Fun:implicits()),
+    ImplicitNameNodes =
+        [case ( ?Query:exec(Node, ?Expr:modq())==[]) of
+            true ->
+                hd( ?Query:exec(Node, ?Expr:child(1)));
+            false ->
+                [DelimiterNode] = ?Query:exec(Node, ?Expr:child(1)),
+                hd( ?Query:exec(DelimiterNode, ?Expr:child(2)))
+        end || Node<-ImplicitNodes],
+    ImplicitNameNodes.
+
+app_name_nodes(FunNode) ->
+    AppNodes     = ?Query:exec(FunNode, ?Fun:applications()),
+    AppNameNodes =
+        [case ?Query:exec(Node, ?Expr:modq()) of
+            [] ->
+                hd( ?Query:exec(Node, ?Expr:child(1)));
+            _ -> % module qualifier present
+                [DelimiterNode] = ?Query:exec(Node, ?Expr:child(1)),
+                hd( ?Query:exec(DelimiterNode, ?Expr:child(2)))
+        end || Node <- AppNodes],
+    AppNameNodes.
+
+imp_exp_name_nodes(FunNode) ->
+    ImpExpNodes = ?Query:exec(FunNode, ?Fun:impexps()),
+    [hd(?Query:exec(Node, ?Expr:child(1))) || Node<-ImpExpNodes].
+
+fun_name_nodes(FunNode) ->
     [FunDefNode] = ?Query:exec(FunNode, ?Fun:definition()),
     FunClauseNodes = ?Query:exec(FunDefNode, ?Form:clauses()),
-    FunNameNodes = lists:flatten([?Query:exec(FunClauseNode, ?Clause:name())
-                                  || FunClauseNode <- FunClauseNodes]),
-
-    ImpExpNodes = ?Query:exec(FunNode, ?Fun:impexps()),
-    AppNodes = ?Query:exec(FunNode, ?Fun:applications()),
-    ImplicitNodes = ?Query:exec(FunNode, ?Fun:implicits()),
-
-    %function imports and exports
-    ImpExpNameNodes = [hd(?Query:exec(Node, ?Expr:child(1))) ||
-                          Node <- ImpExpNodes],
-
-    %function applications
-    AppNameNodes =
-        [case (?Query:exec(Node, ?Expr:modq()) == []) of
-             true ->
-                 hd(?Query:exec(Node, ?Expr:child(1)));
-             false -> % module qualifier present
-                 [DelimiterNode] = ?Query:exec(Node, ?Expr:child(1)),
-                 hd(?Query:exec(DelimiterNode, ?Expr:child(2)))
-         end || Node <- AppNodes],
-
-    %implicit function expressions
-    ImplicitNameNodes =
-        [case (?Query:exec(Node, ?Expr:modq()) == []) of
-             true ->
-                 hd(?Query:exec(Node, ?Expr:child(1)));
-             false ->
-                 [DelimiterNode] = ?Query:exec(Node, ?Expr:child(1)),
-                 hd(?Query:exec(DelimiterNode, ?Expr:child(2)))
-         end || Node <- ImplicitNodes],
-
-    FunNameNodes ++ ImpExpNameNodes ++ AppNameNodes ++ ImplicitNameNodes.
+    FunNameNodes = lists:flatten([ ?Query:exec(FunClauseNode, ?Clause:name())
+            || FunClauseNode<-FunClauseNodes]),
+    FunNameNodes.
 
 
-check_fun(FunNode, NewName) ->
+%%% ============================================================================
+%%% Checks
+
+cc_funname(NewName, FunNode) ->
     Arity = ?Fun:arity(FunNode),
     ?Check(?Query:exec(FunNode, ?Fun:definition()) =/= [],
            ?RefError(fun_def_not_found, [?Fun:name(FunNode), Arity])),
@@ -154,4 +179,8 @@ check_fun(FunNode, NewName) ->
       end, Modules),
 
     ?Check(not ?Fun:is_autoimported(NewName, Arity),
-           ?RefError(autoimported_fun_exists, [NewName, Arity])).
+           ?RefError(autoimported_fun_exists, [NewName, Arity])),
+    NewName.
+
+cc_error(?RefError(_, _), Name, _FunNode) ->
+    ?MISC:format("The function name ~p is already used.", [Name]).

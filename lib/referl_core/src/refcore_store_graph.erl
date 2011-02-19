@@ -35,7 +35,16 @@ save(FileName) ->
     try
         {Nodes, Links} = ?Syn:walk_graph(?Graph:root(), semdf, fun act/4, {[], []},
                                          fun refanal_dataflow:back_nodes/1),
-        {Nodes2, Links2} = simplify_df(Nodes, Links),
+
+        %% adding cons_back...
+        Links2new = [{N, {cons_back, To}}
+                        || {N, #expr{}} <- Nodes,
+                           To <- ?Graph:path(N, [cons_back])],
+        Nodes2new = [{N, ?Graph:data(N)} || {_, {_, N}} <- Links2new],
+        Links2cb  = lists:usort(Links2new ++ Links),
+        Nodes2cb  = lists:usort(Nodes2new ++ Nodes),
+
+        {Nodes2, Links2} = simplify_df(Nodes2cb, Links2cb),
         Mods = [(?Graph:data(Mod))#module.name
                     || Mod <- ?Graph:path(?Graph:root(), [module])],
         {ok, Dev} = file:open(FileName, [write]),
@@ -114,22 +123,21 @@ simplify_df([], Nodes, Links) ->
 simplify_df([{_, #expr{type=Type}}|Rest], Nodes, Links) when Type == fret; Type == fpar ->
     simplify_df(Rest, Nodes, Links);
 simplify_df([{Node, _Data}|Rest], Nodes, Links) ->
-    case to_links(Node, Links) of
-        [{flow, From}] ->
+    case {from_links(Node, Links), to_links(Node, Links)} of
+        {[{flow, _To}], []} ->
+            simplify_df(Rest, Nodes, Links);
+        {_, [{flow, From}]} ->
             Links2 = Links -- [{From, {flow, Node}}],
             Links3 = [mv_link_node(Node, From, L) || L <- Links2],
             Nodes3 = rm_node(Node, Nodes),
             simplify_df({Nodes3, Links3});
+        {[{flow, To}], _} ->
+            Links2 = Links -- [{Node, {flow, To}}],
+            Links3 = [mv_link_node(Node, To, L) || L <- Links2],
+            Nodes3 = rm_node(Node, Nodes),
+            simplify_df({Nodes3, Links3});
         _ ->
-            case from_links(Node, Links) of
-                [{flow, To}] ->
-                    Links2 = Links -- [{Node, {flow, To}}],
-                    Links3 = [mv_link_node(Node, To, L) || L <- Links2],
-                    Nodes3 = rm_node(Node, Nodes),
-                    simplify_df({Nodes3, Links3});
-                _ ->
-                    simplify_df(Rest, Nodes, Links)
-            end
+            simplify_df(Rest, Nodes, Links)
     end.
 
 mv_link_node(Old, New, {Old,  {Link, To}})  -> {New,  {Link, To}};
@@ -141,10 +149,12 @@ rm_node(RmNode, Nodes) ->
     [ND || ND = {Node, _} <- Nodes, Node /= RmNode].
 
 to_links(Node, Links) ->
-    [{Link, From} || {From, {Link, To}} <- Links, To == Node, Link =/= cons_back].
+    [{Link, From} || {From, {Link, To}} <- Links, To == Node, Link =/= cons_back] ++
+    [{cons_back, To} || {From, {cons_back, To}} <- Links, From == Node].
 
 from_links(Node, Links) ->
-    [{Link, To} || {From, {Link, To}} <- Links, From == Node].
+    [{Link, To} || {From, {Link, To}} <- Links, From == Node, Link =/= cons_back] ++
+    [{cons_back, From} || {From, {cons_back, To}} <- Links, To == Node].
 
 
 

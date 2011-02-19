@@ -5,45 +5,65 @@
     <link rel="stylesheet" type="text/css" href="style.css"/>  
   </head>
   <body>
+   <erl>
+       out(Args) ->
+           web_helper:init_tab(),
+           ok.
+   </erl>
     <div id="container">
       <div id="header">
         <h1> RefactorErl </h1>
         <a id="logout" href="index.yaws"></a>
       </div>
       <div id="input">
-       <form onsubmit="newQuery();return false;">
+        <strong>Query:</strong>
+        <form onsubmit="newQuery();return false;">
           <!--<strong>File:</strong>
           <select id="fileselect" onchange="loadErl();">
             <option value="nofile">Select...</option>
             <erl>
                 out(Args) ->
+                    code:add_path("/home/koszegijudit/refactorerl/tool/lib_referl_ui"),
                     {ehtml,web_helper:get_files()}.
             </erl>
           </select>
           <strong>Pos:</strong>
           <input name="pos" id="pos" type="text" size="5">-->
-          <strong>Query:</strong>
-          <input name="query" id="query" type="text" size="55">
-          <button type="button" onclick="newQuery();">Run</button> 
+          <textarea style="width:80%; font-family: sans-serif; font-size: 10pt;" 
+                    name="query" id="query" rows="3"></textarea>
+          <button type="button" style="position: relative; top:-30px" 
+                  onclick="newQuery();">Run</button> 
        </form>
       </div>
       <div id="wrapper">
         <div id="result">
           <h2>Query Result</h2>
-          <p id="resultP">
-          </p>
+          <p id="queryP"></p>
+          <div id="resultDiv" float="left"></div> 
+          <div id="sourceDiv" float="left">
+              <textarea rows="1" cols="80"
+                style="display:none"
+                id="erlSource" readonly="true"
+                onclick="document.getElementById('pos').value = 
+                         getSelectionStartPos()"></textarea>
+          </div>
+          <script>
+              if (document.getElementById('errorP')) {
+                  var sdiv = document.getElementById('sourceDiv');
+                  sdiv.innerHTML = ""; 
+              }
+          </script> 
         </div>
       </div>
       <div id="prev">
-        <h2>Previous Queries 
-          <button type="button" onclick="location.reload(true);">Refresh list</button> 
+        <h2>Previous Queries
         </h2>
         <select id="query_filter" onChange="loadList()">
           <option value="my"> My Queries </option>
           <option value="all"> All Queries </option>
         </select>
-        <ul id="queryList" class="queryList">
-        </ul>
+        <div id="queryListDiv">
+        </div>
       </div>
       <div id="footer">
         <a href="https://plc.inf.elte.hu/erlang/dl/cheat-sheet.pdf">
@@ -55,36 +75,27 @@
         </a>
       </div>
     </div>
-    <script>
+    <div id="hiddenDiv" style="display:none">
+    </div>
+    <script type="text/javascript">
     function loadList() {
-        contentObj = document.getElementById('resultP');
-        var container = document.getElementById('queryList');
-        if (container) { 
-            container.innerHTML = "";
-            var li;
-            var nobr;
-            var filter = document.getElementById('query_filter');
-	    var usr = filter.options[filter.selectedIndex].value;
-            if (usr == "all") {
-	    <erl>		
-            out(Args) ->
-                web_helper:tab_to_js_create_list(all).
-            </erl>
-            } else {
-            <erl>		
-            out(Args) ->
-                Usr = 
-                     web_helper:get_value("user",yaws_api:parse_query(Args)),
-                web_helper:tab_to_js_create_list(Usr).
-            </erl>
-         }
-	 initAjax();  
+        var filter = document.getElementById('query_filter');
+        var usr = filter.options[filter.selectedIndex].value;
+        var name;
+        if (usr == "all") {
+            name="all";
+        } else {
+            name=querySt("user");
         }
+        var url = "query_list.yaws?user=" + name;
+        var div = document.getElementById('queryListDiv');
+        loadUrlIntoDiv(div,url); 
+	initAjax();
     } 
-    loadList(); 
     </script>
-    <script src="referl.js.yaws" type="text/javascript">
-    </script>
+    <script src="ajax.js" type="text/javascript"></script>
+    <script src="referl.js.yaws" type="text/javascript"></script>
+    <script src="textarea.js" type="text/javascript"> </script>
     <script type="text/javascript">AddFillerLink("result","prev","input")
     </script>
   </body>

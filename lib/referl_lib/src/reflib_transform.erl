@@ -115,17 +115,19 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(reflib_transform).
--vsn("$Rev: 4969 $").
+-vsn("$Rev: 5455 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
 %%% Exports
 
 %% User interface exports
--export([do/2, reply/2, cancel/1, wait/0]).
+-export([do/3, reply/2, cancel/1, wait/0]).
 
 %% Transformation interface exports
--export([ask/1, answer/1, touch/1, rename/2]).
+-export([question/1, touch/1, rename/2]).
+
+%-export([ask/1, answer/1]). % @depracated
 
 %% Enviroment exports
 -export([start_link/0]).
@@ -134,9 +136,51 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+%% Callbacks
+-export([error_text/2]).
+
+% private
+-export([test123/0]).
+
 
 -include("lib.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
+
+
+%%% ----------------------------------------------------------------------------
+%% @todo extract
+
+send_change(MCB,Change) ->
+    (MCB#msg_cb.broadcast)(statusinfo,[{change,Change}]).
+
+-define(Modified(File),
+        {File, [{content,true}]}).
+-define(Renamed(OldPath,NewPath),
+        {OldPath, [{rename,NewPath}]}).
+
+
+%%% ============================================================================
+%%% Error texts
+
+error_text(rename, [File,Err]) ->
+    ["Error renaming ", File, ": ", Err];
+error_text(save, [File]) ->
+    ["File ", File, " could not be saved"];
+error_text(save, []) ->
+    ["error during saving results"];
+error_text(exit, [Reason]) ->
+    ["Transform exited: ", io_lib:print(Reason)];
+error_text(error, [Error]) ->
+    ["Transform internal error: ", io_lib:print(Error)];
+error_text(exception, [Error]) ->
+    ["Transform internal error exception (", io_lib:print(Error), ")"];
+error_text(running, []) ->
+    ["A transform or query is already running.",
+     " Close all interaction dialogs and try again later."];
+error_text(bad_client, []) ->
+    ["Internal error: bad client request"];
+error_text(bad_q, [Q]) ->
+    ["Malformed question: ", io_lib:print(Q)].
 
 
 %%% @type proplist() = [atom() | {atom(), term()}]. See the standard module
@@ -151,18 +195,14 @@
 start_link() ->
     gen_server:start_link({local, ?TRANSFORM_SERVER}, ?MODULE, [], []).
 
-%% @spec do(atom(), reflib_args:arglist()) -> ok
+%% @spec do(#msg_cb{}, atom(), reflib_args:arglist()) -> ok
 %%
 %% @doc Start a transformation. The transformation is implemented by module
 %% `Mod', and `Args' are passed as transformation parameters.
-do(Mod=reftr_apply_funcluster, Args) when is_list(Args) ->
+do(_MCB=#msg_cb{}, Mod=reftr_apply_funcluster, Args) when is_list(Args) ->
     Mod:do(Args); %@todo un-hack
-do(Mod, Args) when is_list(Args) ->
-    case Mod of
-        refusr_sq -> no_backup_needed;
-        _         -> ?Graph:backup()
-    end,
-    case gen_server:call(?TRANSFORM_SERVER, {do, Mod, Args}) of
+do(MCB=#msg_cb{}, Mod, Args) when is_list(Args) ->
+    case gen_server:call(?TRANSFORM_SERVER, {do, MCB, Mod, Args}) of
         ok -> ok;
         {error, Error} -> erlang:error(Error, [Mod, Args])
     end.
@@ -176,12 +216,22 @@ do(Mod, Args) when is_list(Args) ->
 wait() ->
     gen_server:call(?TRANSFORM_SERVER, wait, infinity).
 
+question(Props) ->
+    answer(ask(Props)).
+
 %% @spec ask(proplist()) -> term()
 %% @doc Ask a question through the user interface. The question ID is returned.
 ask(Props) ->
-    case gen_server:call(?TRANSFORM_SERVER, {ask, self(), Props}) of
-        {ok, Reply} -> Reply;
-        {error, Error} -> erlang:error(Error, [Props])
+    error_handled(
+      gen_server:call(?TRANSFORM_SERVER, {ask, self(), Props}),
+      [Props]).
+
+error_handled(Result,Args) ->
+    case Result of
+        {reply, Reply} ->
+            Reply;
+        {error, Error} ->
+            erlang:error(Error, Args)
     end.
 
 %% @spec answer(term()) -> term()
@@ -214,7 +264,9 @@ rename(OldPath, NewPath) ->
 %% @doc Supply the answer to question number `Num'. This function is called
 %% by the user interface bridge module.
 reply(Num, Reply) ->
-    gen_server:cast(?TRANSFORM_SERVER, {reply, Num, Reply}).
+    error_handled(
+      gen_server:call(?TRANSFORM_SERVER, {reply, Num, Reply}),
+      [Num,Reply]).
 
 %% @spec cancel(integer()) -> ok
 %%
@@ -222,7 +274,9 @@ reply(Num, Reply) ->
 %% abortion of the transformation. This function is called by the user
 %% interface bridge module.
 cancel(Num) ->
-    gen_server:cast(?TRANSFORM_SERVER, {cancel, Num}).
+    error_handled(
+      gen_server:call(?TRANSFORM_SERVER, {cancel, Num}),
+      [Num]).
 
 %%% ============================================================================
 %%% Server callback functions
@@ -233,8 +287,9 @@ cancel(Num) ->
                 current,  % PID of currently running transformation
                 next,     % Number of next question
                 save,     % List of file nodes to be saved
-                rename    % List of file path pairs {OldPath, NewPath} to be
+                rename,   % List of file path pairs {OldPath, NewPath} to be
                           % renamed
+                mcb       % #msg_cb{} message callbacks
                }).
 
 %% @private
@@ -243,8 +298,8 @@ init(_) ->
     {ok, init_state()}.
 
 %% @private
-handle_call({do, Mod, Args}, _From, State) ->
-    {Rep, St} = handle_do(Mod, Args, State),
+handle_call({do, MCB, Mod, Args}, _From, State) ->
+    {Rep, St} = handle_do(MCB, Mod, Args, State),
     {reply, Rep, St};
 
 handle_call(wait, From, State) ->
@@ -255,23 +310,21 @@ handle_call({ask, Pid, Props}, _From, #state{current=Pid} = State) ->
     {reply, Rep, St};
 
 handle_call({ask, _Pid, _}, _From, St) ->
-    {reply, {error, bad_client}, St};
+    {reply, {error, ?LocalError(bad_client, [])}, St};
 
 handle_call({answer, Pid, ID}, From, State) ->
     handle_answer(Pid, ID, From, State);
 
 handle_call({pending, Pid}, _From, State) ->
-    {reply, handle_pending(Pid, State), State}.
+    {reply, handle_pending(Pid, State), State};
+
+handle_call({reply, Id, Reply}, _From, St) ->
+    {reply, handle_reply(Id, Reply, St), St};
+
+handle_call({cancel, Id}, _From, St) ->
+    {reply, handle_cancel(Id, St), St}.
 
 %% @private
-handle_cast({reply, Id, Reply}, St) ->
-    handle_reply(Id, Reply, St),
-    {noreply, St};
-
-handle_cast({cancel, Id}, St) ->
-    handle_cancel(Id, St),
-    {noreply, St};
-
 handle_cast({touch, Node}, State) ->
     St = handle_touch(Node, State),
     {noreply, St};
@@ -327,14 +380,15 @@ init_state() ->
            current  = [],
            next     = 1,
            save     = [],
-           rename   = []}.
+           rename   = [],
+           mcb      = undef}.
 
 %% Start a new transformation
-handle_do(_Mod, _Args, #state{current=P} = St) when is_pid(P) ->
-    {{error, running}, St};
-handle_do(Mod, Args, #state{} = St) ->
-    Pid = spawn_link(fun () -> do_transform(Mod, Args) end),
-    {ok, St#state{current = Pid}}.
+handle_do(_MCB, _Mod, _Args, #state{current=P} = St) when is_pid(P) ->
+    {{error, ?LocalError(running,[])}, St}; %@todo
+handle_do(MCB, Mod, Args, #state{} = St) ->
+    Pid = spawn_link(fun () -> do_transform(MCB, Mod, Args) end),
+    {ok, St#state{current = Pid, mcb=MCB}}.
 
 %% Return the result of a transformation
 handle_wait(_From, #state{current=[]} = St) ->
@@ -346,13 +400,28 @@ handle_wait(_From, #state{current=R} = St) ->
     {reply, R, St#state{current=[]}}.
 
 %% Ask a question
-handle_ask(Pid, Props, #state{question=QT, next=Next} = St) ->
-    ID = proplists:get_value(id, Props, make_ref()),
-    ets:insert(QT, {Next, ID, Pid}),
-    P1 = [{text, lists:flatten(proplists:get_value(text, Props, "?"))} |
-          proplists:delete(text, Props)],
-    ?UI:message(question, {Next, P1}),
-    {{ok, ID}, St#state{next=Next+1}}.
+handle_ask(Pid, Props, #state{mcb=MCB, question=QT, next=Next} = St) ->
+    P0 = [ begin
+           [Format,TxtL] = ?MISC:pget([format,text], Prop),
+           case {Format,TxtL} of
+               {[F],[Txt=[_|_]]} when is_atom(F) ->
+                   {true, [{text, lists:flatten(Txt)} |
+                       proplists:delete(text, Prop)]};
+               _ ->
+                   {false, []}
+           end
+       end || Prop <- Props],
+    OK = lists:all(fun({B,_})->B end, P0),
+    case OK of
+        true ->
+            {_, P1} = lists:unzip(P0),
+            ID = proplists:get_value(id, Props, make_ref()),
+            ets:insert(QT, {Next, ID, Pid}),
+            (MCB#msg_cb.unicast)(question, {Next, P1}),
+            {{reply, ID}, St#state{next=Next+1}};
+        false ->
+            {{error, ?LocalError(bad_q, Props)}, St}
+    end.
 
 %% Store a reply to a question
 handle_reply(Num, Reply, #state{question=QT, answer=AT, wait=WT}) ->
@@ -366,11 +435,12 @@ handle_reply(Num, Reply, QT, AT, WT) ->
         [{_, ID, Owner}] ->
             ets:delete(QT, Num),
             ets:insert(AT, {{Owner, ID}, Reply}),
-            [gen_server:reply(Client, Reply) ||
-                {_, Client} <- ets:lookup(WT, {Owner, ID})],
-            ets:delete(WT, ID);
+            _ = [gen_server:reply(Client, Reply) ||
+                    {_, Client} <- ets:lookup(WT, {Owner, ID})],
+            ets:delete(WT, ID),
+            {reply, noreply};
         [] ->
-            ok
+            {error,?LocalError(invalid_qid,[Num,Reply])}
     end.
 
 %% Return the answer for a question
@@ -398,67 +468,80 @@ handle_rename(Data, #state{rename=Rename} = St) ->
     St#state{rename=[Data|Rename]}.
 
 %% Close a transformation
-handle_exit(Result, Pid, #state{question=QT, answer=AT, wait=WT,
-                                save=Save, rename=Rename} = St) ->
-    case Result of
-        {result, R}    ->
-            try
-                rename_files(lists:usort(Rename)),
-                save_files(lists:usort(Save)),
-                if
-                    R =/= nomsg ->
-                        ?UI:message(status, "Finished", []);
-                    true -> ok
-                end
-            catch
-                {rename, File, Err} ->
-                    ?UI:message(status, "Error renaming ~s: ~s", [File, Err]);
-                {save, File} ->
-                    ?UI:message(status, "File ~s could not be saved", [File]);
-                save ->
-                    ?UI:message(error, "error during saving results")
-            end;
-        {exit, Reason} -> ?UI:message(status, "Exited: ~p", [Reason]);
-        {abort, Error} -> ?UI:message(status, "~s", [?Error:error_text(Error)]);
-        {error, Error} -> ?UI:message(error, "~p", [Error])
-    end,
-    ?UI:message(trfinished,ok),
+handle_exit(Res, Pid,
+            #state{question=QT, answer=AT, wait=WT, mcb=MCB,
+                   save=Save, rename=Rename} = St) ->
+    Result0 = %@todo
+        case Res of
+            {result, R} ->
+                try
+                    rename_files(MCB, lists:usort(Rename)),
+                    save_files(MCB, lists:usort(Save)),
+                    SaveU = lists:usort(Save),
+                    SavedNames = lists:map(fun ?File:path/1,SaveU),
+                    {result,[{renamed,Rename},{saved,SavedNames},{result,R}]}
+                catch
+                    {rename, File, Err} ->
+                        ?LocalError(rename, [File, Err]);
+                    {save, File} ->
+                        ?LocalError(save, [File]);
+                    save ->
+                        ?LocalError(save, [])
+                end;
+            {exit, Reason} ->
+                ?LocalError(exit, [Reason]);
+            {abort, RefError} ->
+                {abort, RefError};
+            {error, Error={_,_,_}} ->
+                Error;
+            {error, Error} ->
+                ?LocalError(error, [Error])
+        end,
+    Result =
+        case Result0 of
+            {_,_,_} ->
+                {error, Result0};
+            _ ->
+                Result0
+        end,
     StRes = notify_wait(WT, Result),
     ets:match_delete(QT, {'_', '_', Pid}),
     ets:match_delete(AT, {{Pid, '_'}, '_'}),
     ets:match_delete(WT, {{Pid, '_'}, '_'}),
-    St#state{current = StRes, save=[], rename=[]}.
+    St#state{current = StRes, save=[], rename=[], mcb = undef}.
 
 notify_wait(WT, Result) ->
     case ets:lookup(WT, result) of
         [] ->
             Result;
         Lst ->
-            [gen_server:reply(Client, Result) || {_, Client} <- Lst],
+            _ = [gen_server:reply(Client, Result) || {_, Client} <- Lst],
             ets:delete(WT, result),
             []
     end.
 
-rename_files(Rename) ->
-    lists:foreach(fun rename_file/1, Rename).
+rename_files(MCB=#msg_cb{}, Rename) ->
+    _ = [rename_file(MCB, File) || File <- Rename],
+    ok.
 
-rename_file({OldPath, NewPath}) ->
+rename_file(MCB=#msg_cb{}, {OldPath, NewPath}) ->
     case file:rename(OldPath, NewPath) of
         ok ->
-            ?UI:message(rename, {OldPath, NewPath});
+            send_change(MCB, [?Renamed(OldPath,NewPath)]);
         {error, Reason} ->
             throw({rename, OldPath, file:format_error(Reason)})
     end.
 
-save_files(Files) ->
-    lists:foreach(fun save_file/1, Files).
+save_files(MCB=#msg_cb{}, Files) ->
+    _ = [save_file(MCB, File) || File <- Files],
+    ok.
 
-save_file(File) ->
+save_file(MCB=#msg_cb{}, File) ->
     try
         #file{path=Path} = ?Graph:data(File),
         try
             ok = ?FileMan:save_file(File),
-            ?UI:message(reload, [Path])
+            send_change(MCB, [?Modified(Path)])
         catch
             error:Reason ->
                 error_logger:error_msg(
@@ -477,7 +560,7 @@ save_file(File) ->
 %%% ----------------------------------------------------------------------------
 %%% Transformation process
 
-do_transform(Mod, Args) ->
+do_transform(_MCB, Mod, Args) ->
     try
         Transform = Mod:prepare(Args),
         [answer(Id) ||
@@ -525,3 +608,60 @@ runt(Fun) ->
         true  -> runs(R, first);
         false -> R
     end.
+
+%%% ----------------------------------------------------------------------------
+%%% Validation
+%%% @todo
+
+%% @type ui_question() = proplist()
+%% @type ui_answer() = proplist()
+%% @type ui_questions() = [ui_question()]
+%% @type ui_answers() = [ui_answer()]
+
+test123() ->
+    check_result([],[]).
+
+check_result(Questions,Answers) ->
+   Valid = validate(Questions,Answers),
+   case lists:all(fun(X)->X end,Valid) of
+       true -> true;
+       false ->
+           NewQ = insert_defaults(Questions,Answers,Valid),
+           resend_questions(NewQ)
+   end.
+
+resend_questions(_) -> throw(todo).
+
+insert_defaults([Q|Qs],[A|As],[V|Vs]) ->
+    NQ = case V of
+      true  -> Q ++ [{value,A}];
+      false -> Q
+    end,
+    [NQ | insert_defaults(Qs,As,Vs)];
+insert_defaults([],[],[]) ->
+    [].
+
+%% @doc
+%% Constraint: length(Questions)==length(Answers)
+%% @spec (ui_questions(), ui_answers()) -> [boolean()]
+validate(Questions, Answers) ->
+   lists:zipwith(fun validate1_cancel/2, Questions, Answers).
+
+validate1_cancel(Question, Answer) ->
+   (Answer==cancel) orelse validate1(Question,Answer).
+
+validate1(Question, Answer) ->
+   [Type, Validator] = ?MISC:pgetu([type, {validator,none}], Question),
+   Typed = case Type of
+       yesno ->
+           is_boolean(Answer);
+       string ->
+           is_list(Answer);
+       _ ->
+           throw(?RefError(valtype_unknown,[Type]))
+   end,
+   Typed andalso validator(Type,Validator,Answer).
+
+validator(_,none,_) -> true;
+validator(T,V,_) ->
+           throw(?RefError(valsubtype_unknown,[T,V])).

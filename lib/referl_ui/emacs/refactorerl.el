@@ -122,13 +122,26 @@ that connects to the RefactorErl server."
 (defun refactorerl-list-files (&optional same-win)
   "Shows the contents of the active refactoring set."
   (interactive)
-  (let ((buf (refac-buffer-list-ensure)))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (set (make-local-variable 'last-file-dir) "")))
-    (refac-send-command 'filelist)
-    (pop-to-buffer buf (not same-win))))
+  (refac-send/callbacks ('filelist)
+     (:reply (ok status-lines)
+       (with-refac-buffer-list
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (set (make-local-variable 'last-file-dir) ""))
+         (refac-debug (message "Status lines: %s" status-lines))
+         (if (listp status-lines)
+             (dolist (status-line status-lines)
+               (destructuring-bind (file flags) status-line
+                 (refac-widget-link file)
+                 (widget-insert ":")
+                  ;; (widget-insert
+                  ;; (format "%s" type) "\t"
+                  ;; (if (eql error 'yes) (propertize "Err" 'face 'refactorerl-error) "OK ") "\t"
+                  ;; (if (eql lastmod 'undefined) "" (format "%s\t" lastmod))
+                  ;; (format "%s" flags))
+                  (widget-insert "\n")))
+           (widget-insert "(no files in database)"))
+         (pop-to-buffer (current-buffer) t)))))
 
 ;; TODO: unify this with list-files and other popup commands
 (defun refactorerl-show-errors ()
@@ -138,8 +151,36 @@ that connects to the RefactorErl server."
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)))
-    (refac-send-command 'error_attr)
-    (pop-to-buffer buf t)))
+    (pop-to-buffer buf t)
+    (refac-send/callbacks ('status_info '())
+                          (:reply (ok parse-errors)
+                                  (refac-handle-errorlist parse-errors)))))
+
+(defun refac-handle-errorlist (parse-errorfs)
+  (if (not (consp parse-errorfs))
+      (message "No errors found")
+    (save-excursion
+      (with-refac-buffer-list
+       (dolist (parse-errorf parse-errorfs)
+        (progn
+         (setq filepath (elt parse-errorf 0))
+         (setq parse-error-prop (elt parse-errorf 1))
+         (setq parse-errors (elt (assoc 'error parse-error-prop) 1))
+         (if parse-errors
+          (dolist (parse-error parse-errors)
+              (refac-debug
+               (message "perr: %s" parse-error))
+          (destructuring-bind (&key nexttokentext position) (plist-from-lproplist parse-error)
+           (let ((start-pos (elt position 0))
+                 (end-pos (1+ (elt position 1))))
+             (widget-insert "Parse error at ")
+             (refac-widget-link filepath
+                                :start-pos start-pos :end-pos end-pos
+                                :style 'refactorerl-error
+                                :label (format "%s:%d-%d" (file-name-nondirectory filepath) start-pos end-pos))
+             (widget-insert " near '" nexttokentext "'")
+             (widget-insert "\n")))))))))))
+
 
 
 (defun refactorerl-load-dir (dirname)
@@ -270,7 +311,7 @@ that connects to the RefactorErl server."
             ((eq type 'yesno)
              (if (yes-or-no-p (concat text " "))
                  'yes 'no))
-	    ((destructuring-bind (select values)(list-from-vector type)
-	       (cond ((eq select 'select)
-		      (widget-choose text (pairlis values values)))))))
+        ((destructuring-bind (select values)(list-from-vector type)
+           (cond ((eq select 'select)
+              (widget-choose text (pairlis values values)))))))
     (quit nil)))

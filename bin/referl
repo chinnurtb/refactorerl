@@ -9,14 +9,19 @@ Usage: $0 [Option]...
 Starts RefactorErl, using the current working directory as the data directory.
 
 Recognised options:
-  -erl PATH        Path to the Erlang executable to use
-  -base PATH       Path to the RefactorErl base directory
-  -name NAME       Erlang node name
-  -server          Start in server mode (no shell is started)
-  -client          Start in client mode (no server is started)
-  -build TARGET    Build TARGET (e.g. tool, doc, clean)
-  -emacs           Start as an Emacs client
-  -help            Print this help text
+  -erl PATH          Path to the Erlang executable to use
+  -base PATH         Path to the RefactorErl base directory
+  -name NAME         Erlang node name
+  -server            Start in server mode (no shell is started)
+  -client            Start in client mode (no server is started)
+  -build TARGET      Build TARGET (e.g. tool, doc, clean)
+  -emacs             Start as an Emacs client
+  -yaws              Start with yaws web server
+  -yaws_path PATH    Path to the Yaws ebin directory (need /ebin at the end)
+  -yaws_name NAME    Set yaws server name
+  -yaws_port PORT    Set yaws port
+  -yaws_listen IP    Set yaws IP
+  -help              Print this help text
 HELP
         exit
 #  -wrangler PATH   Path to a Wrangler installation
@@ -28,6 +33,10 @@ BASE=`pwd`
 SERVER=yes
 CLIENT=no
 NAME=refactorerl@localhost
+YNAME=referl
+YPATH=no_path
+YPORT=8001
+YLISTEN=0.0.0.0
 
 # Interpret arguments
 while [ $# -gt 0 ]
@@ -53,6 +62,26 @@ do
     then
         CLIENT=emacs
         shift
+    elif [ "$1" = -yaws ]
+    then
+        CLIENT=yaws
+        shift
+    elif [ "$1" = -yaws_path ]
+    then
+        YPATH="$2"
+        shift 2
+    elif [ "$1" = -yaws_name ]
+    then
+        YNAME="$2"
+        shift 2
+    elif [ "$1" = -yaws_port ]
+    then
+        YPORT="$2"
+        shift 2
+    elif [ "$1" = -yaws_listen ]
+    then
+        YLISTEN="$2"
+        shift 2
     elif [ "$1" = -build ]
     then
         CLIENT=build
@@ -78,9 +107,12 @@ do
     fi
 done
 
+
 # Set extra arguments
 [ $CLIENT = server ] && ARGS="-noinput"
 [ $CLIENT = emacs ]  && ARGS="-noshell -run referl_emacs"
+[ $CLIENT = yaws ]  && ARGS="-noshell -run web_helper start_yaws from_script
+ $YPATH $YNAME $YPORT $YLISTEN"
 [ $CLIENT = build ]  && ARGS="-noshell -run referl_gen_build start $TARGET"
 
 
@@ -98,6 +130,7 @@ then
         -boot   "$BASE/refactorerl" \
         ${WRANGLER:+-pa} ${WRANGLER:+"$WRANGLER"} \
         +W "w" \
+	+K true \
         $ARGS
 else
 

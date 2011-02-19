@@ -23,10 +23,10 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_funprop).
--vsn("$Rev: 4770 $ ").
+-vsn("$Rev: 5262 $ ").
 -behaviour(gen_server).
 
--export([update/2, remove/1]).
+-export([update/2, remove/1, reset/0]).
 
 %% gen_server exports
 -export([start_link/0]).
@@ -36,6 +36,8 @@
 -include("core.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(FUNPROP_TIMEOUT, infinity).
+
 %% @spec update(gnode(), undefined | {integer(), [gnode()]}) -> ok
 %% @doc Updates side effect information. `Fun'  is a `#func{}' node, `Info'
 %% may be `undefined', which means the body of the function is not known (e.g.
@@ -43,13 +45,20 @@
 %% expressions with possible side effects in the body of the function, and the
 %% list of functions (`#func{}' nodes) called in the body of the function.
 update(Fun, Info) ->
-    gen_server:call(?FUNPROP_SERVER, {update, Fun, Info}).
+    gen_server:call(?FUNPROP_SERVER, {update, Fun, Info}, ?FUNPROP_TIMEOUT).
 
 %% @spec remove(gnode()) -> ok
 %% @doc Removes a function node from the cache (must be called when a function
 %% node is deleted).
 remove(Fun) ->
-    gen_server:call(?FUNPROP_SERVER, {remove, Fun}).
+    gen_server:call(?FUNPROP_SERVER, {remove, Fun}, ?FUNPROP_TIMEOUT).
+
+
+%% @spec reset() -> ok
+%% @doc This function has to be called before the graph is reset.
+%%      The function empties the internal funprop representation.
+reset() ->
+    gen_server:call(?FUNPROP_SERVER, {reset}, ?FUNPROP_TIMEOUT).
 
 
 %% @spec start_link() -> {ok, Pid} | {error, Error}
@@ -65,7 +74,10 @@ init(_) ->
 handle_call({update, Fun, Info}, _, State) ->
     {reply, ok, handle_update(Fun, Info, State)};
 handle_call({remove, Fun}, _, State) ->
-    {reply, ok, handle_remove(Fun, State)}.
+    {reply, ok, handle_remove(Fun, State)};
+handle_call({reset}, _, _State) ->
+    NewState = reset_call_graph(),
+    {reply, ok, NewState}.
 
 %% @private
 handle_cast(_, State) ->
@@ -88,7 +100,7 @@ code_change(_Old, State, _Extra) ->
 %%% Server implementation
 
 init_state() ->
-    ets:new(call_graph, []).
+    ets:new(call_graph, [named_table]).
 
 handle_remove(Fun, CG) ->
     ets:delete(CG, Fun),
@@ -98,10 +110,7 @@ handle_remove(Fun, CG) ->
 handle_update(Fun, undefined, CG) ->
     {Dirty, Refs, _} = read_info(Fun, CG),
     store_info(Fun, int, [], CG),
-    if
-        Dirty == no -> turn_dirty(Refs, CG);
-        true -> ok
-    end,
+    Dirty =/= no orelse turn_dirty(Refs, CG),
     CG;
 
 handle_update(Fun, {Pure, Calls}, CG) ->
@@ -112,20 +121,22 @@ handle_update(Fun, {Pure, Calls}, CG) ->
 %%     DirtyNeighbours = [F ||  F <- closure(Calls, fwd, CG),
 %%                              dirty(F, CG) == int, F =/= Fun],
     {NewDirty, Update} =
-        if 
-            Pure -> 
-                %% Looking for `int' in the closure instead of `int' or `ext' 
-                %% in direct calls ensures that mutually recursive functions 
-                %% are handled properly 
-                case lists:any(fun (F) -> dirty(F, CG) == int end, 
-                     closure(Calls, fwd, CG) -- [Fun]) of 
-                    true when Dirty == no  -> {ext, fun turn_dirty/2}; 
-                    true                   -> {ext, no}; 
-                    false when Dirty == no -> {no,  no}; 
-                    false                  -> {no,  fun turn_pure/2} 
-                end; 
-            not Pure and Dirty == no       -> {int, fun turn_dirty/2}; 
-            not Pure                       -> {int, no} 
+        if
+            Pure ->
+                %% Looking for `int' in the closure instead of `int' or `ext'
+                %% in direct calls ensures that mutually recursive functions
+                %% are handled properly
+                case lists:any(fun (F) -> dirty(F, CG) == int end,
+                     closure(Calls, fwd, CG) -- [Fun]) of
+                    true when Dirty == no  -> {ext, fun turn_dirty/2};
+                    true                   -> {ext, no};
+                    false when Dirty == no -> {no,  no};
+                    false                  -> {no,  fun turn_pure/2}
+                end;
+            not Pure and Dirty == no       -> {int, fun turn_dirty/2};
+            not Pure                       -> {int, no}
+%% todo This is a better looking alternative but it fails to do the same thing.
+%% todo Make this work. (Maybe DirtyNs should only be calculated if Pure?)
 %%         case {Pure, DirtyNeighbours, Dirty} of
 %%             {true,  [], no}  -> {ext, fun turn_dirty/2};
 %%             {true,  [], _}   -> {ext, no};
@@ -140,6 +151,17 @@ handle_update(Fun, {Pure, Calls}, CG) ->
     is_function(Update) andalso
         [Update(F, CG) || F <- closure(Refs, back, CG)],
     CG.
+
+
+%% Empties the table `call_graph' and returns its name.
+reset_call_graph() ->
+    case lists:member(call_graph, ets:all()) of
+        true  ->
+            ets:delete_all_objects(call_graph),
+            call_graph;
+        false ->
+            ets:new(call_graph, [named_table])
+    end.
 
 
 dirty(Fun, CG) ->
@@ -217,7 +239,7 @@ turn_pure(Fun, CG) ->
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Funpop test
+%% Funprop test
 
 update_test() ->
     M  = ?Graph:create(#func{name=m, arity=0}),

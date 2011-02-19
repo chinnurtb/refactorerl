@@ -23,7 +23,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reflib_clause).
--vsn("$Rev: 4961 $ ").
+-vsn("$Rev: 5455 $ ").
 
 -include("lib.hrl").
 
@@ -137,9 +137,10 @@ clause_diffs(C1, C2) ->
             length(X1) /= length(X2) orelse
             not lists_all(fun ?Expr:is_same_expr/1, lists:zip(X1, X2))].
 
+%% todo What is the difference between this function and lists:all/2?
+%% todo Should be moved to ?MISC.
 lists_all(_Fun, []) -> true;
 lists_all(Fun, [X|Xs]) ->
-?d(X),
     case Fun(X) of
         true  -> lists_all(Fun, Xs);
         false -> false

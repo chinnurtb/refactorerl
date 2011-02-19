@@ -62,7 +62,7 @@
 %%% @author Csaba Imre Zempleni <zecoaat@inf.elte.hu>
 
 -module(reftr_list_comp).
--vsn("$Rev: 5238 $ ").
+-vsn("$Rev: 5278 $ ").
 
 %%% Exports
 -export([prepare/1, error_text/2]).
@@ -105,8 +105,11 @@ prepare(Args) ->
                 {lists, filter, 2} ->
                     [_, ArgList] =
                         ?Query:exec(Expr, ?Expr:children()),
-                    [ExprFun, Generator] =
-                        copy(?Query:exec(ArgList, ?Expr:children())),
+                    [ExprFun, Generator1] = 
+                        ?Query:exec(ArgList, ?Expr:children()),
+                    Generator = copy(Generator1), 
+                    %[ExprFun, Generator] =
+                    %    copy(?Query:exec(ArgList, ?Expr:children())),
                     Type = ?Expr:type(ExprFun),
                     Info = from_app_filter_info(Type, ExprFun),
                     [{_, Parent}] = ?Syn:parent(Expr),
@@ -124,8 +127,11 @@ prepare(Args) ->
                 _MapOrForeach ->
                     [_, ArgList] =
                         ?Query:exec(Expr, ?Expr:children()),
-                    [ExprFun, Generator] =
-                        copy(?Query:exec(ArgList, ?Expr:children())),
+                    [ExprFun, Generator1] = 
+                        ?Query:exec(ArgList, ?Expr:children()),
+                    Generator = copy(Generator1), 
+                    %[ExprFun, Generator] =
+                    %    copy(?Query:exec(ArgList, ?Expr:children())),
                     Type          = ?Expr:type(ExprFun),
                     Info          = from_app_info_by_kind(Type, ExprFun),
                     [{_, Parent}] = ?Syn:parent(Expr),
@@ -142,17 +148,15 @@ prepare(Args) ->
                     end
             end;
         list_comp ->
-            Bodies = copy(?Query:exec(
-			     Expr, ?Query:seq(?Expr:clause(2), 
-					      ?Clause:body()))),
+            Bodies = ?Query:exec(Expr, ?Query:seq(?Expr:clause(2), 
+					          ?Clause:body())),
             {ListGens, CFilters} =
                 lists:partition(fun(X) ->
                                         ?Expr:type(X) =:= list_gen
                                 end, Bodies),
             ?Check(length(ListGens) =:= 1, ?LocalError(too_complex, [])),
             [ListGen] = ListGens,
-            Filters = copy([ ?Query:exec(X, ?Expr:clause(1)) || 
-			       X <- CFilters ]),
+            Filters = [?Query:exec(X, ?Expr:clause(1)) || X <- CFilters ],
             [PatternFilterNode] =
                 copy(?Query:exec(ListGen,
 				 ?Query:seq(?Expr:clause(1), 
@@ -164,9 +168,8 @@ prepare(Args) ->
             [Gen] = copy(?Query:exec(
 			    ListGen,
 			    ?Query:seq(?Expr:clause(2), ?Clause:body(1)))),
-            [HExpr] = copy(?Query:exec(
-			      Expr, ?Query:seq(?Expr:clause(1),
-					       ?Clause:body(1)))),
+            [HExpr] = ?Query:exec(Expr, ?Query:seq(?Expr:clause(1),
+					           ?Clause:body(1))),
             AppFunNode = from_lc_make_appfunnode(HExpr, PatternFilterNode),
             [{_, Parent}] = ?Syn:parent(Expr),
 
@@ -387,7 +390,7 @@ make_lists_filter_fun({pattern, Pattern}, Funbody) ->
 -define(body(PBody), copy(hd(?Query:exec(PBody, ?Clause:body(1))))).
 
 make_andalsos([]) -> {atom, true};
-make_andalsos([A]) -> ?body(A);
+make_andalsos([A]) -> hd(?Query:exec(A, ?Clause:body(1)));%%?body(A);
 make_andalsos([A, B]) -> {{infix_expr, 'andalso'}, ?body(A), ?body(B)};
 make_andalsos([A | Tail]) ->
     {{infix_expr, 'andalso'}, ?body(A), make_andalsos(Tail)}.
@@ -400,14 +403,14 @@ make_funbody(Single, Pattern) ->
 	    copy(?Query:exec(Single, 
 			     ?Query:seq(?Expr:clause(1), ?Clause:body())));
 	case_expr -> case_to_fun(Single, Pattern);
-	_ -> Single
+	_ -> copy(Single)
     end.
 
 case_to_fun(Case, Pattern) ->
     CasePattern = ?Query:exec(
 		     Case, ?Query:seq(?Expr:clause(1), ?Clause:body())),
     case same_expr(CasePattern, Pattern) of
-	false -> Case;
+	false -> copy(Case);
 	true ->
 	    [_ | Clauses] = ?Query:exec(Case, ?Expr:clauses()),
 	    Scopes = [ begin

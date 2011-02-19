@@ -336,6 +336,29 @@ del(TExpr, #typexp{}, Ctx) ->
     [{C, Ctx} || {_, C} <- ?Anal:children(TExpr)].
 
 %%% @private
+update(App, #expr{type=application}) ->
+    [NameNode, ArgsNode] = ?Graph:path(App, [esub]),
+    #expr{value=Name} = ?Graph:data(NameNode),
+    Arity = length(?Graph:path(ArgsNode, [esub])),
+
+    [FunSynNode] = ?Graph:path(App, [funlref]),
+%   todo Using ?NodeSync would be the right way to do it...
+%    FunSynNode = ?NodeSync:get_node(func, {Name, Arity}),
+    FunData = ?Graph:data(FunSynNode),
+    ?Graph:update(FunSynNode, FunData#func{name=Name, arity=Arity}),
+    ok;
+update(Node, #expr{type=atom}) ->
+    case ?Graph:path(Node, [{esub, back}]) of
+        [Parent] ->
+            case ?Graph:data(Parent) of
+                #expr{type=application} = Data ->
+                    update(Parent, Data);
+                _ ->
+                    ok
+            end;
+        _->
+            ok
+    end;
 update(_,_) -> ok.
 
 
@@ -399,8 +422,8 @@ node_funprop(Node, #expr{type=Type}, {Pure, Calls}) ->
 node_funprop(_, _, Props) -> Props.
 
 add_calls(Node, Calls) ->
-    FunLinks = [funeref, dynfuneref, ambdynfuneref,
-                funlref, dynfunlref, ambdynfunlref],
+    FunLinks = [funeref, dynfuneref, ambfuneref,
+                funlref, dynfunlref, ambfunlref],
     %% should we separate dynamic calls from the simple ones?
     ordsets:union(
       Calls,

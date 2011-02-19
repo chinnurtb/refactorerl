@@ -20,7 +20,7 @@
 %%% @author Lilla Hajós <lya@elte.hu>
 
 -module(refusr_sq_lib).
--vsn("$Rev: 5088 $ ").
+-vsn("$Rev: 5463 $ ").
 
 -include("user.hrl").
 
@@ -370,29 +370,52 @@ entites() ->
             func = fun(Fun) ->
                            ?Query:exec(Fun, ?Query:all([?Fun:applications(),
                                                         ?Fun:implicits(),
-                                                        ?Fun:impexps()]))
+                                                        ?Fun:impexps(),
+                                                        ?Dynfun:dynfun_call()]))
+                   end},
+
+         #selector{
+            name = [dynamic_references, dynref, dynrefs],
+            type = expression,
+            func = fun(Fun) ->
+                           ?Query:exec(Fun, ?Query:all([?Dynfun:dynfun_call(),
+                                                        ?Dynfun:ambdyn_call()]))
                    end},
 
          #selector{
             name = [calls],
             type = function,
+            func = fun(Fun) -> ?Query:exec(Fun, ?Fun:funcalls()) end},
+
+         #selector{
+            name = [dynamic_calls, dyncall, dyncalls],
+            type = function,
             func = fun(Fun) ->
-                           ?Query:exec(Fun, ?Query:seq([?Fun:definition(),
-                                                        ?Form:clauses(),
-                                                        ?Clause:body(),
-                                                        ?Expr:funapps()]))
+                           ?Query:exec(Fun,
+                                       ?Query:seq([?Fun:definition(),
+                                                   ?Form:clauses(),
+                                                   ?Clause:body(),
+                                                   ?Expr:deep_sub(),
+                                                   ?Query:all([[dynfuneref],
+                                                               [ambfuneref]])]))
                    end},
 
          #selector{
             name = [called_by],
             type = function,
+            func = fun(Fun) -> ?Query:exec(Fun, ?Fun:called()) end},
+
+         #selector{
+            name = [dynamic_called_by, dyncalled_by],
+            type = function,
             func = fun(Fun) ->
-                           ?Query:exec(Fun, ?Query:seq([?Query:all(
-                                                           ?Fun:applications(),
-                                                           ?Fun:implicits()),
-                                                        ?Expr:clause(),
-                                                        ?Clause:form(),
-                                                        ?Form:func()]))
+                        ?Query:exec(Fun,
+                                       ?Query:seq(
+                                          [?Query:all([?Dynfun:dynfun_call(),
+                                                       ?Dynfun:ambdyn_call()]),
+                                           ?Expr:clause(),
+                                           ?Clause:form(),
+                                           ?Form:func()]))
                    end},
 
          #selector{
@@ -488,6 +511,13 @@ entites() ->
             type = atom,
             func = fun(Fun) ->
                            ?Mod:name(hd(?Query:exec(Fun, ?Fun:module())))
+                   end},
+
+         #property{
+            name = [spec],
+            type = string,
+            func = fun(Fun) ->
+                           element(1, refusr_spec:run(Fun))
                    end},
 
 %%%.............................................................................
@@ -781,7 +811,20 @@ entites() ->
          #selector{
             name = [function, functions, 'fun', funs],
             type = function,
-            func = fun(Expr) -> ?Query:exec(Expr, ?Expr:functions()) end},
+            func = fun(Expr) ->
+                           ?Query:exec(Expr, ?Query:seq([?Expr:deep_sub(),
+                                                         ?Expr:dynfunction()]))
+                   end},
+
+         #selector{
+            name = [dynamic_function, dynamic_functions, dynfun, dynfuns],
+            type = function,
+            func = fun(Expr) ->
+                           ?Query:exec(Expr,
+                                       ?Query:seq([?Expr:deep_sub(),
+                                                   ?Query:all([[dynfuneref],
+                                                               [ambfuneref]])]))
+                   end},
 
          #selector{
             name = [vars, variables, var, variable],

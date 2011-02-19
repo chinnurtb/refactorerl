@@ -25,7 +25,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_misc).
--vsn("$Rev: 5063 $ ").
+-vsn("$Rev: 5455 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -100,7 +100,7 @@
 -export([get_rec_type/1, get_rec_value/2, set_rec_value/3, check_record/2]).
 
 %% Error signalling.
--export([format/2]).
+-export([format/1, format/2]).
 -export([error_on_difference/3]).
 
 %%% ============================================================================
@@ -617,6 +617,9 @@ arg(Args, Name) ->
 
 %%% ============================================================================
 %%% Error signalling
+
+format(Fmt) ->
+    format(Fmt, []).
 
 %% @spec format(string(), [Params]) -> string()
 %% @doc Creates a formatted string similar to io_lib:format/2.

@@ -50,7 +50,7 @@
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(reftr_rename_var).
--vsn("$Rev: 4956 $ ").
+-vsn("$Rev: 5496 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -62,16 +62,42 @@
 
 %% @private
 prepare(Args) ->
-    Var        = ?Args:variable(Args),
-    NewName    = ?Args:varname(Args),
+    Var        = ?Args:variable(Args, rename),
 
     Occs       = ?Query:exec(Var,  ?Var:occurrences()),
     Visibles   = ?Query:exec(Occs, ?Expr:visible_vars()),
     Useds      = ?Query:exec(Var,  ?Query:seq(?Var:scopes(), ?Clause:variables())),
     ClashNames = [?Var:name(V) || V <- Visibles ++ Useds],
-    ?Check(not lists:member(NewName, ClashNames), ?RefError(var_exists, NewName)),
 
-    ?Macro:check_macros(Occs, {elex, 1}),
-    fun () ->
+    ArgsInfo   = add_transformation_info(Args, Var, Occs),
+
+
+    NewName    = ?Args:ask(ArgsInfo, varname, fun cc_newname/2, fun cc_error/3,
+                           ClashNames),
+
+%    ?Macro:check_single_usage(Occs, [{elex, 1}]),
+    [fun () ->
+        ?Macro:inline_single_virtuals(Occs, elex),
         [?Macro:update_macro(VarOcc, {elex, 1}, NewName) || VarOcc <- Occs]
-    end.
+     end,
+     fun(_)->
+        [Var]
+     end].
+
+add_transformation_info(Args, Var, Occs) ->
+    VarName = ?Var:name(Var),
+    OccLen  = length(Occs),
+    Info    = ?MISC:format("Renaming variable ~p (~p occurrences)",
+                           [VarName, OccLen]),
+    [{transformation_text, Info} | Args].
+
+%%% ============================================================================
+%%% Checks
+
+cc_newname(NewVarName, ClashNames) ->
+    ?Check(not lists:member(NewVarName, ClashNames),
+           ?RefError(var_exists, NewVarName)),
+    NewVarName.
+
+cc_error(?RefError(var_exists, NewVarName), NewVarName, _ClashNames) ->
+   ?MISC:format("The variable ~p is already used.", [NewVarName]).

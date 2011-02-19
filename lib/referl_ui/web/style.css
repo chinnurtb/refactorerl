@@ -2,23 +2,56 @@ html,body{margin:0;padding:0}
 
 body{font: 85% arial,sans-serif}
 
-p{margin:0 20px 10px}
+table{
+    border-width: 0px;
+    border-spacing: 0px;
+    border-style: solid;
+    border-collapse: collapse;
+    margin:10px;
+    padding:5px;
+ }
 
-a{display:block;color:#006;padding:10px}
+table th{
+    border-width: 1px;
+    padding: 2px;
+    border-style: inset;
+    border-color: black;
+}
+
+table td{
+    font: 85% courier new,monospace;
+    border-width: 1px;
+    padding: 2px;
+    border-style: inset;
+    border-color: black;
+} 
 
 div#header{position:relative}
 div#header h1{height:60px;line-height:60px;margin:0;
               padding-left:5%;background:#800000;color:#ffffd2}
-div#header a{position:absolute;right:0;top:23px;color: #C6D5FD}
+div#header a{position:absolute;right:5px;top:23px;color: #C6D5FD}
 div#header span{postion:absulute;right:160;top:23px}
 
-div#input{border:3px solid #800000;padding:2px 5%;background:#ffffd2;}
+div#input{border:3px solid #800000;padding:2px 5%;background:#ffffd2}
 
-div#result{padding:0.5%}
+div#result{padding:0.5%;min-height:300px}
+div#result p{line-height:1.4;background:white}
+div#result a{display:inline;padding:0;color: black}
+div#result textarea{font: 85% courier new,monospace;}
 
-div#result p{line-height:1.4;background:#ffffe6}
+div#prev{padding:0.5%;background:#ffffd2;overflow:auto;min-height:300px}
+div#prev p{margin:0 10px 10px}
+div#prev a{outline: 0px;text-decoration:none}
 
-div#prev{padding:0.5%;background:#ffffd2;overflow:auto;max-height:500px}
+a.delete span{
+    border: 1px solid black;
+    padding-right:2px;
+    padding-left:2px;
+    margin-right:10px;
+    color:black;
+}
+
+a.queryA span{color:black;}
 
 .queryList{
     margin:0px;
@@ -28,20 +61,20 @@ div#prev{padding:0.5%;background:#ffffd2;overflow:auto;max-height:500px}
     list-style-type:none;
     border-bottom:0.6px solid #800000;
     background-color:#ffffb9;
-    height:30px;
+    height:28px;
     margin:1px;
     padding:2px;
     color:#333;
-    cursor:pointer;
+    font:95%;
 }
 .queryList li.queryMouseOver{ /* Mouse over query in list */
     color:#000;
 }
 .queryList li.queryClick{ /* Active query in list */
     border:1px solid #800000;
-    color::#ffffe6;
+    color:#ffffe6;
     background-color:#800000;
-    color:#FFF;
+    font:95%;
 }
 
 div#footer{background: #333;color: #FFF}
@@ -49,6 +82,6 @@ div#footer p{margin:0;padding:8px 10px}
 div#footer a{display:inline;padding:0;color: #C6D5FD}
 
 div#wrapper{float:right;width:69%}
-div#prev{float:left;width: 28.9%}
+div#prev{float:left;width:28.9%}
 div#input{clear:both}
 div#footer{clear:both;width:100%}

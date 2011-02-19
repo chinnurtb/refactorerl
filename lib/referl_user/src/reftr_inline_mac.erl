@@ -73,7 +73,7 @@
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reftr_inline_mac).
--vsn("$Rev: 4711 $").
+-vsn("$Rev: 5455 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -94,7 +94,6 @@ error_text(_,_) -> unknown.
 prepare(Args) ->
     Macro   = ?Args:macuse(Args),
     Results = gather(Macro),
-%    ?d(Results),
     fun() ->
         Funs = [
             fun({U,T,V}) -> ?ESG:remove(U,T,V) end,
@@ -104,7 +103,6 @@ prepare(Args) ->
                 ?ESG:insert(U,T,V) end,
             fun ?Transform:touch/1 ],
         lists:zipwith(fun lists:foreach/2, Funs, Results)
-%        ?ESG:finalize()
     end.
 
 %%% ============================================================================

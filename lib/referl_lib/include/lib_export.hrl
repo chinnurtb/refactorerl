@@ -36,13 +36,15 @@
 -define(Expr,           reflib_expression).
 -define(Mod,            reflib_module).
 -define(Fun,            reflib_function).
+-define(Dynfun,         reflib_dynfun).
 -define(Var,            reflib_variable).
 -define(Rec,            reflib_record).
 -define(RecField,       reflib_record_field).
 -define(Macro,          reflib_macro).
 -define(Token,          reflib_token).
--define(UI,             reflib_ui).
+-define(UI,             reflib_ui_router).
 
+-define(UIB,            reflib_ui).
 -define(DRAW_GRAPH,     reflib_draw_graph).
 -define(GR_UTILS,       reflib_graph_utils).
 

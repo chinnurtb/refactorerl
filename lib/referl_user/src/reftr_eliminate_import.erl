@@ -53,7 +53,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_eliminate_import).
--vsn("$Rev: 4985 $ ").
+-vsn("$Rev: 5401 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -73,7 +73,7 @@ error_text(not_an_import_form, [])->
 %%% @private
 prepare(Args) ->
     File = ?Args:file(Args),
-    Form = ?Args:form(Args),
+    Form = ?Args:import_form(Args),
     ?Check(?Form:type(Form) =:= import, ?LocalError(not_an_import_form, [])),
     [Module] = ?Query:exec(Form, ?Query:seq(?Form:expr(1), ?Expr:module())),
     Refs = references(File, Module),

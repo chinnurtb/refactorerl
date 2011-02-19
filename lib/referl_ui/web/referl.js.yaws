@@ -1,49 +1,40 @@
 var queryListObj;
-var activeQuery = false;
 var clickedQuery = false;
-var contentObj;
+var contentObj = document.getElementById('resultDiv');
     
-function mouseoverQuery() { // Highlight query
-    if(this==clickedQuery)return;
-    if(activeQuery && activeQuery!=this){
-        if(activeQuery==clickedQuery)
-            activeQuery.className='queryClick';
-        else
-            activeQuery.className='';
-    }
-    this.className='queryMouseOver';
-    activeQuery = this; // Storing reference to this query
-}
-
 function showWaitMessage() {
     contentObj.innerHTML = "Running the query...Please wait";
 }
 
-function resizeIframe(oIframe) {
-    var innerHeight = oIframe.contentWindow.getActualHeight();
-    oIframe.height = innerHeight;
-} 
-
-function selectQuery() {// User has clicked on a query
-    showWaitMessage();
-    if(clickedQuery && clickedQuery!=this)clickedQuery.className=
+function queryClick(queryLi) {
+    if(clickedQuery && clickedQuery!=queryLi)clickedQuery.className=
         'queryMouseOver';
-    this.className='queryClick';
-    clickedQuery = this;
-
-    var input = document.getElementById("query");
-    query.value = this.id;
-
-    var resultHtml = 
-        "<iframe style=\"border: none\"; src='post_query.yaws?u= " + 
-        querySt("user") + "&p=" + this.id + 
-        "' width=\"100%\" id=\"myiframe \"name=\"myiframe\"" +
-        " onload=\"resizeIframe(this)\"  vspace=\"0\" hspace=\"0\"" +
-        " marginwidth=\"0\" marginheight=\"0\" >" + 
-        "</iframe>";  
-    contentObj.innerHTML =  "<h3>" + this.id + " </h3>" + resultHtml; 
+    queryLi.className='queryClick';
+    clickedQuery = queryLi;
 }
 
+function selectQuery(query) {// User has clicked on a query
+    if (clickedQuery) {   
+        clickedQuery.childNodes[0].childNodes[0].style.color = "black";
+        if (clickedQuery.childNodes[1]) {
+            clickedQuery.childNodes[1].childNodes[0].style.color = "black";
+        }
+    }
+    var queryLi = document.getElementById(query); 
+    queryClick(queryLi);
+    queryLi.childNodes[0].childNodes[0].style.color = "#ffffb9";
+    if (queryLi.childNodes[1]) {
+        queryLi.childNodes[1].childNodes[0].style.color = "#ffffb9";
+    }
+    document.getElementById("erlSource").style.display="none";
+    showWaitMessage();
+    var input = document.getElementById('query');
+    input.value = decodeQuotes(query);
+    var queryP = document.getElementById('queryP');
+    queryP.innerHTML = "<h3>" + decodeQuotes(query) + " </h3>";
+    var url =  "post_query.yaws?u= " + querySt("user") + "&p=" + query;
+    loadUrlIntoDiv(contentObj,url);
+}
 
 function loadErl() { 
     var fselect = document.getElementById("fileselect");
@@ -51,47 +42,23 @@ function loadErl() {
 }
 
 function newQuery() {
-     var query = document.getElementById('query').value;
-
-     var resultHtml =
-        "<iframe style=\"border: none\"; src='post_query.yaws?u= " + 
-        querySt("user") + "&q=" + query + 
-        "' width=\"100%\" id=\"myiframe \"name=\"myiframe\"" +
-        " onload=\"resizeIframe(this)\"  vspace=\"0\" hspace=\"0\"" +
-        " marginwidth=\"0\" marginheight=\"0\" >" + 
-        "</iframe>";  
-     contentObj.innerHTML =  "<h3>" + query + " </h3>" + resultHtml; 
-     
-  
+    showWaitMessage();
+    document.getElementById("erlSource").style.display="none";
+    var query = document.getElementById('query').value;
+    var queryP = document.getElementById('queryP');
+    queryP.innerHTML = "<h3>" + query + " </h3>";
+    var url = "post_query.yaws?u= " + querySt("user") + "&q=" + query;
+    loadUrlIntoDiv(contentObj,url);
+    loadList(); 
 }
 
-function getBody(content) { // searches for body, extracts and returns the content
-    test = content.toLowerCase();
-    var x = test.indexOf("<body");
-    if(x == -1) return "";
-    
-    x = test.indexOf(">", x);
-    if(x == -1) return "";
-      
-    var y = test.lastIndexOf("</body>");
-    if(y == -1) y = test.lastIndexOf("</html>");
-    if(y == -1) y = content.length;   
-    return content.slice(x + 1, y);   
+function deleteQuery(query) {
+    var div = document.getElementById("hiddenDiv");
+    var url = "del_query.yaws?u=" + querySt("user") + "&q=" + query;
+    loadUrlIntoDiv(div, url);
+    loadList();
 }
  
-function loadWholePage(url) {
-    var x = document.getElementById("erlSource");
-    var xhr = createXHR();
-    xhr.onreadystatechange=function() { 
-        if(xhr.readyState == 4) {
-            x.value = getBody(xhr.responseText);
-        }
-    }; 
-    xhr.open("GET", url , true);
-    xhr.send(null); 
-}
-
-
 function querySt(search_for) {
     var query = window.location.search.substring(1);
     var parms = query.split('&');
@@ -106,16 +73,43 @@ function querySt(search_for) {
 }
 
 function initAjax() {
+    clickedQuery = false;
     queryListObj = document.getElementById('queryList');
-    var querys = queryListObj.getElementsByTagName('LI');
+    var querys = queryListObj.getElementsByTagName('li');
     for(var no=0;no<querys.length;no++){
         querys[no].onmouseover = mouseoverQuery;
-        querys[no].onclick = selectQuery;
     }
-    contentObj = document.getElementById('resultP');                  
+    contentObj = document.getElementById('resultDiv');                  
+}
+
+function loadUrlIntoDiv(div, url) {
+    var xmlHttp;
+    try {// Firefox, Opera 8.0+, Safari
+        xmlHttp = new XMLHttpRequest();		
+    } catch (e) {// Internet Explorer
+                try { xmlHttp = new ActiveXObject("Msxml2.XMLHTTP");
+                    } catch (e) {
+                          try {
+                              xmlHttp = 
+                                  new ActiveXObject("Microsoft.XMLHTTP");
+                              } catch (e) {
+                                alert("Your browser does not support AJAX!");
+                                return false;
+                              }
+                    }
+                }
+    xmlHttp.open("GET", url, false); //synchronous call
+    xmlHttp.send(null);
+    var respText = xmlHttp.responseText.split('<body>');
+    div.innerHTML = respText[1].split('</body>')[0];
+}
+
+function decodeQuotes(str) {
+    var str2 = str.replace(/``/g,"\"");
+    return str2.replace(/`/g,"'");
 }
 
 document.getElementById("username");
 logout.innerHTML = decodeURIComponent(querySt("user")) + " - Log out";
-initAjax();
+loadList();
 

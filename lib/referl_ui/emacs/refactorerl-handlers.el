@@ -44,11 +44,11 @@ complete file names, values are progress reporters as returned by
 (define-handler status (string)
   (message "%s" string))
 
-(define-handler uifinished (string)
-  ())
-
-(define-handler trfinished (string)
-  ())
+(defun plist-from-lproplist (list)
+  (mapcan #'(lambda (prop)
+        (let ((keyword (intern (format ":%s" (elt prop 0))))
+              (value (elt prop 1)))
+         (list keyword value))) list))
 
 (defun plist-from-eproplist (tree)
   (typecase tree
@@ -61,7 +61,7 @@ complete file names, values are progress reporters as returned by
   (refac-visit (widget-get widget :filepath)
                :start-pos (widget-get widget :start-pos)
                :end-pos (widget-get widget :end-pos)
-               :start-line (widget-get widget :start-line) :start-col (widget-get widget :start-col)               
+               :start-line (widget-get widget :start-line) :start-col (widget-get widget :start-col)
                :end-line (widget-get widget :end-line) :end-col (widget-get widget :end-col)))
 
 (defun point-from-pos (line col)
@@ -92,9 +92,9 @@ complete file names, values are progress reporters as returned by
     ;;              :end-pos end-pos :end-line end-line :end-col end-col)
     (let ((buf (find-file-noselect filepath)))
       (with-current-buffer buf
-        (setf refactorerl-mode t) 
+        (setf refactorerl-mode t)
         (when start-line
-          (setf start-pos (point-from-pos start-line (1- start-col)))) 
+          (setf start-pos (point-from-pos start-line (1- start-col))))
         (when end-line
           (setf end-pos (point-from-pos end-line end-col)))
         (refac-add-overlay-to-group start-pos end-pos)))))
@@ -106,34 +106,17 @@ complete file names, values are progress reporters as returned by
   (assert (if start-col start-line t))
   (assert (if end-line end-col t))
   (assert (if end-col end-line t))
-  
+
   (widget-create 'link
                  :button-prefix ""
                  :button-suffix ""
                  :button-face style
                  :filepath filepath
-                 :start-pos start-pos :start-line start-line :start-col start-col                 
+                 :start-pos start-pos :start-line start-line :start-col start-col
                  :end-pos end-pos :end-line end-line :end-col end-col
                  :help-echo "mouse-2, RET: open file"
                  :notify #'refac-cb-visit
                  (or label (file-name-nondirectory filepath))))
-
-(define-handler errorlist (parse-errors)
-  (if (not (consp parse-errors))
-      (message "No errors found")  
-    (save-excursion
-      (with-refac-buffer-list 
-       (dolist (parse-error (car parse-errors))
-         (destructuring-bind (&key filepath nexttokentext position) (plist-from-eproplist parse-error)
-           (let ((start-pos (elt position 0))
-                 (end-pos (1+ (elt position 1))))             
-             (widget-insert "Parse error at ")
-             (refac-widget-link filepath
-                                :start-pos start-pos :end-pos end-pos
-                                :style 'refactorerl-error
-                                :label (format "%s:%d-%d" (file-name-nondirectory filepath) start-pos end-pos))
-             (widget-insert " near '" nexttokentext "'")
-             (widget-insert "\n"))))))))
 
 (define-handler filestatus (status-lines)
   (when (and (consp status-lines) (consp (car status-lines)))
@@ -148,47 +131,6 @@ complete file names, values are progress reporters as returned by
                           (if (eql lastmod 'undefined) "" (format "%s\t" lastmod))
                           (format "%s" status))
            (widget-insert "\n")))))))
-
-;; (define-handler reload (file)
-;;   (let ((buf (get-file-buffer file)))
-;;     (when buf
-;;       (with-current-buffer buf
-;;         (revert-buffer t t t)))))
-
-(define-handler reload (file-list)
-  (save-excursion
-    (mapc (lambda (file)
-            (let ((buf (get-file-buffer file)))
-              (when buf
-                (set-buffer buf)
-                (revert-buffer t t t))))
-          file-list)))
-
-(define-handler add (file-list)
-  (save-excursion
-    (dolist (file file-list)
-      (refac-progress-report 'add file)
-      (let ((buf (get-file-buffer file)))
-        (when buf
-          (set-buffer buf)
-          (refac-set-buffer-state :ok))))))
-
-(define-handler drop (file-list)
-  (save-excursion
-    (mapc (lambda (file)
-	    (let ((buf (get-file-buffer file)))
-	      (when buf
-		(set-buffer buf)
-                (refac-set-buffer-state :off))))          
-	  file-list)))
-
-(define-handler rename (files)
-  (let* ((frompath  (elt files 0))
-         (topath    (elt files 1))
-         (buf       (get-file-buffer frompath)))
-    (when buf
-      (with-current-buffer buf
-        (set-visited-file-name topath)))))
 
 (define-handler invalid (file)
   (refac-progress-report :err file)
@@ -210,7 +152,7 @@ complete file names, values are progress reporters as returned by
 
 (defun refac-file-list-add (file)
   (let ((state (if (string-equal (elt file 1) "error") :err :ok))
-	(filepath (elt file 0)))
+    (filepath (elt file 0)))
     (let ((dirname (file-name-directory filepath)))
       (unless (equal dirname last-file-dir)
         (insert (concat (propertize dirname 'face 'refactorerl-header) ":\n"))
@@ -223,10 +165,21 @@ complete file names, values are progress reporters as returned by
   (with-refac-buffer-list
    (mapcar 'refac-file-list-add file-list)))
 
+;;; TODO: Create a property list from Erlang proplists
 (defun list-from-vector (vector)
-  (if (vectorp vector)
+  (if (or (vectorp vector) (listp vector))
       (map 'list #'list-from-vector vector)
     vector))
+
+(defun proplist-from-erlang (erlang)
+  (typecase erlang
+    (list
+     (loop for (key value . rest) on erlang by #'cddr
+           append (list (intern (concat ":" (symbol-name key))) (proplist-from-erlang value))))
+    (vector
+     (map #'list #'proplist-from-erlang erlang))
+    (t
+     erlang)))
 
 ;;; TODO: unify this one with filelist and errorlist handlers
 ;;; TODO: Maybe use a tree widget?
@@ -236,7 +189,7 @@ complete file names, values are progress reporters as returned by
      (dolist (dup-group dups)
        (widget-insert "Group\n")
        (dolist (dup dup-group)
-         (destructuring-bind (filepath (start-line start-col) (end-line end-col)) (list-from-vector dup)             
+         (destructuring-bind (filepath (start-line start-col) (end-line end-col)) (list-from-vector dup)
            (widget-insert "   ")
            (refac-widget-link filepath :start-line start-line :start-col start-col :end-line end-line :end-col end-col
                               :label (format "%s: (%d,%d)-(%d,%d)" (file-name-nondirectory filepath) start-line start-col end-line end-col)))
@@ -367,12 +320,6 @@ complete file names, values are progress reporters as returned by
            data "\n")))
 
 
-(define-handler metric (string)
-  (display-buffer (refac-buffer-list-ensure))
-  (with-refac-buffer-list
-   (erase-buffer)
-   (widget-insert string "\n")))
-
 (define-handler result (string)
   (set (make-local-variable 'str) (cdr string))
   (set (make-local-variable 'algo) (car string))
@@ -407,49 +354,6 @@ complete file names, values are progress reporters as returned by
            (refac-send-command 'cancel id))
           (t
            (refac-send-command 'reply id reply)))))
-
-(define-handler showconfig (config)
-  (with-current-buffer refac-server-buffer
-    (set (make-local-variable 'config-inc-dir) nil)
-    (set (make-local-variable 'config-app-dir) nil)
-    (set (make-local-variable 'config-out-dir) "/tmp")
-    (if (equal config "") (setq config nil))
-    (dolist (cfg config)
-      (cond ((eq (elt cfg 0) 'appbase)
-             (add-to-list 'config-app-dir (elt cfg 1)))
-            ((eq (elt cfg 0) 'include)
-             (add-to-list 'config-inc-dir (elt cfg 1)))
-            ((eq (elt cfg 0) 'output)
-             (setq config-out-dir (elt cfg 1)))))
-    (goto-char config-start-marker)
-    (widget-insert "Application directories:\n")
-    (set (make-local-variable 'appdir-list)
-         (widget-create 'editable-list
-                        :value config-app-dir
-                        '(editable-field)))
-    (widget-insert "\nInclude directories:\n")
-    (set (make-local-variable 'incdir-list)
-         (widget-create 'editable-list
-                        :value config-inc-dir
-                        '(editable-field)))
-    (widget-insert "\n")
-    (set (make-local-variable 'outdir-menu)
-         (widget-create 'menu-choice
-                        :value config-out-dir
-                        :tag "Output directory"
-                        '(const :tag "Original" original)
-                        '(editable-field :menu-tag "Specify" "")))
-    (widget-insert "\n")
-    (set (make-local-variable 'save-button)
-         (widget-create 'push-button
-                        :notify 'refac-save-config
-                        "Save"))
-    (set (make-local-variable 'cancel-button)
-         (widget-create 'push-button
-                        :notify 'refac-hide-config
-                        "Cancel"))
-    (widget-insert "\n")
-    (set (make-local-variable 'config-end-marker) (point-marker))))
 
 (defun refac-progress-start (text max)
   "Returns a new progress reporter that displays progress using
@@ -498,13 +402,13 @@ elapsed since the last progress message."
 
 (define-handler queryres (results)
   (if (or (equal results "") (not results))
-      (message "No results.")    
-    
+      (message "No results.")
+
     (flet ((result-no-pos (result)
                           (equal (elt result 0) 'nopos)))
       (let ((highlight (or refac-find-refs-highlight
                            ;; (= (length (remove-if #'result-no-pos results)) 1)
-                           )))        
+                           )))
         (when refac-find-refs-popup
           (with-refac-buffer-list
            (erase-buffer)))

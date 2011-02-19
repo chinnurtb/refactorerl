@@ -57,7 +57,7 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(reftr_merge).
--vsn("$Rev: 4763 $").
+-vsn("$Rev: 5455 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -85,11 +85,9 @@ prepare(Args) ->
     ?Check(1 == length(Exprs), ?RefError(token_parent, [expr])),
     [Expr]        = Exprs,
 
-    NewVarName    = ?Args:varname(Args),
-    ScopeVarNames =
-            [?Var:name(V) || V <- ?Query:exec([Expr], ?Expr:scope_varbinds())],
-    ?Check( not lists:member(NewVarName, ScopeVarNames),
-            ?RefError(var_exists, NewVarName)),
+    VarNames = [?Var:name(V) || V <- ?Query:exec(Expr, ?Expr:scope_varbinds())],
+    % todo Add transformation info
+    VarName  = ?Args:ask(Args, varname, fun cc_varname/2, fun cc_error/3, VarNames),
 
     Disqual  = instance_disqualifiers(Expr),
     ?Check( [] == Disqual, ?RefError(bad_kind, Disqual)),
@@ -105,16 +103,13 @@ prepare(Args) ->
     InstParents         = [{?Syn:parent(Inst), Inst} || Inst <- Insts],
     InsLoc = {TopCl, _} = insertion_location(Insts),
 
+    ?Transform:touch(TopCl),
     [   fun() ->
-            MatchExpr = new_match_expr(NewVarName, Expr),
+            MatchExpr = new_match_expr(VarName, Expr),
             insert_new_match_expr(MatchExpr, InsLoc)
         end,
-        [ fun(_) -> change_instance(NewVarName, Parent, Inst) end
-            || {[{_Link, Parent}], Inst} <- InstParents],
-        fun(_) ->
-            ?Transform:touch(TopCl),
-            ok
-        end
+        [ fun(_) -> change_instance(VarName, Parent, Inst) end
+            || {[{_Link, Parent}], Inst} <- InstParents]
         ].
 
 %%% ============================================================================
@@ -141,6 +136,17 @@ insert_new_match_expr(MatchExpr, {TopCl, PrevBody}) ->
 change_instance(NewVarName, Parent, Inst) ->
     NewVar = ?Syn:construct({var, NewVarName}),
     ?Syn:replace(Parent, {node, Inst}, [NewVar]).
+
+
+%%% ============================================================================
+%%% Checks
+
+cc_varname(VarName, ScVarNames) ->
+    ?Check(not lists:member(VarName, ScVarNames), ?RefError(var_exists, VarName)),
+    VarName.
+
+cc_error(?RefError(var_exists, VarName), VarName, _ScVarNames) ->
+    ?MISC:format("Variable ~p already exists.", [VarName]).
 
 %%% ============================================================================
 %%% Implementation

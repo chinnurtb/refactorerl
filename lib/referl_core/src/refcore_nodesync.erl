@@ -42,6 +42,7 @@
 %%%  <dt>Node type:</dt><dd>`module'</dd>
 %%%  <dt>Specifications:</dt><dd>
 %%%    <ul>
+%%%     <li>{@type integer(-1)}: an opaque module (gets created)</li>
 %%%     <li>{@type atom()}: module name (gets created)</li>
 %%%     <li>{@type node()}: a `#file{}' node specifies the module defined by
 %%%      the file (gets created), a `#module{}' node specifies itself</li>
@@ -62,8 +63,12 @@
 %%%  <dt>Specifications:</dt><dd>
 %%%    <ul>
 %%%     <li>{@type {Mod, {atom(), integer()@}@}}: `Mod' is a module
-%%%      specification, the function in this module is specified by its name
-%%%      and arity (gets created)</li>
+%%%      specification, the function in this module is specified by its
+%%%      name and arity (gets created). If the arity is negative, then
+%%%      an opaque function node is created.</li>
+%%%     <li>{@type {Mod, {integer(-1), integer()@}@}}: `Mod' is a module
+%%%     specification, the function name is opaque (an opaque function
+%%%     node gets created). The arity might be negative as well.</li>
 %%%     <li>{@type node()}: a `#form{}' node specifies the function defined by
 %%%      the form (does not get created), a `#func{}' node specifies itself</li>
 %%%    </ul>
@@ -72,6 +77,14 @@
 %%%    <ul>
 %%%     <li>{@type {lref, node()@}}: a `funlref' link from a `#expr{}' node</li>
 %%%     <li>{@type {eref, node()@}}: a `funeref' link from a `#expr{}' node</li>
+%%%     <li>{@type {dynlref, node()@}}: a `dynfunlref' link from a
+%%%     `#expr{}' node</li>
+%%%     <li>{@type {dyneref, node()@}}: a `dynfuneref' link from a
+%%%     `#expr{}' node</li>
+%%%     <li>{@type {amblref, node()@}}: a `ambfunlref' link from a
+%%%     `#expr{}' node</li>
+%%%     <li>{@type {amberef, node()@}}: a `ambfuneref' link from a
+%%%     `#expr{}' node</li>
 %%%     <li>{@type {def, node()@}}: a `fundef' link from a `#form{}' node</li>
 %%%    </ul>
 %%%  </dd>
@@ -97,12 +110,15 @@
 %%%
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
+%%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(refcore_nodesync).
--vsn("$Rev$ ").
+-vsn("$Rev: 5506 $ ").
 -behaviour(gen_server).
 
 -export([get_node/2, add_ref/3, del_ref/3, move_refs/4, clean/0]).
+
+-define(NODESYNC_TIMEOUT, infinity).
 
 %% gen_server exports
 -export([start_link/0]).
@@ -126,30 +142,30 @@
 %% @doc Returns the node specified by `Spec'. If it does not exist and it does
 %% not get created, `not_found' is returned.
 get_node(Type, Spec) ->
-    gen_server:call(?NODESYNC_SERVER, {get, Type, Spec}).
+    gen_server:call(?NODESYNC_SERVER, {get, Type, Spec}, ?NODESYNC_TIMEOUT).
 
 %% @spec add_ref(nodetype(), noderef(), nodespec()) -> ok
 %% @doc Adds reference `Ref' to the node specified by `Spec'.
 add_ref(Type, Ref, Spec) ->
-    gen_server:call(?NODESYNC_SERVER, {add, Type, Ref, Spec}).
+    gen_server:call(?NODESYNC_SERVER, {add, Type, Ref, Spec}, ?NODESYNC_TIMEOUT).
 
 %% @spec del_ref(nodetype(), noderef(), nodespec()) -> ok
 %% @doc Removes reference `Ref' to the node specified by `Spec'.
 del_ref(Type, Ref, Spec) ->
-    gen_server:call(?NODESYNC_SERVER, {del, Type, Ref, Spec}).
+    gen_server:call(?NODESYNC_SERVER, {del, Type, Ref, Spec}, ?NODESYNC_TIMEOUT).
 
 %% @spec move_refs(nodetype(), [atom()], nodespec(), nodespec()) -> ok
 %% @doc Removes a set of references from the node specified by `From' and add
 %% them to the node specified by `To'. References are specified by their name
 %% found in {@type noderef()}.
 move_refs(Type, Refs, From, To) ->
-    gen_server:call(?NODESYNC_SERVER, {move, Type, Refs, From, To}).
+    gen_server:call(?NODESYNC_SERVER, {move, Type, Refs, From, To}, ?NODESYNC_TIMEOUT).
 
 %% @spec clean() -> ok
 %% @doc Deletes all nodes that have been unreferenced since the last call of
 %% this function and have no remaining references.
 clean() ->
-    gen_server:cast(?NODESYNC_SERVER, clean).
+    gen_server:call(?NODESYNC_SERVER, clean, ?NODESYNC_TIMEOUT).
 
 %% @private
 %% @spec start_link() -> {ok, Pid} | {error, Error}
@@ -165,11 +181,11 @@ init(_) ->
 handle_call({get,  T, S},    _From, St)  -> handle_get(T, S, St);
 handle_call({add,  T, R, S}, _From, St)  -> handle_add(T, R, S, St);
 handle_call({del,  T, R, S}, _From, St)  -> handle_del(T, R, S, St);
-handle_call({move, T, R, Fr, To}, _, St) -> handle_move(T, R, Fr, To, St).
+handle_call({move, T, R, Fr, To}, _, St) -> handle_move(T, R, Fr, To, St);
+handle_call(clean, _, St)                -> handle_clean(St).
 
-%% @private
-handle_cast(clean, State) ->
-    handle_clean(State),
+%%% @private
+handle_cast(_, State) ->
     {noreply, State}.
 
 %% @private
@@ -213,7 +229,8 @@ handle_clean(Drf) ->
     [clean_record(R) || {record, R} <- Nodes],
     [clean_func(F)   || {func, F}   <- Nodes],
     [clean_module(M) || {module, M} <- Nodes],
-    ets:delete_all_objects(Drf).
+    ets:delete_all_objects(Drf),
+    {reply, ok, Drf}.
 
 %% -----------------------------------------------------------------------------
 %% Module operations
@@ -309,26 +326,19 @@ add_return_node(Node) ->
     FRet = ?Graph:create(#expr{type=fret}),
     ?Graph:mklink(Node, fret, FRet).
 
-%% Returns the function node belonging to Mod:Name/Ary.
-%% Creates the function node (and param nodes) if they do not already
-%% exist. When Arity is a negative number, the function arity is
-%% ambiguous and the number stands for a lower limit of the function
-%% arity - in the latter case the fun is inferred by using a heuristic.
-get_func({Mod, {-1, Ary}}, Drf) when is_integer(Ary) ->
-    get_func({Mod, {'opaque', Ary}}, Drf);
-get_func({Mod, {Name, Ary}}, Drf) when is_atom(Name), is_integer(Ary) ->
+%% Returns the function node belonging to Mod:Name/Ary.  Creates the
+%% function node (and param nodes) if they do not already exist. When
+%% `Arity' is a negative number, the function arity is opaque and the
+%% number stands for a lower limit of the function arity - in the latter
+%% case the function is inferred by using a heuristic.
+get_func({Mod, {Name, Ary}}, Drf) when is_atom(Name) orelse Name =:= -1,
+                                       is_integer(Ary) ->
     MN = get_module(Mod, Drf),
-    OP = if Ary >= 0 -> '==';
-            true     -> '>='
-         end,
-    case ?Graph:path(MN, [{funimp, {{name, '==', Name}, 'and',
-                                    {arity, OP, abs(Ary)}}}]) ++
-         ?Graph:path(MN, [{func,   {{name, '==', Name}, 'and',
-                                    {arity, OP, abs(Ary)}}}]) of
-        [Fun] -> if Ary >= 0 -> Fun;
-                    true     -> {heuristic, Fun}
+    case lookup_func({MN, Mod}, Name, Ary) of
+        [Fun] -> if Ary >= 0 andalso Name /= -1 andalso Mod /= -1 -> Fun;
+                    true -> {heuristic, Fun}
                  end;
-        []    ->
+        Funs  ->
             Opaque = case {Mod =:= -1, Name =:= -1, Ary < 0} of
                          {false, false, false} -> false;
                          {true,  false, false} -> module;
@@ -343,6 +353,8 @@ get_func({Mod, {Name, Ary}}, Drf) when is_atom(Name), is_integer(Ary) ->
                                                  end,
                                           arity = Ary,
                                           opaque = Opaque}, Drf),
+	    [?Graph:mklink(Node, may_be, F) || F <- Funs],
+
             add_param_nodes(Node, Ary),
             add_return_node(Node),
             case Opaque of
@@ -350,7 +362,6 @@ get_func({Mod, {Name, Ary}}, Drf) when is_atom(Name), is_integer(Ary) ->
                 _ -> {opaque, Node}
             end
     end;
-
 get_func(Node, _Drf) ->
     case ?Graph:class(Node) of
         form ->
@@ -362,8 +373,33 @@ get_func(Node, _Drf) ->
             Node
     end.
 
+lookup_func({MN, Mod}, -1, Ary) when Mod /= -1, Ary >= 0 ->
+    ?Graph:path(MN, [{funimp,{arity,'==',Ary}}]) ++
+        ?Graph:path(MN, [{func,{arity,'==',Ary}}]);
+lookup_func({MN, Mod}, Name, Ary) when Mod /= -1; Name /= -1 ->
+    OP = if Ary >= 0 -> '==';
+            true     -> '>='
+         end,
+    AAry = if Ary == -1 -> -1;
+              Ary < 0   -> abs(Ary)-1;
+              true      -> Ary
+           end,
+    ?Graph:path(MN, [{funimp,{{name,'==',Name},'and',{arity,OP,AAry}}}]) ++
+        ?Graph:path(MN, [{func,{{name,'==',Name},'and',{arity,OP,AAry}}}]);
+lookup_func({_, -1}, Name, Ary) when Name /= -1, Ary >= 0 ->
+    ?Graph:path(?Graph:root(),
+                [module, {func,{{name,'==',Name},'and',{arity,'==',Ary}}}]);
+lookup_func(_, _, _) ->
+    [].
+
 add_funref(Ref, Spec, Drf) ->
-    Fun = get_func(Spec, Drf), % {Mod, {Name, Ary}}
+    try get_func(Spec, Drf) of % {Mod, {Name, Ary}}
+        Fun -> add_funref(Ref, Spec, Drf, Fun)
+    catch _:_ ->
+            ok
+    end.
+
+add_funref(Ref, Spec, Drf, Fun) ->
     ets:delete(Drf, Fun),
     case Ref of
         {exp, {Expr, ModSpec}} ->
@@ -400,9 +436,9 @@ add_funref(Ref, Spec, Drf) ->
     end.
 
 add_funlref(Drf, {opaque, Fun}, Expr, dynfunlref) ->
-    add_funlref(Drf, Fun, Expr, ambdynfunlref);
+    add_funlref(Drf, Fun, Expr, ambfunlref);
 add_funlref(Drf, {heuristic, Fun}, Expr, dynfunlref) ->
-    add_funlref(Drf, Fun, Expr, ambdynfunlref);
+    add_funlref(Drf, Fun, Expr, dynfunlref);
 add_funlref(Drf, Fun, Expr, Lnk) ->
     #func{name=Name, arity=Ary} = ?Graph:data(Fun),
     #expr{type=Type}            = ?Graph:data(Expr),
@@ -421,9 +457,9 @@ add_funlref(Drf, Fun, Expr, Lnk) ->
     end.
 
 add_funeref({opaque, Fun}, Expr, dynfuneref) ->
-    add_funeref(Fun, Expr, ambdynfuneref);
+    add_funeref(Fun, Expr, ambfuneref);
 add_funeref({heuristic, Fun}, Expr, dynfuneref) ->
-    add_funeref(Fun, Expr, ambdynfuneref);
+    add_funeref(Fun, Expr, dynfuneref);
 add_funeref(Fun, Expr, Lnk) ->
     ok = ?Graph:mklink(Expr, Lnk, Fun).
 
@@ -443,26 +479,27 @@ del_funref(Ref, Spec, Drf) ->
                     ok = ?Graph:rmlink(Expr, funlref, Fun);
                 {dynlref, Expr} ->
                     ok = ?Graph:rmlink(Expr, dynfunlref, Fun);
-                {ambdynlref, Expr} ->
-                    ok = ?Graph:rmlink(Expr, ambdynfunlref, Fun);
+                {amblref, Expr} ->
+                    ok = ?Graph:rmlink(Expr, ambfunlref, Fun);
                 {eref, Expr} ->
                     ok = ?Graph:rmlink(Expr, funeref, Fun);
                 {dyneref, Expr} ->
                     ok = ?Graph:rmlink(Expr, dynfuneref, Fun);
-                {ambdyneref, Expr} ->
-                    ok = ?Graph:rmlink(Expr, ambdynfuneref, Fun);
+                {amberef, Expr} ->
+                    ok = ?Graph:rmlink(Expr, ambfuneref, Fun);
                 {def,  Form} ->
                     ok = ?Graph:rmlink(Form, fundef,  Fun)
             end
     catch
-        not_found -> ok
+        not_found -> ok;
+        _:_ -> ok
     end.
 
 
 clean_func(Func) ->
     clean_node(Func, [{fundef, back}, {funeref, back}, {funlref, back},
                       {dynfuneref, back}, {dynfunlref,back},
-                      {ambdynfuneref, back}, {ambdynfunlref,back}])
+                      {ambfuneref, back}, {ambfunlref,back}])
         andalso
         begin
             ?FunProp:remove(Func),
@@ -664,7 +701,7 @@ del_subref({Tag, Ref}, Subst, Drf) ->
 del_subchild(Node, Drf) ->
     [case ?Graph:data(Child) of
          #lex{type=Type} when Type == subst; Type == incl ->
-             del_subref({llex, Child}, Node, Drf);
+             del_subref({llex, Node}, Child, Drf);
          _ ->
              del_subchild(Child, Drf)
      end || {llex, Child} <- ?Graph:links(Node)],
@@ -681,39 +718,30 @@ create(Src, Tag, Data, Drf) ->
     ets:insert(Drf, {Node}),
     Node.
 
+move_refs(P, Get, From, To, Drf) when is_function(Get) ->
+    try {Get(From, Drf), Get(To, Drf)} of
+        {FN, TN} -> do_move_refs(P, FN, TN, Drf)
+    catch _:_ ->
+            ok
+    end.
 
-move_refs({Tag, back}, Get, From, To, Drf) ->
-    FN = Get(From, Drf),
+do_move_refs({Tag, back}, FN, TN, Drf) ->
     Refs = ?Graph:path(FN, [Tag]),
     [?Graph:rmlink(FN, Tag, Src) || Src <- Refs],
     ets:insert(Drf, {FN}),
-
-    TN = Get(To, Drf),
-%io:format("move1 ~p: ~p -> ~p ~p~n",
-%          [Tag, ?Graph:data(FN), ?Graph:data(TN), Refs]),
     [?Graph:mklink(TN, Tag, Src) || Src <- Refs],
     ets:delete(Drf, TN),
     ok;
-move_refs({Tag, Node}, Get, From, To, Drf) ->
-    FN = Get(From, Drf),
+do_move_refs({Tag, Node}, FN, TN, Drf) ->
     ?Graph:rmlink(Node, Tag, FN),
     ets:insert(Drf, {FN}),
-
-    TN = Get(To, Drf),
-%io:format("move2 ~p: ~p -> ~p ~p~n",
-%         [Tag,  ?Graph:data(FN), ?Graph:data(TN), Node]),
     ?Graph:mklink(Node, Tag, TN),
     ets:delete(Drf, TN),
     ok;
-move_refs(Tag, Get, From, To, Drf) ->
-    FN = Get(From, Drf),
+do_move_refs(Tag, FN, TN, Drf) ->
     Refs = ?Graph:path(FN, [{Tag, back}]),
     [?Graph:rmlink(Src, Tag, FN) || Src <- Refs],
     ets:insert(Drf, {FN}),
-
-    TN = Get(To, Drf),
-%io:format("move3 ~p: ~p -> ~p ~p~n",
-%         [Tag,  ?Graph:data(FN), ?Graph:data(TN), Refs]),
     [?Graph:mklink(Src, Tag, TN) || Src <- Refs],
     ets:delete(Drf, TN),
     ok.

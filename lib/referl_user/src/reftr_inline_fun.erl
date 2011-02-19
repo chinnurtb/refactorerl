@@ -115,7 +115,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_inline_fun).
--vsn("$Rev: 5043 $ ").
+-vsn("$Rev: 5509 $ ").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -131,7 +131,14 @@ error_text(local_apps, [FunModuleName, LocalApps]) ->
         [ ?MISC:fun_text([Name, Arity]) || {_, Name, Arity} <- LocalApps],
     ["Local functions of module ", atom_to_list(FunModuleName),
      " are called in the function body: ",
-     ?MISC:join(LocalAppsText)].
+     ?MISC:join(LocalAppsText)];
+error_text(fun_not_found, [ModName, FunName, FunArity]) ->
+    FunText = lists:flatten(?MISC:fun_text([ModName, FunName, FunArity])),
+    ?MISC:format("Definition of the function ~p not found.", [FunText]);
+error_text(bad_location, _) ->
+    ["The selection has to be inside a function's body."];
+error_text(no_app_in_clause, _) ->
+    ["There is no function application in the function's body."].
 
 %%% ============================================================================
 %%% Callbacks
@@ -144,14 +151,15 @@ prepare(Args)->
     Expr = ?Args:expression(Args),
     %% Determines the application node, if the selected position is not an
     %% application then throws an error
-    AppNode = get_app_node(Expr),
+    AppNode = get_app_node(Args),
     AppArgs = ?Query:exec(AppNode,
                     ?Query:seq(?Expr:child(2), ?Expr:children())),
-    FunObjNode = ?Args:function(Args),
-    [FunForm] = ?Query:exec(FunObjNode, ?Fun:definition()),
-    FunClauses = ?Query:exec(FunForm, ?Form:clauses()),
-    ?Check(FunClauses /= [], ?RefError(fun_not_found,[?Fun:name(FunObjNode),
-                                                      ?Fun:arity(FunObjNode)])),
+
+    %% Checks whether the definition of the selected application is
+    %% present in the graph. If so, then returns data about the
+    %% function.
+    {FunObjNode, FunForm, FunClauses} = cc_fun(AppNode),
+
     [FunModule] = ?Query:exec(FunObjNode, ?Fun:module()),
     [FunFile] = ?Query:exec(FunModule, ?Mod:file()),
     %% Get application nodes from the function and check if there is any local
@@ -160,7 +168,7 @@ prepare(Args)->
         get_app_nodes_from_clauses(FunClauses),
     {Imported, Exported, LocalsAndBIFs} =
         get_application_data(AppNodeLists, AppModule, FunModule),
-    LocalApps = check_applications(LocalsAndBIFs, AppModule, FunModule),
+    LocalApps = local_apps(LocalsAndBIFs, AppModule, FunModule),
     FunModuleName = ?Mod:name(FunModule),
     ?Check( LocalApps == [],
            ?LocalError(local_apps, [FunModuleName, LocalApps])),
@@ -226,6 +234,99 @@ prepare(Args)->
 
 %%% ============================================================================
 %%% Implementation
+
+%% This function returns the application node that should be
+%% transformed. First tries to determine the function application from
+%% the arguments, if it succeeds returns the application
+%% node. Otherwise it determines the application by interaction.
+get_app_node(Args) ->
+    Expr = ?Args:expression(Args),
+    case {?Args:ask_missing(Args), get_app_node_by_expr(Expr)} of
+        {true,  bad_expression} -> get_app_node_by_interaction(Expr);
+        {false, bad_expression} -> throw(?LocalError(bad_location, []));
+        {_,     AppNode}        -> AppNode
+    end.
+
+%% Tries to return the application node by the given expression.
+get_app_node_by_expr(Expr) ->
+    case ?Query:exec(Expr, ?Expr:parent()) of
+        [] -> bad_expression;
+        [Parent] ->
+            case ?Expr:type(Parent) of
+                application ->
+                    Parent;
+                infix_expr ->
+                    qualified_app(?Query:exec(Parent, ?Expr:parent()));
+                _ ->
+                    bad_expression
+            end;
+        _ -> throw(?LocalError(bad_location, []))
+    end.
+
+qualified_app([]) ->
+    bad_expression;
+qualified_app([Expr]) ->
+    case ?Expr:type(Expr) of
+        application -> Expr;
+        _Otherwise  -> bad_expression
+    end;
+qualified_app(_) ->
+    throw(?RefError(bad_kind, [])).
+
+%% Gets the application node by interaction.
+get_app_node_by_interaction(Expr) ->
+    ActualClause = ?Query:exec(Expr, ?Expr:clause()),
+    ?Check(ActualClause /= [], ?LocalError(bad_location, [])),
+    PottentialApps = lists:flatten(get_app_nodes_from_clauses(ActualClause)),
+    ?Check(PottentialApps /= [], ?LocalError(no_app_in_clause,[])),
+    AppNameArityPos =
+        [begin
+             [Fun] = ?Query:exec(App, ?Expr:function()),
+             Name = ?Fun:name(Fun),
+             Arity = ?Fun:arity(Fun),
+             Pos = get_expr_pos(App),
+             [Mod] = ?Query:exec(Fun, ?Fun:module()),
+             ModName = ?Mod:name(Mod),
+             {App, ModName, Name, Arity, Pos}
+         end
+         || App <- PottentialApps],
+    Qu = [{format,info},{text,"Please specify an application:"}],
+    Question = [Qu] ++
+        [add_to_proplist(format_app_string(AppString))
+         || AppString <- AppNameArityPos],
+    Ans = ?Transform:question(Question),
+    SelectedApp = get_data(Ans, Question),
+    Pos = lists:last(string:tokens(SelectedApp, ":")),
+    {AppNode,_,_,_,_} = lists:keyfind(list_to_integer(Pos), 5, AppNameArityPos),
+    AppNode.
+
+%% Formats the output sting for interaction.
+format_app_string({App, ModName, Name, Arity, Pos}) ->
+    case ?Expr:app_has_modq(App) of
+        true   -> 
+            io_lib:format("~p:~p/~p:~p", [ModName, Name, Arity, Pos]);
+        _ ->
+            io_lib:format("~p/~p:~p", [Name, Arity, Pos])
+    end.
+
+%% Gathers data from the answer.
+get_data(Ans, Question) ->
+    EntInList = proplists:get_value(yes,lists:zip(Ans,Question),no_answer),
+    case EntInList == no_answer of
+        false ->
+            proplists:get_value(text,EntInList);
+        true  ->
+            throw(?RefErr0r(cancelled))
+    end.
+
+add_to_proplist(Name) ->
+    [{format,radio},
+     {text,lists:flatten(Name)},
+     {default,false}].
+
+get_expr_pos(Expr) ->
+    [F|_] = ?Expr:tokens(Expr),
+    element(1, ?Token:pos(F)).
 
 rec_mac_tr_steps(FunFile, File, RecMacInfo) ->
     Corr = fun reftr_move_fun:correct_recmac/4,
@@ -557,21 +658,6 @@ get_pair(N, NList)->
             no_pair
     end.
 
-get_app_node(Expr)->
-    Parent = ?Query:exec1(Expr, ?Expr:parent(),
-                          ?RefError(bad_kind, application)),
-    case ?Expr:type(Parent) of
-        application ->
-            Parent;
-        infix_expr ->
-            Parent2 =
-                ?Query:exec1(Parent, ?Expr:parent(),
-                             ?RefError(bad_kind, application)),
-            ?Check(?Expr:type(Parent2) == application,
-                   ?RefError(bad_kind, application)),
-            Parent2
-    end.
-
 get_unused_vars_from_pattern(PatternLists) ->
     VarObjLists =
         [ ?Query:exec(PatternNodes, ?Expr:variables())
@@ -754,10 +840,7 @@ gen_new_name(Name, VarNames, N) ->
             gen_new_name(Name, VarNames, N+1)
     end.
 
-%%% ============================================================================
-%%% Checks
-
-check_applications(LocalApps, AppMod, FunMod) ->
+local_apps(LocalApps, AppMod, FunMod) ->
     case AppMod of
         FunMod -> [];
         _ ->
@@ -768,3 +851,19 @@ check_applications(LocalApps, AppMod, FunMod) ->
                  || {Type, Name, Arity} <- Apps, erl_internal:bif(Name, Arity)],
             Apps -- BifList
     end.
+
+%%% ============================================================================
+%%% Checks
+
+cc_fun(AppNode) ->
+    [FunObjNode] = ?Query:exec(AppNode, ?Expr:function()),
+    FunName      = ?Fun:name(FunObjNode),
+    FunArity     = ?Fun:arity(FunObjNode),
+    FunF         = ?Query:exec(FunObjNode, ?Fun:definition()),
+    [Module]     = ?Query:exec(FunObjNode, ?Fun:module()),
+    ModName      = ?Mod:name(Module),
+    ?Check(FunF /= [], ?LocalError(fun_not_found,[ModName, FunName, FunArity])),
+    FunForm = hd(FunF),
+    FunClauses   = ?Query:exec(FunForm, ?Form:clauses()),
+    {FunObjNode, FunForm, FunClauses}.
+

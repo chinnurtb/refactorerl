@@ -104,64 +104,453 @@
 %%%
 %%% </dl>
 %%%
+%%% ------------
+%%% 2010.01.18 bkil
+%%% status: I am constantly verifying if it compiles and passes
+%%%  dialyzer (all via flymake), but never run it
+%%% @todo actualize comments
+%%% @todo finish filelist
+%%% @todo transform
+%%%
+%%% A quick overview of the new message format.
+%%% Unicast:
+%%%  {ReqID, progress, todo()} |
+%%%  {ReqID, reply, {error,Reason} | {ok,any()}}
+%%%  {ReqID, question, {NewID,todo()}}
+%%%  {ReqID, answer, todo()}
+%%% Broadcast:
+%%%  {B,statusinfo,StatusData}
+%%%   where StatusData=
+%%%    {shutdown,Reason} |
+%%%    {reset,Reason} |
+%%%    {change,FileChange}
+%%%     where FileChange = [{Filename,[{rename,New}    |
+%%%                                    {content,true}  |
+%%%                                    {present,true|false}|
+%%%                                    {error,Errors}  |
+%%%                                    {lastmod,todo()}|
+%%%                                    {type,todo()} ]}]
+%%%      where Errors = [todo()]
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(reflib_ui).
 -vsn("$Rev: 1479$ ").
--behaviour(gen_server).
 
 %%% ----------------------------------------------------------------------------
 %%% Client exports
 
 %%% Database control
--export([stop/0, reset/0, add/1, drop/1, undo/1, saveconfig/3]).
--export([load_beam/3, add_dir/1, drop_dir/1]).
+-export([stop/1, reset/1, add/2, drop/2, undo/2, saveconfig/4]).
+-export([load_beam/4, add_dir/2, drop_dir/2]).
 
 %%% Status queries
--export([status/1, showconfig/0, filelist/0, status_info/1, error_attr/0]).
+-export([status/2, showconfig/1, filelist/1, status_info/2]).
 
 %%% Semantic queries
--export([draw/2]).
+-export([draw/3]).
 
 %%% Internal queries
--export([funlist/1, recordlist/1, macrolist/1]).
+-export([funlist/2, recordlist/2, macrolist/2]).
 
 %%% Refactoring
--export([transform/2, reply/2, cancel/1]).
+-export([transform/3, reply/3, cancel/2]).
 
 %%% Clustering
--export([cl_options/1, run_cl/3, cl_refresh/0]).
+-export([cl_options/2, run_cl/4, cl_refresh/1]).
 
-%%% UI message handlers
--export([message/2, message/3, add_msg_handler/2, add_msg_handler/3,
-         del_msg_handler/2]).
-
-
-%%% ----------------------------------------------------------------------------
-%%% Server exports
--export([start_link/0]).
-
-%%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2,
-         handle_info/2, terminate/2, code_change/3]).
-
+%% Callbacks
+-export([error_text/2]).
 
 -include("lib.hrl").
 -include_lib("kernel/include/file.hrl").
 
+
+%%% ----------------------------------------------------------------------------
+%%% UI protocol description
+
+% each function invocation must return with exactly one of the following:
+-define(NoReply,   noreply).
+-define(Dat(X),    {ok,X}).
+-define(OK,        ?Dat([])).
+-define(ERR(R),    {error,R}).
+-define(LErr(R),   ?LocalErr(R,[])).
+-define(LocalErr(R,L), ?ERR(?LocalError(R,L))).
+-define(RefErr(R,L),   ?ERR(?RefError(R,L))).
+
+% the following can be sent anytime:
+send_progress(MCB, Op, File, Count, Max) ->
+    (MCB#msg_cb.unicast)(progress,{Op, File, Count, Max}).
+
+send_change(MCB,Change) ->
+    (MCB#msg_cb.broadcast)(statusinfo,[{change,Change}]).
+
+send_shutdown(MCB) ->
+    (MCB#msg_cb.broadcast)(statusinfo,[{shutdown,"manual shutdown initiated"}]).
+
+send_reset(MCB) ->
+    (MCB#msg_cb.broadcast)(statusinfo,[{reset,"manual restart initiated"}]).
+
+% possible formats of changes
+-define(PresentCorrect(File),
+        {File, [{present,true}]}).
+-define(PresentCorrectTM(File,Type,LastMod),
+        {File, [{present,true},
+                {type, Type}, {lastmod, LastMod}]}).
+-define(PresentError(File,Errors),
+        {File, [{error,Errors}]}). %,{present,true}
+-define(PresentErrorTM(File,Type,LastMod,Errors),
+        {File, [{present,true}, {error,Errors},
+                {type, Type}, {lastmod, LastMod}]}).
+-define(NotPresent(File),
+        {File, [{present,false}]}).
+-define(Modified(File),
+        {File, [{content,true}]}).
+-define(Renamed(OldPath,NewPath),
+        {OldPath, [{rename,NewPath}]}).
+-define(AddedCorrect(File),     ?PresentCorrect(File)).
+-define(AddedError(File,Error), ?PresentError(File,Error)).
+-define(Dropped(File),          ?NotPresent(File)).
+
+
+%%% ----------------------------------------------------------------------------
+%%% types
+
 %%% @type path() = string(). The absolute path of a file.
 
-%% @spec stop() -> ok
-%% @doc Stops the RefactorErl server.
-stop() -> cast({stop}).
 
-%% @spec status(path()) -> ok
+%%% ============================================================================
+%%% Error texts
+
+error_text(wrangler_dir, []) ->
+    ["Please set Wrangler's ",
+     "installation directory, and restart RefactorErl"];
+error_text(cl_ui_refresh, []) ->
+    ["cl_ui refresh: something wrong"];
+error_text(no_backup, []) ->
+    ["Need a backup to do it"];
+error_text(undef, []) ->
+    ["undefined function"];
+error_text(noresult, []) ->
+    ["no result available"];
+error_text(trfail, []) ->
+    ["initiation of the transformation failed"];
+error_text(no_dups, []) ->
+    ["Wrangler did not find any ",
+     "duplicated code fragments"];
+error_text(not_found, [Path])->
+    ["No file could be handled from \"", Path, "\""];
+error_text(somebad, [])->
+    ["Processing failed for some files, check the errors"].
+
+%@todo refactor to ?LocalError
+%error_message({no_include_file, File}) ->
+%    ?MISC:format("Include file \"~s\" not found", [File]);
+%error_message({some_proc, []})->
+%    ?MISC:format("Not all files were processed", []);
+%error_message({none_proc, []})->
+%    ?MISC:format("No files were processed", []);
+%error_message(Error) ->
+%    ?MISC:format("Error: ~p", [Error]).
+
+
+
+%%% ============================================================================
+%%% Standard UI exports
+
+
+%% @spec stop(#msg_cb{}) -> ok
+%% @doc Stops the RefactorErl server.
+stop(MCB) ->
+    send_shutdown(MCB),
+    init:stop(),
+    ?OK.
+% "RefactorErl server is shutting down..."
+
+%% @spec status(#msg_cb{}, path()) -> ok
 %% @doc Requests information about the status of `File'. The result is a
 %% message of type `add', `invalid', or `drop'.
-status(File) -> cast({status, File}).
+status(_MCB, FileName) when is_list(FileName) ->
+    case ?Query:exec(?File:find(FileName)) of
+        [File] ->
+            case ?Query:exec(File, ?File:error_forms()) of
+                [] -> ?Dat([?PresentCorrect(FileName)]);
+                E  -> ?Dat([?PresentError(FileName,
+                                          decode_error_form(File,E))])
+            end;
+        []  -> ?Dat([?NotPresent(FileName)])
+    end.
 
-%% @spec status_info([string()]) -> ok
+
+%% @spec add(#msg_cb{}, path()) -> ok
+%% @doc Adds `File' to the database.
+%% @todo maybe introduce a `reload' or `update' message
+add(MCB, FileName) when is_list(FileName) ->
+    do_add_file(MCB,FileName).
+
+%% @spec drop(#msg_cb{}, path()) -> ok
+%% @doc Drops `File' from the database.
+drop(MCB, FileName) when is_list(FileName) ->
+    do_drop_file(MCB,FileName).
+
+%% @spec add_dir(#msg_cb{}, path()) -> ok
+%% @doc Adds recursively to the database starting from `File'.
+add_dir(MCB,FileName) when is_list(FileName) ->
+    add_flat(recurse_erl(MCB,FileName, fun add_filedir/2)).
+
+%% @spec drop_dir(#msg_cb{}, path()) -> ok
+%% @doc Drops recursively to the database starting from `File'.
+drop_dir(MCB,FileName) when is_list(FileName) ->
+    add_flat(recurse_erl(MCB,FileName, fun drop_filedir/2)).
+
+%% @spec load_beam(#msg_cb{}, path(), path(), boolean()) -> ok
+%% @doc Loads a BEAM file compiled with `debug_info' and saves the result
+load_beam(MCB,FileName,TargetDir,ToSave)
+  when is_list(FileName), is_list(TargetDir), is_boolean(ToSave) ->
+    case refcore_loadbeam:start(FileName,TargetDir,ToSave) of
+        {error, Reason} ->
+            send_change(MCB,[?AddedError(FileName,[])]), %@todo
+            ?LErr(Reason);
+        {ok, File} ->
+            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
+            send_change(MCB,[?AddedCorrect(F) || F <- Add]),
+            ?OK
+    end.
+
+%% @spec draw(#msg_cb{}, path(), integer()) -> ok
+%% @doc Creates a `.dot' drawing of the graph in the database, and saves it in
+%% `File'. The contents of the graph are filtered according to `Filter'; the
+%% value `1' means no filtering, then different numbers select different
+%% filters.
+draw(_MCB, File, Type) ->
+    Filter = convert_filter(Type),
+    ok = ?DRAW_GRAPH:draw_graph(File, Filter),
+    ?OK.
+
+%% @spec showconfig(#msg_cb{}) -> ok
+%% @doc Requests configuration information. The result is sent in a message of
+%% type `showconfig'.
+showconfig(_MCB) ->
+    ?Dat([{Name, Value} ||
+              Env <- ?Query:exec([env]),
+              #env{name=Name, value=Value} <- [?Graph:data(Env)]]).
+
+%% @spec saveconfig(#msg_cb{}, [path()], [path()], path() | original) -> ok
+%% @doc Modifies the runtime configuration of the tool.
+%% <ul>
+%% <li>`App' is a list of directories that are searched for applications for
+%%   `include_lib' directives</li>
+%% <li>`Inc' is a list of directories that are searched for `include'
+%%   directives</li>
+%% <li>`Out' is the output directory of the tool. Its value can be `original',
+%%   which means files should be overwritten, or a name of a directory, which
+%%   means modified files should be saved there.</li>
+%% </ul>
+%% @todo If this option is still necessary, it should use ?Graph:save_envs/0.
+saveconfig(_MCB, AppDirs, IncDirs, OutDir) ->
+    ?Syn:del_envs(),
+    [?Syn:create_env(appbase, Dir) || Dir <- AppDirs],
+    [?Syn:create_env(include, Dir) || Dir <- IncDirs],
+    ?Syn:create_env(output, OutDir),
+    ?OK.
+% "Configuration saved."
+
+%% @spec filelist(#msg_cb{}) -> ok
+%% @doc Requests a list of the files in the database. The result is sent in a
+%% message of type `filelist'.
+filelist(_MCB) ->
+    Files = ?Query:exec([file]), %@todo
+    FileStats =
+        [ case ?Query:exec(FileNode, ?File:error_forms()) of
+              [] -> ?PresentCorrect(FilePath);
+              E  -> ?PresentError(FilePath,decode_error_form(FileNode,E))
+          end || FileNode <- Files, FilePath <- [?File:path(FileNode)]],
+    ?Dat(FileStats).
+
+%% @spec reset(#msg_cb{}) -> ok
+%% @doc Resets the database.
+reset(MCB) ->
+    send_reset(MCB),
+    ?Graph:reset_schema(),
+    ?OK.
+% "Database clear started."
+
+%%% ============================================================================
+%%% Transformation interface
+
+-define(SQ,refusr_sq).
+-define(MQ,refusr_metrics).
+-define(CL,refcl_main).
+
+transform(MCB, metric_query, Args) ->
+    Run = fun()->?Transform:do(MCB, ?MQ, Args) end,
+    transform_(MCB,Run);
+
+transform(MCB, semantic_query, Args) ->
+    Run = fun()->?Transform:do(MCB, ?SQ, Args) end,
+    transform_(MCB,Run);
+
+transform(MCB, clustering, Args) ->
+    Run = fun()->?Transform:do(MCB, ?CL, Args) end,
+    transform_(MCB,Run);
+
+%% @spec transform(#msg_cb{}, atom(), proplist()) -> ok
+%% @doc Initiates a transformation and waits for an initiated transform to end.
+%% Returns the result of the said transformation.
+%% `Refac' is a transformation module name without the common prefix,
+%% `Args'  is a proplist that contains the arguments of the transformation.
+%% @see reflib_transform
+%% @see reflib_args
+transform(MCB, Refac, Args) ->
+    Mod = list_to_atom("reftr_"++atom_to_list(Refac)),
+    ?Graph:backup(),
+    Run = fun()->?Transform:do(MCB, Mod, Args) end,
+    transform_(MCB,Run).
+
+transform_(_MCB, Run) when is_function(Run,0) ->
+    case Run() of
+        ok ->
+            Result = ?Transform:wait(),
+            case Result of
+                none ->
+                    ?Dat(Result);
+                {result,_} ->
+                    ?Dat(Result);
+                {abort,_}->
+                    ?Dat(Result);
+                {error,E} ->
+                    {error,E}
+            end;
+        _ ->
+            ?LErr(trfail)
+    end.
+
+%% @spec reply(#msg_cb{}, integer(), term()) -> ok
+%% @doc Provides a reply to a previously asked question.
+%% @see reflib_transform:reply/2
+reply(_MCB, Id, Reply) ->
+    noreply = ?Transform:reply(Id, Reply),
+    ?NoReply.
+
+%% @spec cancel(#msg_cb{}, integer()) -> ok
+%% @doc Cancels a previously asked question.
+%% @see reflib_transform:cancel/1
+cancel(_MCB, Id) ->
+    noreply = ?Transform:cancel(Id),
+    ?NoReply.
+
+
+%%% ----------------------------------------------------------------------------
+%%% Movings
+
+%% @spec funlist(#msg_cb{}, path()) -> ok
+%% @doc Requests the list of functions defined in `File'. The result is
+%% returned in a message of type `funlist'.
+%% @todo error handling?!
+funlist(_MCB, File) ->
+    ?Dat([{?Fun:name(F), ?Fun:arity(F)} ||
+             F <- ?Query:exec(
+                     ?Query:seq([?File:find(File),
+                                 ?File:module(),
+                                 ?Mod:locals()]))]).
+
+%% @spec recordlist(#msg_cb{}, path()) -> ok
+%% @doc Requests the list of records defined in `File'. The result is
+%% returned in a message of type `recordlist'.
+recordlist(_MCB, File) ->
+    ?Dat([?Rec:name(R) ||
+             R <- ?Query:exec(
+                     ?Query:seq(?File:find(File), ?File:records()))]).
+
+%% @spec macrolist(#msg_cb{}, path()) -> ok
+%% @doc Requests the list of macros defined in `File'. The result is
+%% returned in a message of type `macrolist'.
+macrolist(_MCB, File) ->
+    ?Dat([?Macro:name(M) ||
+             M <- ?Query:exec(
+                     ?Query:seq(?File:find(File), ?File:macros()))]).
+
+%%% ----------------------------------------------------------------------------
+%%% Clustering
+
+%% @spec cl_options(#msg_cb{}, atom()) -> ok
+%% @doc Requests the options of the given clustering algorithm.
+cl_options(_MCB, Alg) ->
+    OptList = cl_ui:cl_options(Alg),
+    Ls = [[A,B] || {A,B} <- OptList],
+    ?Dat([Alg]++Ls).
+
+%% @spec cl_refresh(#msg_cb{}) -> ok
+%% @doc Refreshes the Emacs clustering interface.
+cl_refresh(_MCB) ->
+    case cl_ui:refresh() of
+        {cl_ui, recreated} ->
+            ?OK;
+        _ ->
+            ?LErr(cl_ui_refresh) %@todo
+    end.
+% "cl_ui refresh: cleaned"
+
+%% @spec run_cl(#msg_cb{}, proplist(), atom(), atom()) -> ok
+%% @doc Invokes {@link cl_ui:run/1}. See the options there.
+run_cl(_MCB, Opt, Alg, Create) ->
+    {Clustering, FittNum} = cl_ui:run({Opt, Alg, Create}),
+    ?Dat([{result,Clustering},
+          {flist,?MISC:format("~w",[FittNum])}]).
+% "Clustering algorithm finished."
+
+%%% ============================================================================
+%%% Backup
+
+%% @spec undo(#msg_cb{}, string()) -> ok
+%% @doc Steps backward on the Refactorerl database.
+undo(MCB, _RFile) ->
+    %% (_RFile) This parameter is need to handle multiple backup checkpoints.
+    FilesBefore = files_with_lastmod(),
+    try ?Graph:undo() of
+        ok  ->
+            FilesAfter = files_with_lastmod(),
+            ModifiedFiles =
+                [ begin
+                      ok = ?FileMan:save_file(File),
+                      ?File:path(File) end ||
+                    {File, LastMod} <- FilesAfter,
+                    lists:keysearch(File, 1, FilesBefore) =/= LastMod ],
+
+            send_change(MCB,[?Modified(F) || F <- ModifiedFiles]),
+
+            ?Graph:clean(),
+            ?OK;
+        _ ->
+            ?LErr(no_backup)
+    catch
+        throw:Msg ->
+            ?LErr(Msg)
+    end.
+
+%%% ----------------------------------------------------------------------------
+%%% Attributes of the error form
+
+%% @spec decode_error_form(#file{}, ErrList) -> ok
+%% @doc This function can collect information about error forms.
+decode_error_form(FileNode,ErrList) ->
+      [begin
+         Token = paarse((?Graph:data(Form))#form.tag),
+         {Position, Text} =
+             case Token of
+                 [] ->
+                     N = ?File:length(FileNode),
+                     {{N,N}, "EOF"};
+                 _ -> {?Token:pos(Token),
+                       ?Token:text(Token)}
+             end,
+         [{nexttokentext, Text}, {position, Position}]
+       end || Form <- ErrList].
+
+%%% ----------------------------------------------------------------------------
+%%% Handling file status information
+
+%% @spec status_info(#msg_cb{}, [string()]) -> ok
 %%
 %% @doc This function collets information about files loaded in the
 %%      RefactorErl database.
@@ -176,500 +565,140 @@ status(File) -> cast({status, File}).
 %%      Elements of the `FileStatusList':
 %%
 %%      {file,string()}          The path and the name of the file
-%%      {errors,atom()}          The file contains errors: `yes'|`no'
+%%      {error,Errors}           The file contains errors: list @todo
 %%      {type,atom()}            The type of the file:
 %%                               `none'|`module'|`include'
 %%      {lastmod,int()|atom()}   The last modification of th file. The
 %%                               default value is `undefined'
-%%      {status,atom()}          Status of the file: `loaded' or `missing'
-status_info(Files) -> cast({status_info, Files}).
-
-%% @spec add(path()) -> ok
-%% @doc Adds `File' to the database.
-add(File) -> cast({add, File}).
-
-%% @spec drop(path()) -> ok
-%% @doc Drops `File' from the database.
-drop(File) -> cast({drop, File}).
-
-%% @spec add_dir(path()) -> ok
-%% @doc Adds recursively to the database starting from `File'.
-add_dir(File) -> cast({add_dir, File}).
-
-%% @spec drop_dir(path()) -> ok
-%% @doc Drops recursively to the database starting from `File'.
-drop_dir(File) -> cast({drop_dir, File}).
-
-%% @spec load_beam(path(), path(), boolean()) -> ok
-%% @doc Loads a BEAM file compiled with `debug_info' and saves the result
-load_beam(File,TargetDir,ToSave) -> cast({load_beam, File, TargetDir, ToSave}).
-
-%% @spec draw(path(), integer()) -> ok
-%% @doc Creates a `.dot' drawing of the graph in the database, and saves it in
-%% `File'. The contents of the graph are filtered according to `Filter'; the
-%% value `1' means no filtering, then different numbers select different
-%% filters.
-draw(File, Filter) -> cast({draw, File, Filter}).
-
-%% @spec showconfig() -> ok
-%% @doc Requests configuration information. The result is sent in a message of
-%% type `showconfig'.
-showconfig() -> cast({showconfig}).
-
-%% @spec saveconfig([path()], [path()], path() | original) -> ok
-%% @doc Modifies the runtime configuration of the tool.
-%% <ul>
-%% <li>`App' is a list of directories that are searched for applications for
-%%   `include_lib' directives</li>
-%% <li>`Inc' is a list of directories that are searched for `include'
-%%   directives</li>
-%% <li>`Out' is the output directory of the tool. Its value can be `original',
-%%   which means files should be overwritten, or a name of a directory, which
-%%   means modified files should be saved there.</li>
-%% </ul>
-saveconfig(App, Inc, Out) -> cast({saveconfig, App, Inc, Out}).
-
-%% @spec filelist() -> ok
-%% @doc Requests a list of the files in the database. The result is sent in a
-%% message of type `filelist'.
-filelist() -> cast({filelist}).
-
-%% @spec reset() -> ok
-%% @doc Resets the database.
-reset() -> cast({reset}).
-
-%% @spec transform(atom(), proplist()) -> ok
-%% @doc Initiates a transformation. `Mod' is a transformation module name,
-%% `Args' is a proplist that contains the arguments of the transformation.
-%% @see reflib_transform
-%% @see reflib_args
-transform(Mod, Args) -> cast({transform, Mod, Args}).
-
-%% @spec reply(integer(), term()) -> ok
-%% @doc Provides a reply to a previously asked question.
-%% @see reflib_transform:reply/2
-reply(Id, Reply) -> cast({reply, Id, Reply}).
-
-%% @spec cancel(integer()) -> ok
-%% @doc Cancels a previously asked question.
-%% @see reflib_transform:cancel/1
-cancel(Id) -> cast({cancel, Id}).
-
-%% @spec funlist(path()) -> ok
-%% @doc Requests the list of functions defined in `File'. The result is
-%% returned in a message of type `funlist'.
-funlist(File) -> cast({funlist, File}).
-
-%% @spec recordlist(path()) -> ok
-%% @doc Requests the list of records defined in `File'. The result is
-%% returned in a message of type `recordlist'.
-recordlist(File) -> cast({recordlist, File}).
-
-%% @spec macrolist(path()) -> ok
-%% @doc Requests the list of records defined in `File'. The result is
-%% returned in a message of type `recordlist'.
-macrolist(File) -> cast({macrolist, File}).
-
-%% @spec run_cl(proplist(), atom(), atom()) -> ok
-%% @doc Invokes {@link cl_ui:run/1}. See the options there.
-run_cl(Opt, Alg, Create) -> cast({run_cl, Opt, Alg, Create}).
-
-%% @spec cl_options(atom()) -> ok
-%% @doc Requests the options of the given clustering algorithm.
-cl_options(Alg) -> cast({cl_options, Alg}).
-
-%% @spec cl_refresh() -> ok
-%% @doc Refreshes the Emacs clustering interface.
-cl_refresh() -> cast({cl_refresh}).
-
-%% @spec error_attr() -> ok
-%% @doc This function can collect information about error forms.
-error_attr() -> cast({error_attr}).
-
-%% @spec undo(string()) -> ok
-%% @doc Steps backward on the Refactorerl database.
-undo(RFile) -> cast({undo, RFile}).
-
-
-cast(Data) -> gen_server:cast({?MODULE, ?REFERL_NODE}, Data).
-
-%% @spec message(atom(), [term()]) -> ok
-%% @doc Sends a message of `Type' which contains an arbitrary list of terms
-%% to the registered user interface message handlers.
-message(Type, Data) ->
-    gen_event:notify({?UI_MSG_SERVER, ?REFERL_NODE}, {Type, Data}).
-
-%% @spec message(atom(), string(), [term()]) -> ok
-%% @doc Sends a message of `Type' with arguments formatted by `io_lib:format'
-%% to the registered user interface message handlers.
-message(Type, Format, Args) ->
-    gen_event:notify({?UI_MSG_SERVER, ?REFERL_NODE},
-                     {Type, ?MISC:format(Format, Args)}).
-
-%% @spec add_msg_handler(atom(), term()) -> ok | term()
-%% @doc Registers a new user interface message handler (which must be a
-%% `gen_event' callback module).
-add_msg_handler(Handler, Args) ->
-    gen_event:add_sup_handler({?UI_MSG_SERVER, ?REFERL_NODE}, Handler, Args).
-
-%% @spec add_msg_handler(atom(), term(), atom()) -> ok | term()
-%% @doc Registers a new user interface message handler (which must be a
-%% `gen_event' callback module).
-add_msg_handler(Handler, Args, nosup) ->
-    gen_event:add_handler({?UI_MSG_SERVER, ?REFERL_NODE}, Handler, Args).
-
-%% @spec del_msg_handler(atom(), term()) -> ok | term()
-%% @doc Deletes a registered user interface message handler.
-del_msg_handler(Handler, Args) ->
-    gen_event:delete_handler({?UI_MSG_SERVER, ?REFERL_NODE}, Handler, Args).
-
-
-%% @doc Starts the server and links it with the calling process.
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-
-%% @private
-init(_) ->
-    {ok, ok}.
-
-%% @private
-handle_cast(Cmd, S) when is_tuple(Cmd)->
-    try
-        handle(Cmd)
-    catch
-        error:Err ->
-            error_logger:error_msg("Bad request ~p~n"
-                                   "  Error: ~p~n"
-                                   "  Stack: ~p~n",
-                                   [Cmd, Err, erlang:get_stacktrace()]),
-            message(error, "error handling request ~512P", [Cmd,4])
-    end,
-    message(uifinished, element(1,Cmd)),
-    {noreply, S}.
-
-%% @private
-handle_call(_,_,S) ->
-    {stop, bad_call, S}.
-
-%% @private
-handle_info(_, S) ->
-    {noreply, S}.
-
-%% @private
-terminate(_,_) ->
-    ok.
-
-%% @private
-code_change(_,S,_) ->
-    {ok, S}.
+%%      {present,boolean()}      Status of the file:  @todo
+status_info(_MCB, FileList) ->
+    ?Dat(file_status_info(FileList)).
 
 %%% ============================================================================
-%%% Standard UI
+%%% Private implementation
 
-handle({stop}) ->
-    message(status, "RefactorErl server is shutting down...",[]),
-    init:stop();
-
-handle({status, FileName}) when is_list(FileName) ->
-    case ?Query:exec(?File:find(FileName)) of
-        [File] ->
-            case ?Query:exec(File, [{form, {type,'==',error}}]) of
-                [] -> message(add, [FileName]);
-                _  -> message(invalid, "~s", [FileName])
-            end;
-        []  -> message(drop, [FileName])
-    end;
-
-%% todo: maybe introduce a `reload' or `update' message
-handle({add, FileName}) when is_list(FileName) ->
-    do_add_file(FileName);
-
-handle({drop, FileName}) when is_list(FileName) ->
-    do_drop_file(FileName);
-
-handle({add_dir, FileName}) when is_list(FileName) ->
-    recurse_erl(FileName, fun add_filedir/1);
-
-handle({drop_dir, FileName}) when is_list(FileName) ->
-    recurse_erl(FileName, fun drop_filedir/1);
-
-handle({load_beam, FileName, TargetDir, ToSave})
-  when is_list(FileName), is_list(TargetDir), is_boolean(ToSave) ->
-    do_load_beam(FileName, TargetDir, ToSave);
-
-handle({draw, File, Type}) ->
-    Filter = convert_filter(Type),
-    ?DRAW_GRAPH:draw_graph(File, Filter),
-    message(status, "Ok", []);
-
-handle({showconfig}) ->
-    message(showconfig,
-            [{Name, Value} ||
-                Env <- ?Query:exec([env]),
-                #env{name=Name, value=Value} <- [?Graph:data(Env)]]);
-
-%% todo If this option is still necessary, it should use ?Graph:save_envs/0.
-handle({saveconfig, AppDirs, IncDirs, OutDir}) ->
-    ?Syn:del_envs(),
-    [?Syn:create_env(appbase, Dir) || Dir <- AppDirs],
-    [?Syn:create_env(include, Dir) || Dir <- IncDirs],
-    ?Syn:create_env(output, OutDir),
-    message(status, "Configuration saved.", []);
-
-handle({filelist}) ->
-    Files = ?Query:exec([file]),
-
-    Err = fun(File) ->
-                  case ?Query:exec(File, ?File:error_forms()) of
-                      [] -> no_error;
-                      _  -> error
-                  end
-          end,
-
-    FilesWithErr = [ {?File:path(File), Err(File)} || File <- Files],
-
-    message(filelist, FilesWithErr);
-
-handle({reset}) ->
-    ?Graph:reset_schema(),
-    message(status, "Database clear started.", []);
-
-%%% ============================================================================
-%%% Transformation interface
-
-handle({transform, Mod, Args}) ->
-    ?Transform:do(Mod, Args);
-
-handle({reply, Id, Reply}) ->
-    ?Transform:reply(Id, Reply);
-
-handle({cancel, Id}) ->
-    ?Transform:cancel(Id);
-
-%%% ----------------------------------------------------------------------------
-%%% Movings
-
-handle({funlist, File}) ->
-    message(funlist,
-            [{?Fun:name(F), ?Fun:arity(F)} ||
-                F <- ?Query:exec(
-                        ?Query:seq([?File:find(File),
-                                    ?File:module(),
-                                    ?Mod:locals()]))]);
-
-handle({recordlist, File}) ->
-    message(recordlist,
-            [?Rec:name(R) ||
-                R <- ?Query:exec(
-                        ?Query:seq(?File:find(File), ?File:records()))]);
-
-handle({macrolist, File}) ->
-    message(macrolist,
-            [?Macro:name(M) ||
-                M <- ?Query:exec(
-                        ?Query:seq(?File:find(File), ?File:macros()))]);
-
-%%% ============================================================================
-%%% Clustering
-
-%% Sending options for the emacs interface
-handle({cl_options, Alg}) ->
-    OptList = cl_ui:cl_options(Alg),
-    Ls = [[A,B] || {A,B} <- OptList],
-    message(options, [Alg]++Ls);
-
-handle({cl_refresh}) ->
-    case cl_ui:refresh() of
-      {cl_ui, _} -> message(status, "cl_ui refresh: cleaned",[]);
-      _ -> message(error, "cl_ui refresh: something wrong",[])
-    end;
-
-handle({run_cl, Opt, Alg, Create}) ->
-    {Clustering, FittNum} = cl_ui:run({Opt, Alg, Create}),
-    message(status,"Clustering algorithm has been finished."),
-    message(result,Clustering),
-    message(flist,"~w",[FittNum]);
-
-%%% ============================================================================
-%%% Backup
-
-handle({undo, _RFile}) ->
-    %% (_RFile) This parameter is need to handling more backup checkpoints.
-    FilesBefore = files_with_lastmod(),
-    try ?Graph:undo() of
-        ok  ->
-            FilesAfter = files_with_lastmod(),
-            ModifiedFiles =
-                [ begin ?FileMan:save_file(File), ?File:path(File) end ||
-                    {File, LastMod} <- FilesAfter,
-                    lists:keysearch(File, 1, FilesBefore) =/= LastMod ],
-
-            message(reload, ModifiedFiles),
-
-            ?Graph:clean();
-        _ ->
-            message(status, "Need a backup to do it", [])
-    catch
-        throw:Msg ->
-            message(error, "Error: ~p", [Msg])
-    end;
-
-%%% ============================================================================
-%%% Attributes of the error form
-
-%% @private
-handle({error_attr}) ->
-    case ?Query:exec([file, {form, {type, '==', error}}]) of
-        [] ->  message(errorlist, []);
-        ErrList when is_list(ErrList)->
-            try
-                AllError =
-                [begin
-                     [File] = ?Query:exec(Form, ?Form:file()),
-                     Token = paarse((?Graph:data(Form))#form.tag),
-                     {Position, Text} = case Token of
-                                            [] -> {{?File:length(File)-1,
-                                                    ?File:length(File)}, "EOF"};
-                                            _ -> {?Token:pos(Token),
-                                                  ?Token:text(Token)}
-                                        end,
-                     [{filepath, ?File:path(File)}, {nexttokentext, Text},
-                      {position, Position}]
-
-                 end || Form <- ErrList],
-                message(errorlist, [AllError])
-            catch
-                throw:InternalErrorMsg ->
-                    message(error, [InternalErrorMsg])
-            end
-    end;
-
-%%% ============================================================================
-%%% Handling file status information
-
-handle({status_info, FileList}) ->
-    message(filestatus, [file_status_info(FileList)]).
-
-%%% ============================================================================
-%%% Parser for the error messages
+%% @doc Parser for the error messages
 paarse({_,Mesg})->
     case
         re:run(Mesg, "{{.+},{.+}}", [{capture, first}]) of
         {match, [{F, L}]} ->
             SToken = string:substr(Mesg, F+1, L),
-           {ok, STerm, _}= erl_scan:string(SToken++"."),
-           {ok, Tken} = erl_parse:parse_term(STerm),
-           {_,Token} = Tken, Token;
-         _ -> []
+            {ok, STerm, _}= erl_scan:string(SToken++"."),
+            {ok, Tken} = erl_parse:parse_term(STerm),
+            {_,Token} = Tken, Token;
+        _ -> []
     end;
 paarse(_) ->
-   [].
+    [].
 
-%%% ============================================================================
+%%% ----------------------------------------------------------------------------
 
-add_filedir(File) ->
+add_filedir(MCB,File) ->
     case ?MISC:is_erl(File) of
         true  ->
-            do_add_file(File);
+            do_add_file(MCB,File);
         false ->
             true = ?MISC:is_beam(File),
-	    do_load_beam(File)
+            do_load_beam(MCB,File)
     end.
 
-drop_filedir(File)->
-    do_drop_file(File).
+drop_filedir(MCB,File)->
+    do_drop_file(MCB,File).
 
-do_add_file(FileName)->
-    case ?FileMan:add_file(FileName, [update, {progress, progress(add)}]) of
+do_add_file(MCB,FileName)->
+    case ?FileMan:add_file(FileName,
+                           [update, {progress, progress(MCB,add)}]) of
         {error, Reason} ->
-            message(invalid, "~s", [FileName]),
-            message(status, "~s", [error_message(Reason)]),
-	    false;
+            send_change(MCB,[?AddedError(FileName,[])]), %@todo
+            ?LErr(Reason);
         {file, File} ->
-            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
-            message(add, Add),
-	    true
+            Nodes = ?Query:exec(File, ?File:includes()),
+            Paths = [?File:path(FN) || FN <- Nodes],
+            send_change(MCB,[?AddedCorrect(F) || F <- Paths]),
+            ?Dat(Nodes)
     end.
 
-do_drop_file(FileName)->
+do_drop_file(MCB,FileName)->
     case ?Query:exec(?File:find(FileName)) of
         [File] ->
             Drop =
                 [?File:path(FN) || FN <- ?Query:exec(File, ?File:included())],
-	    ?FileMan:drop_file(File, [{progress, progress(drop)}]),
-	    message(drop, Drop),
-	    true;
-	[] ->
-	    message(status, "Already dropped", []),
-	    false
+            ?FileMan:drop_file(File, [{progress, progress(MCB,drop)}]),
+            send_change(MCB,[?Dropped(F) || F <- Drop]),
+            ?OK;
+        [] ->
+            ?RefErr(file_not_present,[FileName])
     end.
 
 %% @doc Traverse a complete directory recursively while doing the action
 %% specified on all "*.erl" and "*.beam" files each folder contains.
-recurse_erl(Start=[_|_], Action) when is_function(Action,1) ->
-    Result = lists:map(Action, erl_beam(Start)),
-    case Result /= [] of
-	true ->
-	    case lists:any(fun(X)->X end, Result) of
-		false ->
-		    message(status, "~s", [error_message({none_proc,[]})]);
-		true ->
-		    case lists:any(fun(X)->not X end, Result) of
-			true ->
-			    message(status, "~s",
-				    [error_message({some_proc,[]})]);
-			false ->
-			    ok
-		    end
-	    end;
-        false ->
-            ok
-    end.
+recurse_erl(MCB,Start=[_|_], Action) when is_function(Action,2) ->
+    Files = erl_beam(MCB,Start),
+    Result = [Action(MCB,F) || F <- Files].
+% @todo
+    %% case Result /= [] of
+    %%     true ->
+    %%         case lists:any(fun(X)->X end, Result) of
+    %%             false ->
+    %%                 message(status, "~s", [error_message({none_proc,[]})]);
+    %%             true ->
+    %%                 case lists:any(fun(X)->not X end, Result) of
+    %%                     true ->
+    %%                         message(status, "~s",
+    %%                                 [error_message({some_proc,[]})]);
+    %%                     false ->
+    %%                         ok
+    %%                 end
+    %%         end;
+    %%     false ->
+    %%         ok
+    %% end.
 
-erl_beam(Start) ->
+%% @doc Traverse a complete directory recursively to collect
+%% all "*.erl" and "*.beam" files each folder contains.
+erl_beam(_MCB,Start) ->
     Files = ?MISC:find_files(
-	       filename:absname(Start),
-	       ?MISC:'or'(fun ?MISC:is_erl/1, fun ?MISC:is_beam/1)),
+           filename:absname(Start),
+           ?MISC:'or'(fun ?MISC:is_erl/1, fun ?MISC:is_beam/1)),
     case Files of
-	[] ->
-	    message(status, "~s", [error_message({not_found,Start})]),
-	    [];
-	_ ->
-	    FileMod = [{filename:rootname(filename:basename(F)), F}
-		       || F <- Files],
-	    {Erl,Beam0} = lists:partition(
-			    fun({_M,F})-> ?MISC:is_erl(F) end, FileMod),
-	    {ErlMod,_ErlFile} = lists:unzip(Erl),
-	    Beam = ?MISC:pdel(ErlMod, Beam0),
-	    All = Erl ++ Beam,
-	    [F || {_,F} <- All]
+    [] ->
+        throw(?LocalError(not_found,[Start]));
+    _ ->
+        FileMod = [{filename:rootname(filename:basename(F)), F}
+               || F <- Files],
+        {Erl,Beam0} = lists:partition(
+                fun({_M,F})-> ?MISC:is_erl(F) end, FileMod),
+        {ErlMod,_ErlFile} = lists:unzip(Erl),
+        Beam = ?MISC:pdel(ErlMod, Beam0),
+        All = Erl ++ Beam,
+        [F || {_,F} <- All]
     end.
 
-do_load_beam(File) ->
-    do_load_beam(File,filename:dirname(File),false).
+do_load_beam(MCB,File) ->
+    load_beam(MCB,File,filename:dirname(File),false).
 
-do_load_beam(FileName, TargetDir, ToSave)->
-    case refcore_loadbeam:start(FileName,TargetDir,ToSave) of
-        {error, Reason} ->
-            message(invalid, "~s", [FileName]),
-            message(status, "~s", [error_message(Reason)]),
-	    false;
-        {ok, File} ->
-            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
-            message(add, Add),
-	    true
+add_flat(Results0)->
+    Results = lists:flatten(Results0),
+    case lists:all(fun({ok,_})->true; % ?OK, ?Dat
+                      (_)->false end,
+                   Results) of
+        true->
+            Unpack = [N || {ok,N} <- Results], % ?OK, ?Dat
+            ?Dat(lists:flatten(Unpack));
+        false->
+            ?LErr(somebad)
     end.
 
 %%% ----------------------------------------------------------------------------
 
-progress(Op) ->
+progress(MCB,Op) ->
     fun
         (File, Count, Max) ->
-            ?UI:message(progress, {Op, File, Count, Max})
+            send_progress(MCB, Op, File, Count, Max)
     end.
 
-
-%% Filters can be given by their atomic abbreviations or by numeric codes.
+%% @doc Filters can be given either by their atomic abbreviations
+%%      or by numeric codes.
 convert_filter(Type) when is_atom(Type) -> Type;
 convert_filter(2) -> sem;
 convert_filter(3) -> ctx;
@@ -681,19 +710,6 @@ convert_filter(8) -> not_lex;
 convert_filter(_) -> all.
 
 
-%@todo refactor to ?LocalError
-error_message({no_include_file, File}) ->
-    ?MISC:format("Include file \"~s\" not found", [File]);
-error_message({not_found, Path})->
-    ?MISC:format("No file could be handled from \"~s\"", [Path]);
-error_message({some_proc, []})->
-    ?MISC:format("Not all files were processed", []);
-error_message({none_proc, []})->
-    ?MISC:format("No files were processed", []);
-error_message(Error) ->
-    ?MISC:format("Error: ~p", [Error]).
-
-
 files_with_lastmod() ->
     [{File, LastMod}
      || File <- ?Query:exec([file]),
@@ -701,29 +717,27 @@ files_with_lastmod() ->
 
 file_status_info([])->
     Files = ?Query:exec([file]),
-    [file_stat(File) || File <- Files];
+    [file_stat(FileName, FileNode) ||
+        FileNode <- Files, FileName <- [?File:path(FileNode)]];
 
-file_status_info(FileList)->
+file_status_info(FileList)-> %@todo
     lists:map(
       fun(FileName) ->
               case ?Query:exec(?File:find(FileName)) of
-                  [File] ->
-                      file_stat(File);
-                  _ ->
-                      [{file, FileName}, {errors, no}, {type, none},
-                       {lastmod, undefined}, {status, missing}]
+                  [] ->
+                      ?NotPresent(FileName);
+                  [FileNode] ->
+                      file_stat(FileName,FileNode)
               end
       end,
       FileList).
 
-file_stat(File)->
-    Path = ?File:path(File),
-    Type = ?File:type(File),
-    LastMod = (?Graph:data(File))#file.lastmod,
-    IsError = case ?Query:exec(File, [{form, {type, '==', error}}]) of
-                  [] -> no;
-                  _ -> yes
-              end,
+file_stat(Path,FileNode)->
+    Type = ?File:type(FileNode),
+    LastMod = (?Graph:data(FileNode))#file.lastmod,
+    case ?Query:exec(FileNode, [{form, {type, '==', error}}]) of
+        [] -> ?PresentCorrectTM(Path, Type, LastMod);
+        E  -> ?PresentErrorTM(Path, Type, LastMod,
+                              decode_error_form(FileNode,E))
+    end.
 
-    [{file, Path}, {error,IsError}, {type, Type},
-     {lastmod, LastMod}, {status, loaded}].

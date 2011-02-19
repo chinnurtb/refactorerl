@@ -25,13 +25,13 @@
 %%%
 %%% == Parameters ==
 %%% <ul>
-%%%  <li> A module (see {@link reflib_args:filename/1}). The header file to 
+%%%  <li> A module (see {@link reflib_args:filename/1}). The header file to
 %%%       be modified. Currently it can be specified with a position anywhere
 %%%       in the include file.</li>
-%%%  <li> A module (see {@link reflib_args:file/1}). The new name of the 
+%%%  <li> A module (see {@link reflib_args:file/1}). The new name of the
 %%%       header file.</li>
 %%% </ul>
-%%% 
+%%%
 %%% == Conditions of applicability ==
 %%% <ul>
 %%%   <li>The type of the file has to be a header file. If the pointed file is
@@ -43,29 +43,26 @@
 %%% == Transformation steps and compensations ==
 %%% <ul>
 %%%   <li>Rename the header file name to the new name on the graph.</li>
-%%%   <li>Rename the references to the header file in the include forms. 
+%%%   <li>Rename the references to the header file in the include forms.
 %%%       (Actually, the include form will be deleted and recreated with a new
 %%%       path and filename).</li>
 %%%   <li>Rename or move and rename the file to the new name.</li>
 %%% </ul>
 %%%
 %%% == Implementation status ==
-%%% 
+%%%
 %%% This refactoring has been implemented.
-%%% 
+%%%
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(reftr_rename_header).
--vsn(" $Rev: 4968 $ ").
+-vsn(" $Rev: 5496 $ ").
 
 %%% ============================================================================
 %%% Exports
 
 %% Callbacks
--export([transform/2,
-         transform0/3,
-         transform1/2,
-         prepare/1]).
+-export([prepare/1]).
 
 -include("user.hrl").
 
@@ -73,50 +70,47 @@
 %%% Callbacks
 %%% @private
 prepare(Args)->
-    NewName = ?Args:filename(Args),
-    %%NewName1 = ?File:abs_path(NewName),
     FileNode = ?Args:file(Args),
+
     OldPath = ?File:path(FileNode),
-    ?Check(?File:type(FileNode) == header,
-                ?RefError(file_not_hrl,[OldPath])),
+    Path    = filename:dirname(OldPath),
+    ?Check(?File:type(FileNode) == header, ?RefError(file_not_hrl,[OldPath])),
 
-    
-    Path = filename:dirname(OldPath),
-    NewPath = filename:join([Path, NewName]),
-
-    ?Check(lists:member("..",filename:split(NewName)) /= true, 
-                                 ?RefError(rel_path, [NewName])),
-
-    ?Check(not filelib:is_file(NewPath), 
-                     ?RefError(file_exists,[NewPath])),
+    ArgsInfo = add_transformation_info(Args, FileNode),
+    NewPath  = ?Args:ask(ArgsInfo, filename, fun cc_newpath/2, fun cc_error/3, Path),
 
     InclFiles = ?Query:exec(FileNode, ?File:included())--[FileNode],
 
-    [fun()-> transform0(FileNode, NewPath, OldPath) end]
+    [?Transform:touch(F) || F <- [FileNode | InclFiles]],
+
+    [fun()->
+       ?Transform:rename(OldPath, NewPath),
+       ?File:upd_path(FileNode, NewPath),
+       ?FileMan:save_file(FileNode)
+     end]
     ++
-    [fun(ok)-> transform(WInclFile, FileNode) end 
+    [fun(ok)-> ?File:del_include(WInclFile, FileNode) end
                                          || WInclFile <- InclFiles]
     ++
-    [fun(ok)-> transform1(WInclFile, FileNode) end 
-                                         || WInclFile <- InclFiles].
+    [fun(ok)-> ?File:add_include(WInclFile, FileNode) end
+                                         || WInclFile <- InclFiles]
+    ++
+    [fun(ok)-> [FileNode] end].
+
+add_transformation_info(Args, File) ->
+    Path = ?File:path(File),
+    Info = ?MISC:format("Renaming header: ~p", [Path]),
+    [{transformation_text, Info} | Args].
 
 %%% ============================================================================
-%%% Implementation
-%%% @private
-transform(ActInclFile, FileNode)->
-   ?File:del_include(ActInclFile, FileNode),
-   ?Transform:touch(ActInclFile),
-   ok.
+%%% Checks
 
-%%% @private
-transform0(FileNode, NewPath, OldPath)->
-   ?Transform:rename(OldPath, NewPath),
-   ?File:upd_path(FileNode, NewPath),
-   ?Transform:touch(FileNode),
-   ?FileMan:save_file(FileNode),
-   ok.
+cc_newpath(NewName, Path) ->
+    ?Check(not lists:member("..", filename:split(NewName)),
+           ?RefError(rel_path, [NewName])),
+    NewHrl = filename:join(Path, NewName),
+    ?Check(not filelib:is_file(NewHrl), ?RefError(used_header, NewHrl)),
+    NewHrl.
 
-%%% @private
-transform1(ActInclFile, FileNode)->
-   ?File:add_include(ActInclFile, FileNode),
-   ?Transform:touch(ActInclFile).
+cc_error(?RefError(used_header, NewHrl), _NewName, _Path) ->
+   ?MISC:format("The header file ~p is already used.", [NewHrl]).

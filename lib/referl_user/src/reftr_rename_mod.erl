@@ -27,7 +27,7 @@
 %%% == Parameters ==
 %%% <ul>
 %%% <li>A module (see {@link reflib_args:module/1}).</li>
-%%% </ul> 
+%%% </ul>
 %%%
 %%% == Conditions of applicability ==
 %%% <ul>
@@ -42,17 +42,17 @@
 %%% <ol>
 %%%   <li>Rename the current module name to the new name.</li>
 %%%   <li>Rename the related module qualifiers to the given new name.</li>
-%%%   <li>Rename the references to the module in the import lists.</li>
+%%%   <li>Rename the Refs to the module in the import lists.</li>
 %%%   <li>Rename the file to the new name.</li>
 %%% </ol>
 %%%
 %%% == Implementation status ==
 %%% The transformation is fully implemented.
-%%% 
+%%%
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(reftr_rename_mod).
--vsn("$Rev: 4956 $ ").
+-vsn("$Rev: 5496 $ ").
 
 %% Callbacks
 -export([prepare/1]).
@@ -64,51 +64,78 @@
 
 %% @private
 prepare(Args)->
-    NewName = ?Args:name(Args),
-    ?Check(hd(io_lib:write(NewName)) /= $', %if quoted -> refuse
-           ?RefErr0r(quoted_atom) ),
-    FileNode = ?Args:file(Args),
     ModuleObj = ?Args:module(Args),
-    ?Check(?Query:exec(?Mod:find(NewName)) == [],
-           ?RefError(module_exists,[NewName])),
-    [ModuleForm] = ?File:module_form(FileNode),
-    OldPath = ?File:path(FileNode),
-    NewPath = new_file_path(NewName, OldPath),
-    ?Check(not filelib:is_file(NewPath), ?RefError(file_exists,[NewPath])),
-    References = [Node || Node <- ?Query:exec(ModuleObj, ?Mod:references()), not is_module_mac(Node)],
+    [FileNode] = ?Query:exec(ModuleObj, ?Mod:file()),
 
-    ?Macro:check_macros(References, {elex, 1}),
-    
-    fun()->
-            transform(FileNode, ModuleForm, References, NewName, NewPath,
-                      OldPath)
-    end.
+    OldPath = ?File:path(FileNode),
+
+    ArgsInfo = add_transformation_info(Args, ModuleObj, OldPath),
+    {NewName, NewPath} = ?Args:ask(ArgsInfo, name, fun cc_newname/2, fun cc_error/3, OldPath),
+
+    [ModForm] = ?File:module_form(FileNode),
+
+    Refs = [Node || Node <- ?Query:exec(ModuleObj, ?Mod:references()),
+                    not is_module_mac(Node)],
+
+%    ?Macro:check_single_usage(Refs, [{elex, 1}]),
+
+    DynUpdates = reflib_dynfun:collect({rename, mod}, ModuleObj, NewName),
+
+    ?Transform:touch(FileNode),
+    [fun()->
+        ?Macro:inline_single_virtuals(Refs, elex),
+
+        ?File:upd_path(FileNode, NewPath),
+        [?Macro:update_macro(Node, {elex, 1}, atom_to_list(NewName))
+            || Node <- Refs],
+
+        Data = ?ESG:data(ModForm),
+        ?ESG:update(ModForm, Data#form{tag = NewName}),
+
+        ?Transform:rename(OldPath, NewPath),
+        reflib_dynfun:transform(DynUpdates)
+    end,
+    fun(_)->
+        [ModuleObj] % @todo where is it updated...?
+    end].
+
+add_transformation_info(Args, Module, Path) ->
+    ModName = ?Mod:name(Module),
+    Info    = ?MISC:format("Renaming module ~p (Path: ~p)",
+                           [ModName, Path]),
+    [{transformation_text, Info} | Args].
 
 %%% ============================================================================
 %%% Implementation
 
-transform(FileNode, ModFormNode, References, NewName, NewPath, OldPath) ->
-    ?File:upd_path(FileNode, NewPath),
-    ?Transform:touch(FileNode),
-    [ begin
-          ?Macro:update_macro(Node, {elex, 1}, atom_to_list(NewName))
-      end
-      || Node <- (References)],
-
-    Data = ?ESG:data(ModFormNode),
-    ?ESG:update(ModFormNode, Data#form{tag = NewName}),
-    
-    ?Transform:rename(OldPath, NewPath).
-
 new_file_path(NewName, OldPath) ->
-    Dir =
-        filename:dirname(OldPath),
+    Dir = filename:dirname(OldPath),
     filename:join([Dir, atom_to_list(NewName) ++ ".erl"]).
 
 is_module_mac(Node) ->
-    Subst = ?Query:exec(Node, [elex, llex]),
-    if
-        Subst /= [] -> ?Query:exec(Subst, [mref]) == [];
-        true        -> false
+    case ?Query:exec(Node, [elex, llex]) of
+        []    -> false;
+        Subst -> ?Query:exec(Subst, [mref]) == []
     end.
-	    
+
+
+%%% ============================================================================
+%%% Checks
+
+is_quoted(Name) ->
+    hd(io_lib:write(Name)) == $'.
+
+cc_newname(NewModName, OldPath) ->
+    ?Check(?Query:exec(?Mod:find(NewModName)) == [],
+           ?RefError(module_exists,[NewModName])),
+    ?Check(not is_quoted(NewModName), ?RefErr0r(quoted_atom)),
+    NewFilePath = new_file_path(NewModName, OldPath),
+    ?Check(not filelib:is_file(NewFilePath),
+           ?RefError(file_exists,[NewFilePath])),
+
+    {NewModName, NewFilePath}.
+
+cc_error(?RefError(module_exists,[NewModName]), NewModName, _OldPath) ->
+   ?MISC:format("The module name ~p is already used.", [NewModName]);
+cc_error(?RefError(file_exists,[NewFilePath]), _NewModName, _OldPath) ->
+   ?MISC:format("The file ~p is already used.", [NewFilePath]).

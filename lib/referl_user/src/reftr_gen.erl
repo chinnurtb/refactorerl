@@ -117,7 +117,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reftr_gen).
--vsn("$Rev: 5239 $").
+-vsn("$Rev: 5489 $").
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -132,7 +132,7 @@
 error_text(side_eff, []) ->
     "Generalizing would duplicate code with side effects";
 error_text(guard_var, []) ->
-    "It is impossible to macth against the formal and actual parameters" ++
+    "It is impossible to match against the formal and actual parameters" ++
     " (compound data structures)".
 
 %%% ============================================================================
@@ -142,27 +142,28 @@ error_text(guard_var, []) ->
 prepare(Args) ->
     Exprs   = ?Args:expr_range(Args),
     {Link, Parent} = check_expr_link(Exprs),
-    VarName = ?Args:varname(Args),
     Module = ?Args:module(Args),
     lists:foreach(fun check_expr/1, Exprs),
+
     Form = ?Query:exec1(hd(Exprs), ?Query:seq([?Expr:clause(),
                                                ?Clause:funcl(),
                                                ?Clause:form()]),
                         ?RefErr0r(parent_not_form)),
-    check_new_var_name(Form, VarName),
-    Fun = ?Query:exec1(Form, ?Form:func(), ?RefErr0r(parent_not_form)),
-    FunName = ?Fun:name(Fun),
-    Arity = ?Fun:arity(Fun),
+
+    Fun      = ?Query:exec1(Form, ?Form:func(), ?RefErr0r(parent_not_form)),
+    FunName  = ?Fun:name(Fun),
+    Arity    = ?Fun:arity(Fun),
     check_recursive_calls(Exprs, Fun),
     check_fun(Module, FunName, Arity + 1),
+
     [File] = ?Query:exec(Form, ?Form:file()),
-    SideE = [Expr || Expr <- Exprs, ?Expr:has_side_effect(Expr)],
+    SideE  = [Expr || Expr <- Exprs, ?Expr:has_side_effect(Expr)],
     GuardE = ?Expr:role(hd(Exprs)) == guard,
     {TApps, TImps, RecApps, RecImps, RecCls} = get_fun_calls(Exprs, Fun, File),
-    case GuardE of
-        true  -> [check_side_effect(App) || App <- TApps ++ RecApps];
-        false -> ok
-    end,
+    Apps   = TApps ++ RecApps,
+    not GuardE orelse [check_side_effect(App) || App <- Apps],
+    ?Check(not is_from_mac_subst(Apps), ?RefErr0r(mac_error)),
+
     {Bound, NotBound} = vars(Exprs),
     check_var(Bound,Exprs),
     check_bound_var_name(TApps, Bound),
@@ -182,19 +183,26 @@ prepare(Args) ->
                ?Query:exec(Cl, ?Clause:patterns()),
                ?Query:exec(Cl, ?Clause:guard()),
                Cl} || Cl <- FunCls],
+    {Type, NewExprs} =
+        case {Bound, NotBound, SideE =/= [], length(Exprs)>1, GuardE} of
+            { _, _,    _,    _, true} -> {guard, separate_guard(hd(Exprs))};
+            { _, _,    _, true,    _} -> {funexp, Exprs};
+            { _, _, true,    _,    _} -> {funexp, Exprs};
+            {[], [],   _,    _,    _} -> {var,    Exprs};
+            { _, _,    _,    _,    _} -> {funexp, Exprs}
+        end,
+
+    FunAppData  = [get_app_data(App, NewExprs)|| App <- TApps],
+    RecAppData  = [get_app_data(App, NewExprs)|| App <- RecApps],
+
+    Vars     = ?Query:exec(Form, ?Query:seq(?Form:clauses(), ?Clause:variables())),
+    VarNames = [?Var:name(Var) || Var <- Vars],
+    % todo Add transformation info
+    VarName  = ?Args:ask(Args, varname, fun cc_varname/2, fun cc_error/3, VarNames),
+
     ?Transform:touch(File),
     Comments = ?Syn:get_comments(Exprs),
     [fun() ->
-        {Type, NewExprs} =
-            case {Bound, NotBound, SideE =/= [], length(Exprs)>1, GuardE} of
-                { _, _,    _,    _, true} -> {guard, separate_guard(hd(Exprs))};
-                { _, _,    _, true,    _} -> {funexp, Exprs};
-                { _, _, true,    _,    _} -> {funexp, Exprs};
-                {[], [],   _,    _,    _} -> {var,    Exprs};
-                { _, _,    _,    _,    _} -> {funexp, Exprs}
-            end,
-        FunAppData  = [get_app_data(App, NewExprs)|| App <- TApps],
-        RecAppData  = [get_app_data(App, NewExprs)|| App <- RecApps],
         R = replace_expressions(Parent,VarName,Exprs, Type, UsedVarNames, Link),
         NewApps = insert_app_arg(FunAppData, Type, UsedVarNames),
         insert_rec_app_arg(RecAppData, VarName),
@@ -213,14 +221,13 @@ prepare(Args) ->
         get_comments(Ret),
         case length(Exprs) of
             1 -> ?Syn:put_comments([R], Comments);
-            _ -> [?Syn:put_comments(NewExprs, Comments) ||
-                  NewExprs <- NewApps]
+            _ -> [?Syn:put_comments(NewExprs2, Comments) || NewExprs2 <- NewApps]
         end
      end].
 
-get_comments({Fun, Apps}) -> 
-    ?Syn:get_comments(Fun), 
-    [?Syn:get_comments(App) || App <- Apps]; 
+get_comments({Fun, Apps}) ->
+    ?Syn:get_comments(Fun),
+    [?Syn:get_comments(App) || App <- Apps];
 get_comments(_) -> ok.
 
 %%% ===========================================================================
@@ -295,7 +302,6 @@ check_expr(Expr) ->
                    ?RefError(bad_kind, record_expr_part))
     end.
 
-
 check_fun(Module, NewName, Arity) ->
     ModName = ?Mod:name(Module),
     ?Check(?Query:exec(Module, ?Mod:local(NewName, Arity)) =:= [],
@@ -315,12 +321,6 @@ check_var(BoundVars, Exprs)->
     ?Check( Clash =:= [],
            ?RefError(outside_used_vars, Clash)).
 
-
-check_new_var_name(Form, VarName) ->
-    Clauses = ?Query:exec(Form, ?Form:clauses()),
-    Vars    = ?Query:exec(Clauses, ?Clause:variables()),
-    [?Check(?Var:name(Var) =/= VarName, ?RefError(var_exists, VarName))
-     || Var <- Vars].
 
 check_recursive_calls(Exprs, Fun)->
     RecApps = [?Query:exec(Fun, ?Fun:applications(Expr)) || Expr <- Exprs],
@@ -437,6 +437,24 @@ separate_guard(Expr)->
         _   -> Expr
     end.
 
+%% Returns whether there is an application which comes (partly or wholly)
+%% from a macro substitution.
+is_from_mac_subst(Apps) when is_list(Apps) ->
+    lists:any(fun(App) -> is_from_mac_subst(App) end, Apps);
+is_from_mac_subst(App) ->
+    [] =/= [Token || Token <- ?Syn:leaves(App), ?Syn:is_virtual(Token)].
+
+%%% ----------------------------------------------------------------------------
+%%% Checks
+
+cc_varname(VarName, VarNames) ->
+    ?Check(not lists:member(VarName, VarNames), ?RefError(var_exists, VarName)),
+    VarName.
+
+cc_error(?RefError(var_exists, VarName), VarName, _VarNames) ->
+    ?MISC:format("Variable ~p already exists.", [VarName]).
+
+
 %%% ===========================================================================
 %%% Transformation part
 
@@ -533,6 +551,7 @@ insert_old_fun(File, ClData, Exprs, Type, ArgNames, Index, true)->
                 CName1     = find_copy_expr([{CNameList1, Name}]),
                 CPatsList2 = [{?Syn:copy(Expr), Expr}||Expr<-Pats],
                 CPats2     = find_copy_expr(CPatsList2),
+                AppArgs    = tr_joker_patterns(CPats2),
                 CNameList2 = ?Syn:copy(Name),
                 CName2     = find_copy_expr([{CNameList2, Name}]),
                 Args = [?Syn:create(#expr{type = variable}, [Arg])
@@ -552,7 +571,7 @@ insert_old_fun(File, ClData, Exprs, Type, ArgNames, Index, true)->
                     guard  -> NewArg = [create_condition(Exprs)]
                 end,
                 ArgListNode = ?Syn:create(#expr{type=arglist},
-                                  [{esub, CPats2++NewArg}]),
+                                  [{esub, AppArgs++NewArg}]),
                 NewApp = ?Syn:create(#expr{type = application},
                                      [{esub, CName2}, {esub, ArgListNode}]),
                 case Type of
@@ -560,22 +579,32 @@ insert_old_fun(File, ClData, Exprs, Type, ArgNames, Index, true)->
                         C = ?Syn:create(#clause{type = fundef}, [{name, CName1},
                                         {pattern, CPats1}, {body,  [NewApp]}]);
                     _ ->
-                        C = ?Syn:create(#clause{type = fundef}, 
-                                        [{name, CName1}, {pattern, CPats1}, 
+                        C = ?Syn:create(#clause{type = fundef},
+                                        [{name, CName1}, {pattern, CPats1},
                                          {guard, CGuard}, {body,  [NewApp]}])
                 end,
                 {C, NewApp}
             end, ClData),
-    FunCls = [Cl || {Cl, _} <- Data], 
-    Apps = [App || {_, App} <- Data], 
+    FunCls = [Cl || {Cl, _} <- Data],
+    Apps = [App || {_, App} <- Data],
     OldFun = ?Syn:create(#form{type = func}, [{funcl, FunCls}]),
     ?File:add_form(File, Index, OldFun),
     {OldFun, Apps}.
 
 find_copy_expr(CExprsList)->
-    {_Exprs, CExprs} = lists:unzip([lists:keyfind(Expr, 1, List) || 
+    {_Exprs, CExprs} = lists:unzip([lists:keyfind(Expr, 1, List) ||
                                          {List, Expr} <- CExprsList]),
     CExprs.
+
+tr_joker_patterns(ExprList) ->
+    lists:map(
+        fun(Pattern) ->
+            case ?Expr:type(Pattern) of
+                joker -> ?Syn:create(
+                            #expr{type=atom},["undef"]);
+                _     -> Pattern
+            end
+        end, ExprList).
 
 move_macros_records(no_move, _) -> ok;
 move_macros_records([], _) -> ok;

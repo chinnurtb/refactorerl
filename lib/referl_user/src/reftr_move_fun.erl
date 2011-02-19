@@ -92,7 +92,7 @@
 
 
 -module(reftr_move_fun).
--vsn("$Rev: 4968 $ ").
+-vsn("$Rev: 5496 $ ").
 
 %%% ============================================================================
 %%% Exports
@@ -126,8 +126,13 @@
 -record(list_ren, {form, name}).
 
 -record(modq_add, {expr, module}).
+-record(modq_add_macro, {expr, module}).
 -record(modq_upd, {expr, module}).
+-record(modq_upd_macro, {expr, module}).
 -record(modq_del, {expr}).
+-record(modq_del_macro, {expr}).
+
+-record(funname_tokinfo, {orig, colon, modq}).
 
 -define(TableName, modifs).
 -define(NOTE(D), ets:insert(?TableName, D)).
@@ -171,17 +176,20 @@ prepare(Args) ->
 
     %% ETS table to buffer the required modifications
     ets:new(?TableName, [named_table, bag]),
+    ets:new(token_info, [named_table, set, {keypos, 2}]),
 
     %% Finding the source and the target module
 
-    FromMod = ?Args:module(Args),
-    ToMod   = exec1(?Mod:find(?Args:name(Args)), ?RefErr0r(target_not_found)),
+    FunObjs = ?Args:functions(Args),
+    [FromMod] = ?Query:exec(hd(FunObjs), ?Fun:module()),
+    ToMod   = exec1(?Mod:find(?Args:name(Args)),
+                    ?RefErr0r(target_not_found)),
     ToModName = ?Mod:name(ToMod),
-    
+
     %% Checking if the source and target modules are equals
-    
+
     ?Check(ToMod =/= FromMod, ?RefErr0r(source_and_target_equals)),
-    
+
     %% Finding the files that belong to the modules
 
     FromFile = exec1(FromMod, ?Mod:file(), ?RefErr0r(source_not_found)),
@@ -189,12 +197,12 @@ prepare(Args) ->
 
     %% Finding function objects and definitions
 
-    FunObjs = ?Args:functions(Args),
     FunDefs = [exec1(FunObj, ?Fun:definition(),
                      ?LocalError(fundef_not_found, [FunName,Arity]))
                || FunObj  <- FunObjs,
                   FunName <- [?Fun:name(FunObj)],
                   Arity   <- [?Fun:arity(FunObj)]],
+
 
     %% Checking function name collisions
 
@@ -203,15 +211,24 @@ prepare(Args) ->
         FunObj <- FunObjs,
         Name  <- [?Fun:name(FunObj)],
         Arity <- [?Fun:arity(FunObj)]],
-    
+
+    %% Checking macro multirole usage
+    lists:foreach(
+        fun(FunObj) ->
+                ?Macro:check_single_usage(exec(FunObj,
+                         all([?Fun:applications(),
+                         ?Fun:implicits()])),
+                                    [{esub, 1}, {elex, 1}])
+        end,
+        FunObjs),
+
     %% Checking ?MODULE macros
-    
-    ModMac = ?Query:exec(?Query:seq(?Mod:all(), ?Mod:references())),
-  	case ModMac of
-        [] -> ok;
-        _  -> ?Check(lists:any(fun(X) -> ?Expr:type(X) =/= atom orelse ?Expr:value(X) =/= ?Mod:name(FromMod) end, ModMac), ?RefErr0r(module_macro_found))
-    end,
-    
+
+    Exprs = ?Query:exec(?Query:seq([[file],?File:forms(),?Form:clauses(),?Clause:exprs(),?Expr:deep_sub()])),
+    ModMacExprs = lists:filter(fun(E) -> ?Expr:value(E) == ?Mod:name(FromMod) end, Exprs),
+    ModMacTokens = ?Query:exec(ModMacExprs, [elex,llex,llex]),
+    ?Check(not(lists:any(fun(E) -> ?Token:text(E) == "MODULE" end, ModMacTokens)), ?RefErr0r(module_macro_found)),
+
     %% Collecting record and macro infos, checking collisions
 
     [?NOTE(I) || I <- prepare_recmac(FunDefs, FromFile, ToFile)],
@@ -222,13 +239,17 @@ prepare(Args) ->
                  tofile = ToFile, tomod = ToMod,
                  fundefs = FunDefs, funobjs = FunObjs},
 
+    DynFunCalls = [?Dynfun:collect(move, Fun, ToMod) || Fun <- FunObjs],
+
     [fun()   -> transform_1(Info)          end,
-     fun(ok) -> flatten(transform_2(Info)) end].
+     fun(ok) -> flatten(transform_2(Info)) end,
+     fun(_)  -> [?Dynfun:transform(DCall) || DCall <- DynFunCalls] end,
+     fun(_) -> FunObjs end]. %@todo
 
 %%% @private
 prepare_recmac(FunDefs, FromFile, ToFile) ->
     Used_Rec = usort(exec(FunDefs, ?Form:records())),
-    Used_Mac = usort(exec(FunDefs, ?Form:macros())),     
+    Used_Mac = usort(exec(FunDefs, ?Form:macros())),
     Mac_By_Mac = usort(Used_Mac ++ exec(Used_Mac, ?Macro:macros()) ++
                        exec(Used_Mac, ?Macro:references())),
     Rec_By_Mac = usort(Used_Rec ++ exec(Used_Mac, ?Macro:records())),
@@ -265,7 +286,7 @@ rec_mac_infos(Tag, FromFile, ToFile, Used_, FunDefs) ->
 
     %% Filtering ?MODULE macro
 
-    Filter = fun(Macro) -> GetName(Macro) =/= "MODULE" end,  
+    Filter = fun(Macro) -> GetName(Macro) =/= "MODULE" end,
     {Used, F_L, T_A} = {filter(Filter, Used_),
                         filter(Filter, F_L_),
                         filter(Filter, T_A_)},
@@ -359,12 +380,23 @@ transform_2(#info{frommod = FromMod, fundefs = FunDefs,
          || #modq_add{expr=Expr, module=Module}
                 <- ets:lookup(?TableName, modq_add)]
         ++
+        [fun(_) -> handle_modq_macro(add, Expr, ?Mod:name(Module)) end
+         || #modq_add_macro{expr=Expr, module=Module}
+                <- ets:lookup(?TableName, modq_add_macro)]
+        ++
         [fun(_) -> ?Expr:upd_modq(Expr, ?Mod:name(Module)) end
          || #modq_upd{expr=Expr, module=Module}
                 <- ets:lookup(?TableName, modq_upd)]
         ++
+        [fun(_) -> handle_modq_macro(upd, Expr, ?Mod:name(Module)) end
+         || #modq_upd_macro{expr=Expr, module=Module}
+                <- ets:lookup(?TableName, modq_upd_macro)]
+        ++
         [fun(_) -> ?Expr:del_modq(Expr) end
          || #modq_del{expr=Expr} <- ets:lookup(?TableName, modq_del)]
+        ++
+        [fun(_) -> handle_modq_macro(del, Expr) end
+         || #modq_del_macro{expr=Expr} <- ets:lookup(?TableName, modq_del_macro)]
         ++
         [fun(_) -> imp_list_rename(Form, Name) end
          || #list_ren{form=Form, name=Name} <- ets:lookup(?TableName, list_ren)]
@@ -473,7 +505,11 @@ correct_module_qualifier(Expr, #info{frommod = FromMod, tomod = ToMod,
     case {ModOrigin, MaybeMod} of
         {ToMod, [FromMod]} ->
             ?Transform:touch(File),
-            ?NOTE(#modq_del{expr = Expr});
+            {Token, Orig} = get_funname_token(Expr),
+            case Token /= Orig of
+                true -> ?NOTE(#modq_del_macro{expr=Expr});
+                _    -> ?NOTE(#modq_del{expr = Expr})
+            end;
         {FromMod, []} ->
             ReferredMoved = lists:member(Referred, FunObjs),
             RefererMoved  = lists:member(FunIsReferring, FunObjs),
@@ -484,7 +520,11 @@ correct_module_qualifier(Expr, #info{frommod = FromMod, tomod = ToMod,
                                     arity = ?Fun:arity(Referred)});
                 {true, false} ->
                     ?Transform:touch(File),
-                    ?NOTE(#modq_add{expr = Expr, module = ToMod}),
+                    {Token, Orig} = get_funname_token(Expr),
+                    case Token /= Orig of
+                        true -> ?NOTE(#modq_add_macro{expr = Expr, module = ToMod});
+                        _    -> ?NOTE(#modq_add{expr = Expr, module = ToMod})
+                    end,
                     ?NOTE(#list_add{type=export, location=ToMod,
                                     name = ?Fun:name(Referred),
                                     arity = ?Fun:arity(Referred)});
@@ -639,6 +679,107 @@ del_expimp(ListCons, Expr) ->
             ?Syn:replace(ListCons, {node, Expr}, [])
     end.
 
+handle_modq_macro(add, Expr, Module) ->
+    {Token, Orig} = get_funname_token(Expr),
+    [Subst] = ?Query:exec(Token, [llex]),
+    {Colon, Modq} = case ets:lookup(token_info, Orig) of
+        [] ->
+            [Body]  = ?Query:exec(Orig, [{llex, back}]),
+            Index   = ?Syn:index(Body, llex, Orig),
+            Colon_   = ?Syn:create_lex(':', ":"),
+            Modq_    = ?Syn:create_lex('atom', io_lib:write_atom(Module)),
+            ?ESG:insert(Body, {llex, Index}, Colon_),
+            ?ESG:insert(Body, {llex, Index}, Modq_),
+            ets:insert(token_info, #funname_tokinfo{
+                       orig=Orig, colon=Colon_, modq=Modq_}),
+            {Colon_, Modq_};
+        [#funname_tokinfo{orig=Orig,
+                      colon=Colon_,
+                      modq =Modq_}] ->
+            {Colon_, Modq_}
+    end,
+    [FunName] = ?Graph:path(Expr, ?Expr:child(1)),
+
+    InfixExpr = ?ESG:create(
+                           #expr{type=infix_expr, role=expr,
+                                 value=':', pp=none}),
+    InfixVirtTok = ?ESG:create(#lex{type=token, data=virtual}),
+    ModqExpr = ?ESG:create(
+                  #expr{type=atom, role=expr,value=Module, pp=none}),
+    ModqVirtTok  = ?ESG:create(#lex{type=token, data=virtual}),
+    Copy     = ?Syn:copy(FunName),
+    {FunName, CFunName} = lists:keyfind(FunName, 1, Copy),
+    [CFunVirtTok] = ?Query:exec(CFunName, [{elex, 1}]),
+
+% todo Why does it badmatch on the following, if `moving' is moved?
+%            %  -define(m, moving()).
+%            %  staying() -> ?m.
+%            %  moving()  -> 1.
+%    [CSubstTok]   = ?Query:exec(CFunVirtTok, [{llex, 1}]),
+%    ?Graph:delete(CSubstTok),
+
+    ?Graph:mklink(CFunVirtTok, orig, Orig),
+    ?Graph:mklink(CFunVirtTok, llex, Subst),
+
+    ?Graph:mklink(ModqVirtTok, llex, Subst),
+    ?Graph:mklink(InfixVirtTok, llex, Subst),
+    ?Graph:mklink(InfixVirtTok, orig, Colon),
+    ?Graph:mklink(ModqVirtTok, orig, Modq),
+
+    ?ESG:insert(InfixExpr, elex, InfixVirtTok),
+    ?ESG:insert(ModqExpr, elex, ModqVirtTok),
+    ?ESG:insert(InfixExpr, {esub, 1}, ModqExpr),
+    ?ESG:insert(InfixExpr, {esub, 2}, CFunName),
+    ?ESG:remove(Expr, esub, FunName),
+    ?ESG:insert(Expr, {esub, 1}, InfixExpr).
+%handle_modq_macro(upd, Expr, Module) ->
+
+
+handle_modq_macro(del, Expr) ->
+    {Token, Orig} = get_funname_token(Expr),
+    [Subst] = ?Query:exec(Token, [llex]),
+    [Modq, _ArgList] = ?Query:exec(Expr, ?Expr:children()),
+    [_ModName, FunName] = ?Query:exec(Modq, ?Expr:children()),
+    Copy     = ?Syn:copy(FunName),
+    {FunName, CFunName} = lists:keyfind(FunName, 1, Copy),
+    [CFunVirtTok] = ?Query:exec(CFunName, [{elex, 1}]),
+    [CSubstTok]   = ?Query:exec(CFunVirtTok, [{llex, 1}]),
+    ?Graph:delete(CSubstTok),
+    ?Graph:mklink(CFunVirtTok, orig, Orig),
+    ?Graph:mklink(CFunVirtTok, llex, Subst),
+
+    % if module qualifier is in the same macro body
+    % and there are no more references to them
+    % we shall delete the qualifier from the macro
+    Substs   = ?Query:exec(Modq, [esub, elex, llex]),
+    {Delete, ModqT, ColonT} = case length(Substs) of
+        1 ->
+            [Body]   = ?Query:exec(Orig, [{llex, back}]),
+            Index    = ?Syn:index(Body, llex, Orig),
+            [ModqT_] = ?Query:exec(Body, [{llex, Index-2}]),
+            [ColonT_]= ?Query:exec(Body, [{llex, Index-1}]),
+            MRefs    = ?Query:exec(ModqT_, [{orig, back}]),
+            {length(MRefs) == 1, ModqT_, ColonT_};
+        {_,_} -> {false, undef, undef}
+    end,
+
+    ?ESG:remove(Expr, esub, Modq),
+    ?ESG:insert(Expr, esub, CFunName),
+    case Delete of
+       true ->
+            ?Graph:delete(ModqT),
+            ?Graph:delete(ColonT);
+       _    -> ok
+    end.
+
+get_funname_token(Expr) ->
+    [FirstChild] = ?Query:exec(Expr, ?Expr:child(1)),
+    Query = case ?Expr:type(FirstChild) of
+        infix_expr -> [{esub, 2}, {elex, 1}];
+        _ -> [{elex, 1}] end,
+    [Token] = ?Query:exec(FirstChild, Query),
+    [Orig]    = ?Query:exec(Token, ?Token:original()),
+    {Token, Orig}.
 
 %% @doc We remove that import/export lists, which are removable: have
 %% no other referers, just the moved applications.

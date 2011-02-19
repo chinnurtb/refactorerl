@@ -24,7 +24,7 @@
 %%% @author Petra Krizsai <krizsai@inf.elte.hu>
 
 -module(cl_interface).
--vsn("$Rev: 4810 $").
+-vsn("$Rev: 5296 $").
 
 -export([run_cluster/0, run_cluster/1, run_cluster_default/0,
          run_cluster_default/1, run_cluster_labels/0, run_cluster_labels/1,
@@ -265,13 +265,13 @@ run_cluster_labels(genetic) ->
 run_cluster_alg(Output, Options) ->
     {W, C} = cl_out:open(Output),
     cl_out:fwrite(W, "Updating and loading the attribute matrix...~n"),
-    Entities = get_value(entities, Options),
+    Entities = get_value(entity_type, Options),
     Attribs =
         case Entities of
-            modules ->
+            module ->
                 cl_db:update(mod_attr),
                 cl_db:load_matrix(mod_attr, mod_attr);
-            functions ->
+            function ->
                 cl_db:update(fun_attr),
                 cl_db:load_matrix(fun_attr, fun_attr)
         end,
@@ -279,9 +279,9 @@ run_cluster_alg(Output, Options) ->
     cl_out:fwrite(W, "Filtering the attribute matrix...~n"),
     SkipEntities = 
         case Entities of
-            modules ->
+            module ->
                 skip_modules;
-            functions ->
+            function ->
                 skip_functions
         end,
 
@@ -317,10 +317,10 @@ run_cluster_alg(Output, Options) ->
             weight -> 
                 AntiGravity = get_value(anti_gravity, Options),
                 case Entities of
-                    modules ->
+                    module ->
                         cl_distfun:weight_gen(
                             cl_distfun:pow_size_fun_gen(AntiGravity));
-                    functions ->
+                    function ->
                         cl_distfun:generate_fun_common_refs(AntiGravity)
                 end;
             call_sum ->
@@ -357,9 +357,9 @@ run_cluster_alg(Output, Options) ->
                 % elegantly. 
                 TransformedAttribs2 =
                     case Entities of
-                        modules ->
+                        module ->
                             TransformedAttribs;
-                        functions ->
+                        function ->
                             set_selfusage(TransformedAttribs)
                     end,
 

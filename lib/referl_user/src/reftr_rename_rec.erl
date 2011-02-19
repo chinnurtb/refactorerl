@@ -62,41 +62,59 @@
 
 
 -module(reftr_rename_rec).
--vsn("$Rev: 4959 $"). % for emacs"
+-vsn("$Rev: 5510 $"). % for emacs"
 
 %% Callbacks
--export([prepare/1]).
+-export([prepare/1, error_text/2]).
 
 -include("user.hrl").
 
 %%% ============================================================================
 %%% Callbacks
+error_text(rec_exists, NewName) ->
+   ["Record ", io_lib:write_atom(NewName), " already exists"].
 
 %% @private
 prepare(Args) ->
-    NewName = ?Args:name(Args),
     Record  = ?Args:record(Args),
 
-    %% File  = ?Query:exec(Record, ?Rec:file()),
     Files = lists:usort(?Query:exec(Record,
                 ?Query:seq(?Rec:file(),
                            ?Query:all(?File:includes(), ?File:included())))),
     Names = [?Rec:name(Rec) || Rec <- ?Query:exec(Files,?File:records())],
-    ?Check( not lists:member(NewName, Names),
-            ?RefError(rec_exists, io_lib:write_atom(NewName))),
 
+    ArgsInfo    = ask_transformation_info(Args, Record),
+    NewName  = ?Args:ask(ArgsInfo, name, fun cc_newname/2, fun cc_error/3, Names),
+
+    NameStr = io_lib:write_atom(NewName),
     {Def, Refs} = query_rec_refs(Record),
-    ?Macro:check_macros(Refs, elex),
 
-    fun() ->
-        ?ESG:update(Def, (?ESG:data(Def))#form{tag=NewName}),
-        [ ?Macro:update_macro(Expr, {elex, 2}, io_lib:write_atom(NewName))
-          || Expr <- Refs],
-        [ ?Transform:touch(Expr) || Expr <- [Def | Refs]] 
-    end.
+    [ ?Transform:touch(Expr) || Expr <- [Def | Refs]],
+    [fun() ->
+        ?Macro:inline_single_virtuals(Refs, elex),
+        [?Macro:update_macro(Expr, {elex, 2}, NameStr) || Expr <- Refs],
+        ?ESG:update(Def, (?ESG:data(Def))#form{tag=NewName})
+    end,
+    fun(_)->
+        [Record] %@todo where did it get lost?
+    end].
+
+ask_transformation_info(Args, Record) ->
+    RecName = ?Rec:name(Record),
+    Info    = ?MISC:format("Renaming record: ~p", [RecName]),
+    [{transformation_text, Info} | Args].
 
 %%% ============================================================================
 %%% Implementation
+
+cc_newname(NewName, Names) ->
+    ?Check( not lists:member(NewName, Names),
+            ?LocalError(rec_exists, NewName)),
+    NewName.
+
+cc_error(?LocalError(rec_exists, NewName), NewName, _Names) ->
+    ?MISC:format("The given record name (~p) is already used!",
+                 [NewName]).
 
 query_rec_refs(Record) ->
     [InDefs] = ?Query:exec(Record, ?Rec:form()),

@@ -55,7 +55,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_esg).
--vsn("$Rev: 4814 $").
+-vsn("$Rev: 5503 $").
 -behaviour(gen_server).
 
 
@@ -78,9 +78,11 @@
 -include("refcore_schema.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
 
+-define(ESG_TIMEOUT, infinity).
+
 %% TODO: timeout
 -define(Call(Req, Args),
-        case gen_server:call(?ESG_SERVER, {Req, Args}, 10000) of
+        case gen_server:call(?ESG_SERVER, {Req, Args}, ?ESG_TIMEOUT) of
             ok                  -> ok;
             {ok, Reply}         -> Reply;
             {error, Error}      -> erlang:error(Error, Args);
@@ -191,24 +193,17 @@ init(_) ->
     {Schema, State} = init_state(),
     case ?Graph:schema(Schema) of
         init ->
-            EnvConfFile = "refactorerl.emacs.configuration",
-            Envs =
-                case filelib:is_file(EnvConfFile) of
-                    true ->
-                        {ok, [Envs2]} = file:consult(EnvConfFile),
-                        Envs2;
-                    false ->
-                        [#env{name=appbase, value=code:lib_dir()},
-                         #env{name=output, value=original}]
-                end,
-            [?Graph:mklink(?Graph:root(), env, ?Graph:create(Env)) || Env <- Envs],
             {ok, State};
         match ->
             {ok, State};
         mismatch ->
-            %% {stop, schema_mismatch}
-            %% not stopping is dangerous, but makes development easier
-            {ok, schema_mismatch}
+            case ?autoreset_schema of
+                true ->
+                    %% not stopping is dangerous, but makes development easier
+                    {ok, schema_mismatch};
+                false ->
+                    {stop, schema_mismatch}
+            end
     end.
 
 %% @private
@@ -467,7 +462,7 @@ clear_semqry(Id, #state{semqry=SemQ}=St) when is_list(SemQ) ->
 -spec execute(any(), #state{}) -> {ok, _, #state{}} | wait.
 
 execute({create, [_]}=Req, #state{}=St) ->
-    case enabled(off_tree, St) of
+    case is_enabled(off_tree, St) of
         false -> wait;
         true -> exec_anal(off_tree, Req, St)
     end;
@@ -475,7 +470,7 @@ execute({create, [_]}=Req, #state{}=St) ->
 execute({Fun, [Node | _]}=Req, #state{semqry=SemQ}=St)
   when Fun == insert; Fun == remove; Fun == update ->
     Top = top_node(Node, St),
-    case enabled(Top, off_tree, St) of
+    case is_enabled(Top, off_tree, St) of
         true when Top == off_tree; SemQ == disabled; SemQ == [] ->
             exec_anal(Top, Req, St);
         true  -> wait;
@@ -506,7 +501,7 @@ execute({finalize, []}, #state{semqry=Q}=St) ->
 
 execute({reserve, [Top, Args]}, #state{}=St) ->
     start_anal(Top, Args, St),
-    case enabled(Top, St) of
+    case is_enabled(Top, St) of
         true  -> {ok, {ok, reserve_anal(Top, St)}, St};
         false -> wait
     end.
@@ -551,23 +546,25 @@ req_funs({create, [Data]}) ->
      fun(Top, Node, St) -> dispatch_create(Top, Node, Data, St) end}.
 
 
-enabled(First, Second, St) ->
-    enabled(First, St) andalso (First =:= Second orelse enabled(Second, St)).
+is_enabled(First, Second, St) ->
+    is_enabled(First, St) andalso (First =:= Second orelse is_enabled(Second, St)).
 
 %% Finalize all analysers
 dispatch_final(#state{}=St) ->
-    case anal_states(St) of
-        {[], []} ->
-            ?NodeSync:clean(),
-            finish;
-        {[off_tree], []} ->
-            dispatch_finalize(off_tree, St),
-            wait;
-        {Lst, []} ->
-            lists:foreach(
-              fun(Top) -> dispatch_finalize(Top, St) end,
-              Lst -- [off_tree]),
-            wait;
+    {Frees, Busys} = anal_states(St),
+    case Busys of
+        [] ->
+            case Frees of
+                [] ->
+                    ?NodeSync:clean(),
+                    finish;
+                [off_tree] ->
+                    dispatch_finalize(off_tree, St),
+                    wait;
+                Lst ->
+                    [dispatch_finalize(Top, St) || Top <- Lst, Top =/= off_tree],
+                    wait
+            end;
         _ ->
             wait
     end.
@@ -649,55 +646,71 @@ start_anal(Top, Args, #state{anals=Anals}) ->
             Anal
     end.
 
+new_anal(Anals, Where, Params) ->
+    TP = ?Anal:start([{top, Where}, {mods, Params}]),
+    erlang:monitor(process, TP),
+    T = #anal{top=Where, pid=TP},
+    ets:insert(Anals, [T]),
+    T.
+
 find_anal(Top, #state{mod=Mod, anals=Anals}) ->
     case ets:lookup(Anals, Top) of
         [Anal] -> Anal;
         [] ->
             Root = ?Graph:root(),
 
-            OTP = ?Anal:start([{top,  off_tree}, {mods, []}]),
-            RTP = ?Anal:start([{top,  Root},     {mods, [Mod]}]),
+            case ets:lookup(Anals, off_tree) of
+                [OT] -> OT;
+                []   -> OT = new_anal(Anals, off_tree, [])
+            end,
+            RT = new_anal(Anals, Root,     [Mod]),
 
-            erlang:monitor(process, OTP),
-            erlang:monitor(process, RTP),
-
-            OT = #anal{top=off_tree, pid=OTP},
-            RT = #anal{top=Root,     pid=RTP},
-            ets:insert(Anals, [OT, RT]),
-
-            if
-                Top == off_tree -> OT;
-                true            -> RT
+            case Top of
+                off_tree -> OT;
+                _        -> RT
             end
     end.
 
 handle_anal_report(reg, Pid, Top, #state{anals=Anals}=St) ->
-    case ets:lookup(Anals, Top) of
-        [#anal{pid=Pid}=Anal] ->
-            ets:insert(Anals, Anal#anal{free=true});
-        [#anal{pid=killed}=Anal] ->
-            ets:insert(Anals, Anal#anal{pid=Pid, free=true})
-    end,
+    free_top_anal(Anals, Pid, Top),
     St;
 handle_anal_report(clear, Pid, Top, #state{anals=Anals, toptmp=Tops}=St) ->
-    [#anal{pid=Pid, free=false}=Anal] = ets:lookup(Anals, Top),
-    ets:insert(Anals, Anal#anal{free=true}),
-    DTQ = ets:fun2ms(fun({_,T}) when T == Top -> true end),
-    ets:select_delete(Tops, DTQ),
+    remove_top(Tops, Top),
+    ?Anal:finalize({Pid, St}),
+    remove_top_anal(Anals, Top),
     St.
 
 handle_anal_down(Pid, Info, #state{anals=Anals, toptmp=Tops}=St) ->
-    DPQ = ets:fun2ms(fun(#anal{pid=P}=A) when Pid =:= P -> A end),
-    [#anal{top=Top} = Anal] = ets:select(Anals, DPQ),
-    if
-        Info == normal -> ets:delete(Anals, Top);
-        true -> ets:insert(Anals, Anal#anal{pid=killed, free=false})
+    #anal{top=Top} = Anal = get_anal_top(Anals, Pid),
+    case Info of
+        normal -> ets:delete(Anals, Top);
+        _      -> ets:insert(Anals, Anal#anal{pid=killed, free=false})
     end,
-    DTQ = ets:fun2ms(fun({_,T}) when T == Top -> true end),
-    ets:select_delete(Tops, DTQ),
+    remove_top(Tops, Top),
     St.
 
-enabled(Top, #state{}=St) ->
+%% Returns the analyser.
+get_anal_top(Anals, Pid) ->
+    DPQ = ets:fun2ms(fun(#anal{pid=P} = A) when Pid =:= P -> A end),
+    [Anal] = ets:select(Anals, DPQ),
+    Anal.
+
+
+%% Sets the `Top' analyser's pid to `Pid' and frees it.
+free_top_anal(Anals, Pid, Top) ->
+    [Anal] = ets:lookup(Anals, Top),
+    ets:insert(Anals, Anal#anal{pid=Pid, free=true}).
+
+remove_top_anal(Anals, Top) ->
+    [Anal] = ets:lookup(Anals, Top),
+    ets:delete(Anals, Anal).
+
+%% Removes `Top' from the set of `Tops'.
+remove_top(Tops, Top) ->
+    DTQ = ets:fun2ms(fun({_,T}) when T == Top -> true end),
+    ets:select_delete(Tops, DTQ).
+
+is_enabled(Top, #state{}=St) ->
     #anal{free=Free} = find_anal(Top, St),
     Free.
 

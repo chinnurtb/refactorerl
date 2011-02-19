@@ -21,20 +21,25 @@
 %%% macros. Macros are represented with the form that defines them.
 
 -module(reflib_macro).
--vsn("$Rev: 4957 $ ").
+-vsn("$Rev: 5455 $ ").
 
 %% =============================================================================
 %% Exports
 
 %% Properties
 -export([name/1]).
--export([refs/1, check/1]).
+-export([refs/1, has_single_role/1]).
 
 %% Queries
--export([file/0, find/1, macros/0, records/0, references/0]).
+-export([file/0, find/1, macros/0, records/0, references/0, virtual_macro/0]).
 -include("lib.hrl").
 
--export([check_macros/1, check_macros/2, update_macro/3, usages/1]).
+-export([check_single_usage/1, check_single_usage/2, usages/1]).
+-export([update_macro/3, update_virtual_token/2]).
+-export([is_virtual/2]).
+-export([macro_contains_funapp/1]).
+-export([inline_single_virtuals/2]).
+
 
 %% =============================================================================
 %% Properties
@@ -78,6 +83,12 @@ records() ->
                             || Subst <- Substs])
     end.
 
+%% @spec virtual_macro() -> query(#token{}, #form{})
+%% @doc The result query returns the macro form, the parameter virtual token's
+%% origin belongs to.
+virtual_macro() ->
+    [{llex}, {mref}].
+
 %% @spec references() -> query(#form{}, #form{})
 %% @doc The result query returns all macros that are using the argument macro.
 references() ->
@@ -112,169 +123,252 @@ substs_recur(Subst, Direction) ->
         _ ->  lists:flatten(News ++ [substs_recur(M, Direction) || M <- News])
     end.
 
-%% @spec check([node()]) -> bool()
-%% @doc checks a list of virtual tokens if the macro they are originated
+%% @spec has_single_role([node()]) -> bool()
+%% @doc Checks a list of virtual tokens if the macro they are originated
 %% from is used in the same role in every substitution
-%% @TODO better name
-check([Virtual | Virtuals]) ->
+has_single_role(Virtuals) when is_list(Virtuals) ->
+    lists:all(fun(V) -> has_single_role(V) end, Virtuals);
+has_single_role(Virtual) ->
     [Token] = ?Query:exec(Virtual, [orig]),
     Usages = (lists:usort(usages({?Token:type(Token), Token}))),
-    case length(Usages) of
-        1 -> check(Virtuals);
-        _ -> false
-    end;
-check([]) -> true.
+    length(Usages) == 1.
 
 %% @spec usages({atom, node()}) -> [node()]
-%% @doc returns the list of semantic nodes the given Token associated with
+%% @doc Returns the list of semantic nodes `Token' is associated with.
+%%      If it is unidentifiable, `Token' itself is returned.
 %% @TODO the rest of the possible token types, better name
 usages({TokenType, Token}) ->
-    if 
-        (TokenType == '(' orelse TokenType == ')') ->
-                                                   Type = parenthesis;
-        true                                       -> 
-                                                   Type = TokenType
+    if
+        (TokenType == '(' orelse TokenType == ')') -> Type = parenthesis;
+        true                                       -> Type = TokenType
     end,
     Virtuals = ?Query:exec(Token, [{orig, back}]),
     GetNode = fun(Virtual) ->
-         [Node] = ?Query:exec(Virtual, ?Query:any([
-                           [{elex, back}], [{flex, back}],
-                           [{clex, back}], [{tlex, back}]
-                  ])),
-         Tag = case ?ESG:data(Node) of
-              #form{}   -> flex;
-              #clause{} -> clex;
-              #expr{}   -> elex;
-              #typexp{} -> tlex
-         end,
-         usages(Type, Node, {Tag, ?ESG:index(Node, Tag, Virtual)})
-    end,
+                    [Node] = ?Query:exec(Virtual, ?Query:any([
+                                      [{elex, back}], [{flex, back}],
+                                      [{clex, back}], [{tlex, back}]
+                             ])),
+                    Tag = case ?ESG:data(Node) of
+                               #form{}   -> flex;
+                               #clause{} -> clex;
+                               #expr{}   -> elex;
+                               #typexp{} -> tlex
+                          end,
+                    usages(Type, Node, {Tag, ?ESG:index(Node, Tag, Virtual)})
+               end,
     Res = [GetNode(V) || V <- Virtuals],
 
-   % Exprs = ?Query:exec(Virtuals, [{elex, back}]),
-   % Erefs = [usages(Type, Expr, elex) || Expr <- Exprs],
-
-   % Texprs = ?Query:exec(Virtuals, [{tlex, back}]),
-   % Trefs = [usages(Type, Texpr, tlex) || Texpr <- Texprs],
-
-   % Forms = ?Query:exec(Virtuals, [{flex, back}]),
-   % Frefs = [usages(Type, Fexpr, flex) || Fexpr <- Forms],
-   % Res = Erefs ++ Trefs ++ Frefs,
     lists:map(fun([])-> [Token]; (X) -> X end, Res);
 usages(X) -> [X].
 
 usages(atom, Expr, {Link, _}) ->
-     case Link of
-          elex ->
-                 ?Query:exec(Expr, ?Query:any([
-                         ?Expr:module(),
-                         [{name, back}, {funcl, back}, fundef], %% function def   -- elex
-                         [{esub, back}, funlref], %% function application or impl fun expr  -- elex
-                         [{esub, back}, {esub, back}, funeref], %% function application with module qualifier -- elex
-                         [{esub, back}, {esub, back}, funlref], %% function application with module qualifier -- elex
-                         ?Expr:record(),
-                         ?Expr:field()
-                 ]));
-          tlex ->
-                 ?Query:exec(Expr, [fielddef]);
-          flex ->
-                 ?Query:exec(Expr, ?Query:any([
-                         [{form, back}, moddef],  %% module def    -- flex
-                         [recdef] %% record def -- flex
-                 ]))
-     end;
-usages(variable, Expr, {elex, _}) ->
+    case Link of
+        elex ->
             ?Query:exec(Expr, ?Query:any([
-                         [varbind],
-                         [varref]
-                      ])
-            );
+                ?Expr:module(),
+                [{name, back}, {funcl, back}, fundef], %% function def   -- elex
+                [{esub, back}, funlref], %% function application or impl fun expr  -- elex
+                [{esub, back}, {esub, back}, funeref], %% function application with module qualifier -- elex
+                [{esub, back}, {esub, back}, funlref], %% function application with module qualifier -- elex
+                ?Expr:record(),
+                ?Expr:field()
+            ]));
+        tlex ->
+              ?Query:exec(Expr, [fielddef]);
+        flex ->
+              ?Query:exec(Expr, ?Query:any([
+                    [{form, back}, moddef],  %% module def    -- flex
+                    [recdef] %% record def -- flex
+              ]))
+    end;
+usages(variable, Expr, {elex, _}) ->
+          ?Query:exec(Expr, ?Query:any([
+                    [varbind],
+                    [varref]
+                  ])
+          );
+usages(integer, Expr, {elex, _}) ->
+          ?Query:exec(Expr, ?Query:any([
+                    [{esub, back}, funlref],
+                    [{esub, back}, funeref]
+                  ])
+          );
 usages(parenthesis, Expr, {Link, _}) ->
-     case Link of
-          elex ->
-                 ?Query:exec(Expr, ?Query:any([
-                         [{esub, back}, funlref],
-                         [{esub, back}, funeref],
-                         []
-                 ]));
-          clex ->
-                 ?Query:exec(Expr, ?Query:seq(?Clause:form(), ?Form:func()));
-          flex ->
-                 case ?Form:type(Expr) of
-                      module ->
-                               ?Query:exec(Expr, ?Form:module());
-                      record ->
-                               ?Query:exec(Expr, ?Form:record());
-                      _      -> Expr
-                 end
-     end;
+    case Link of
+        elex ->
+              ?Query:exec(Expr, ?Query:any([
+                    [{esub, back}, funlref],
+                    [{esub, back}, funeref],
+                    []
+              ]));
+        clex ->
+              ?Query:exec(Expr, ?Query:seq(?Clause:form(), ?Form:func()));
+        flex ->
+              case ?Form:type(Expr) of
+                  module ->
+                         ?Query:exec(Expr, ?Form:module());
+                  record ->
+                         ?Query:exec(Expr, ?Form:record());
+                  _     -> Expr
+              end
+    end;
 usages(',', Expr, {LinkTag, Index}) ->
-     Res = case LinkTag of
-          elex ->
-                 ?Query:exec(Expr, ?Query:any([
-                         [{esub, back}, funlref],
-                         [{esub, back}, funeref],
-                         [{esub, back}, recref],
-                         []
-                 ]));
-          clex ->
-                 ?Query:exec(Expr, ?Query:any([
-                         ?Query:seq(?Clause:form(), ?Form:func()),
-                         []
-                 ]));
-          flex ->
-                 ?Query:exec(Expr, ?Query:any([
-                         [recdef],
-                         []
-                 ]))
-              end,
-     case Res of
-          [] ->     [{Expr, Index}];
-          [Node] -> [{Node, Index}]
-     end;
-usages(_, Expr, _) -> [Expr].
+    Res = case LinkTag of
+                elex ->
+                      ?Query:exec(Expr, ?Query:any([
+                            [{esub, back}, funlref],
+                            [{esub, back}, funeref],
+                            [{esub, back}, recref],
+                            []
+                      ]));
+                clex ->
+                      ?Query:exec(Expr, ?Query:any([
+                            ?Query:seq(?Clause:form(), ?Form:func()),
+                            []
+                      ]));
+                flex ->
+                      ?Query:exec(Expr, ?Query:any([
+                            [recdef],
+                            []
+                      ]))
+            end,
+    case Res of
+        [] ->    [{Expr, Index}];
+        [Node] -> [{Node, Index}]
+    end;
+%usages(_, Expr, _) -> [Expr].
+usages(_, _, _) -> [].
 
 %% @spec refs(node()) -> [[node()]]
 %% @doc Return every expression came from expanding the macro
 refs(Macro) ->
     Substs = ?Query:exec(Macro, [{mref, back}]),
-    F = fun(Subst) -> ?Query:exec(Subst, ?Query:seq([{llex, back}], 
+    F = fun(Subst) -> ?Query:exec(Subst, ?Query:seq([{llex, back}],
                                 ?Query:any([[{elex, back}], [{clex, back}],
                                             [{flex, back}], [{tlex, bacl}]])))
         end,
     [F(X) || X <- Substs].
 
-check_macros(Updates, Path) ->
-    Virtuals = [Token || 
-           Token <- lists:concat([?Query:exec(Exp, [Path]) || Exp <- Updates]),
-           (?Graph:data(Token))#lex.data == virtual],
-    ?Check(?Macro:check(Virtuals), ?RefError(mac_error, [])).
 
-check_macros(Updates) ->
+check_single_usage(Updates, Path) ->
+    check_single_usage([{Updates, Path}]).
 
-    Virts = fun(ExpList, Path) -> 
-            [Token || Token <- lists:concat([?Query:exec(Exp, [Path]) || Exp <- ExpList]),
-                                                (?Graph:data(Token))#lex.data == virtual]
-        end,
-    Virtuals = lists:concat([Virts(ExpList, Path) || {ExpList, Path} <- Updates]),
+%% Throws `mac_error' if one of the updates (expression list-path pairs)
+%% contain macros whose virtual tokens have different roles.
+check_single_usage(Updates) ->
+    Virtuals = [Token   ||  {ExpList, Path} <- Updates,
+                            Token <- ?Query:exec(ExpList, Path),
+                            (?Graph:data(Token))#lex.data == virtual],
+    ?Check(has_single_role(Virtuals), ?RefError(mac_error, Virtuals)).
 
-%    Virtuals = [Token || 
-%           Token <- lists:concat([?Query:exec(Exp, [Path]) || {Exp, Path} <- Updates]),
-%           (?Graph:data(Token))#lex.data == virtual],
-    ?Check(?Macro:check(Virtuals), ?RefError(mac_error, [])).
-
-update_macro(Node, Path, NewName) ->
+is_virtual(Node, Path) ->
     [Token] = ?Query:exec(Node, [Path]),
-    case (?Graph:data(Token))#lex.data of
-          virtual ->
-                N = hd(?Query:exec(Node, [Path, orig])),
-                New = [NewName],
-                ND=#lex{data=NND} = ?ESG:data(N),
-                NewNode = ND#lex{data=NND#token{value=New,text=New}},
-                ?ESG:update(N, NewNode),
-                [F] = ?Query:exec(N, [{llex, back}, {flex, back}]),
-                ?Transform:touch(F);
-          _       ->
-                ?Syn:replace(Node, Path, [NewName]),
-                ?Transform:touch(Node)
+    case ?Graph:data(Token) of
+        #lex{data=virtual} -> true;
+        _                  -> false
     end.
+
+
+%% `NewName' :: string(), `Path' :: {atom(), integer()} | atom()
+%% If the token on the specified path is non-preproc, simply replaces it.
+%% If the token comes from a macro substitution, see `update_virtual_token'.
+update_macro(Node, Path, NewName) ->
+    case ?Query:exec(Node, [Path]) of
+        [Token] ->
+            case ?Graph:data(Token) of
+                #lex{data=virtual} ->
+                    case Path of
+                        {Lex, _Idx} -> ok;
+                        Lex when is_atom(Lex) -> ok
+                    end,
+                    update_virtual_token(Token, NewName),
+                    update_expr(Token, NewName, Lex),
+                    ?Transform:touch(Token);
+                _ ->
+                    ?Syn:replace(Node, Path, [NewName]),
+                    ?Transform:touch(Node)
+            end;
+        _ ->
+            ok
+    end.
+
+%% Updates the expression that is built upon the virtual token.
+%% todo There may be other types of ESG nodes that require a textual
+%%      value instead of an atomic one.
+update_expr(Token, NewNameStr, Lex) ->
+    [Expr]                  = ?Query:exec(Token, [{Lex, back}]),
+    Data = ?ESG:data(Expr),
+    case Data of
+        #expr{type=Type} ->
+            Value =
+                case Type of
+                    variable -> NewNameStr;
+                    _        -> list_to_atom(NewNameStr)
+                end,
+            ?ESG:update(Expr, Data#expr{value=Value});
+        #typexp{} ->
+            ?ESG:update(Expr, Data#typexp{tag=list_to_atom(NewNameStr)})
+    end.
+
+
+%% Updates the token that originates the virtual one.
+update_virtual_token(Virtual, NewValue) ->
+    [N]               = ?Query:exec(Virtual, [orig]),
+    New               = [NewValue],
+    ND=#lex{data=NND} = ?ESG:data(N),
+    NewNode           = ND#lex{data=NND#token{value=New,text=New}},
+    ?ESG:update(N, NewNode),
+    [F] = ?Query:exec(N, [{llex, back}, {flex, back}]),
+    ?Transform:touch(F).
+
+%% @spec macro_contains_funapp(node()) -> [token()]
+%% @doc Retuns the list of function application name virtual tokens
+%% that come from applications of the function `FunNode'.
+macro_contains_funapp(FunNode) ->
+    FunApps = ?Query:exec(FunNode, ?Fun:applications()),
+    [Token ||
+       [Token] <- [?Query:exec(AppNode, [{esub, 1}, {elex, 1}]) ||
+                     AppNode <- FunApps],
+       (?Graph:data(Token))#lex.data == virtual].
+
+
+
+%% Inlines those expressions that come from a macro substitution
+%% and comprise exactly one token.
+inline_single_virtuals(Exprs, Link) ->
+    [inline_single_virtual(Expr, Link)
+            ||  Expr <- Exprs,
+                expr_should_be_inlined(Expr, Link)].
+
+expr_should_be_inlined(Expr, Link) ->
+    Virtuals = [Token   ||  Token <- ?Query:exec(Expr, [Link]),
+                            (?Graph:data(Token))#lex.data == virtual],
+    not has_single_role(Virtuals).
+
+
+%% Inlines a substitution that produces exactly one virtual token.
+inline_single_virtual(Parent, Lex) ->
+    case [TIdx || TIdx = {Token, _} <- ?MISC:index_list(?Graph:path(Parent, [Lex])),
+                  #lex{data=virtual} <- [?Graph:data(Token)]] of
+        [{Token, Idx}] ->
+            inline_single_virtual(Parent, Token, Idx, Lex);
+        _ ->
+            ok
+    end.
+
+inline_single_virtual(Parent, Token, Idx, Lex) ->
+    [Orig]  = get_path_and_rmlink(Token, orig),
+    [Subst] = get_path_and_rmlink(Token, llex),
+    _       = get_path_and_rmlink(Subst, mref),
+    SubstLs = get_path_and_rmlink(Subst, llex),
+    Data    = ?Graph:data(Orig),
+    NewT    = ?Graph:create(Data),
+    [?Graph:delete(SubstL) || SubstL <- SubstLs],
+    ?Graph:delete(Subst),
+    ?Graph:rmlink(Parent, Lex, Token),
+    ?Graph:mklink(Parent, {Lex, Idx}, NewT).
+
+get_path_and_rmlink(Node, Link) ->
+    Nodes = ?Graph:path(Node, [Link]),
+    [?Graph:rmlink(Node, Link, ToNode) || ToNode <- Nodes],
+    Nodes.

@@ -56,7 +56,7 @@
 %%%      reporting
 
 -module(refcore_preproc).
--vsn("$Rev: 4980 $ ").
+-vsn("$Rev: 5262 $ ").
 
 -export([preprocess/2, preprocess/3, detach/2]).
 
@@ -430,6 +430,20 @@ subs_arg(Name, Node, [], _) ->
 macro_name(Atom) when is_atom(Atom) -> atom_to_list(Atom);
 macro_name(Str)  when is_list(Str)  -> Str.
 
+%% Returns the canonical name of the file, which does not contain ".."
+%% in the path. Should work for both Unix and Windows (and mixed) style paths.
+canonical_name(Filename) ->
+    case elim_up_dir(elim_up_dir(Filename, "\\\\"), "/") of
+        Filename -> Filename;
+        Shorter  -> canonical_name(Shorter)
+    end.
+
+%% Eliminates a "/dir/../" section from the path.
+%% `Sep' is the path separator, which has to expand to one regexp character.
+elim_up_dir(Filename, Sep) ->
+    re:replace(Filename,
+               "[^" ++ Sep ++ "]+" ++ Sep ++ "[.][.]" ++ Sep ++ "?", "",
+               [{return, list}]).
 
 %% Looks for the first existing include file in the list of include
 %% directories.
@@ -447,7 +461,7 @@ find_include(include, Name, FileNode) ->
             case [Filename ||   Dir      <- [Base | Dirs],
                                 Filename <- [filename:join(Dir, RealName)],
                                 filelib:is_file(Filename)] of
-                [Filename|_] -> Filename;
+                [Filename|_] -> canonical_name(Filename);
                 []       ->
                     error_logger:warning_msg("Include file not found: ~s~n",
                                              [Name]),
@@ -464,7 +478,7 @@ find_include(include_lib, Name, _) ->
             {BaseName, [$/ | Dir]} =
                 lists:splitwith(fun (Ch) -> Ch /= $/ end, Name),
             case app_files(AppBases, BaseName, Dir) of
-                [Filename|_] -> Filename;
+                [Filename|_] -> canonical_name(Filename);
                 []           ->
                     error_logger:warning_msg("Include lib not found: ~s~n",
                                              [Name]),

@@ -26,7 +26,7 @@
 %%% @author Csaba Imre Zempleni <zecoaat@inf.elte.hu>
 
 -module(reftr_move).
--vsn("$Rev$").
+-vsn("$Rev$ ").
 
 %% Callbacks
 -include("user.hrl").
@@ -40,28 +40,29 @@
 prepare(Args) ->
     try try_functions(Args)
     catch
-	?Return(Fun) -> Fun
+        ?Return(Fun) -> Fun
     end.
 
 try_functions(Args) ->
     try_type(function, Args),
     try_type(macro, Args),
     try_type(record, Args),
-    
+
     throw(?RefErr0r(bad_kind)).
 
 try_type(Type, Args) ->
     try ?Args:Type(Args) of
-	Node ->
-	    NewArgs = transform_args(Type, Node, Args),
-	    Fun = call_type(Type, NewArgs),
-	    throw(?Return(Fun))
+        Node ->
+            NewArgs = transform_args(Type, Node, Args) ++
+                      [{ask_missing , proplists:get_value(ask_missing, Args)}],
+            Fun = call_type(Type, NewArgs),
+            throw(?Return(Fun))
     catch
-	?RefError(_ThrowType, _ThrowArgs) -> 
-	    skip
+        ?RefError(_ThrowType, _ThrowArgs) ->
+            skip
     end.
 
-transform_args(function, Node, Args) -> 
+transform_args(function, Node, Args) ->
     {_, {_Mod, Fun, Arity}} = ?Fun:mod_fun_arity(Node),
     Str = ?Args:string(Args),
     File = file(Args),

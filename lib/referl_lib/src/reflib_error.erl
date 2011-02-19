@@ -47,7 +47,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(reflib_error).
--vsn("$Rev: 4883 $").
+-vsn("$Rev: 5455 $").
 
 -include("lib.hrl").
 
@@ -63,9 +63,14 @@
 %% @spec error_text(error()) -> String
 %%       String = [char() | String]
 %% @doc Returns a textual description of the error term.
-error_text({?MODULE, Type, Detail}) ->
+error_text(X) ->
+    lists:flatten(error_text_(X)).
+
+error_text_({_ErrorInfo, Text}) ->
+    Text;
+error_text_({?MODULE, Type, Detail}) ->
     ?MISC:to_list(error_text(Type, Detail));
-error_text({Mod, Type, Detail}) ->
+error_text_({Mod, Type, Detail}) ->
     try
         case Mod:error_text(Type, Detail) of
             unknown -> unknown_error_text(Mod, Type, Detail);
@@ -90,10 +95,18 @@ unknown_error_text(Mod, Type, Detail) ->
 %error_text(lex_not_found, [_Path, _Pos]) ->
 %    ["There is no lexical element in the given position"];
 
+error_text(no_elim_var, _) ->
+    "There is no variable in this module which can be eliminated.";
+error_text(no_macuse, _) ->
+    "There is no macro usage in this module.";
+error_text(no_moduse, _) ->
+    "There is no imported function usage in this module.";
+error_text(no_fun, _) ->
+    "There is no function defined in this module.";
 error_text(source_and_target_equals, _) ->
     "The target module should not be the same as the source module";
 error_text(module_macro_found, _) ->
-	"Source contains a ?MODULE qualifier and it isn't supported yet.";
+    "Source contains a ?MODULE qualifier and it isn't supported yet.";
 error_text(target_not_found, _) ->
     "Target module not found";
 error_text(source_not_found, _) ->
@@ -221,8 +234,13 @@ error_text(m_bad_filter, [Filter])->
     ["Bad filter: ",?MISC:format("~p", [Filter])];
 error_text(sq_metric_error, [Err])->
     ["Error in metric property: ",?MISC:format("~p", [Err])];
-error_text(mac_error, [])->
+error_text(mac_error, _Virtuals)->
+    % todo Use `Virtuals' to provide more information about the ambiguity.
     ["The transformation is denied because of an ambiguous macro substitution"];
+error_text(list_to_integer_error, [String])->
+    ["Cannot convert string to integer: ",String];
+error_text(ip_format_error, [IP])->
+    ["This string is not in a valid IP format: ",IP];
 error_text(ErrType, ErrParams) ->
     ["Unknown error: {",
      io_lib:print(ErrType), ", ", io_lib:print(ErrParams), "}"].

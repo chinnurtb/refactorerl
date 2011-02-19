@@ -78,7 +78,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(refcore_anal).
--vsn("$Rev: 4466 $").                           % this makes emacs happy: "
+-vsn("$Rev: 5277 $").                           % this makes emacs happy: "
 -behaviour(gen_server).
 
 -export([start/1, insert/5, remove/5, update/3, create/3,
@@ -94,6 +94,8 @@
 -include("core.hrl").
 
 -opaque gnode() :: tuple().
+
+-define(CALL_TIMEOUT, infinity).
 
 %%% ============================================================================
 %%% Server interface functions
@@ -139,7 +141,7 @@ finalize(Anal) ->
     cast(Anal, finalize).
 
 cast({Pid, Clear}, Req) -> gen_server:cast(Pid, {Req, Clear}).
-call({Pid, Clear}, Req) -> gen_server:call(Pid, {Req, Clear}).
+call({Pid, Clear}, Req) -> gen_server:call(Pid, {Req, Clear}, ?CALL_TIMEOUT).
 
 
 %% @private

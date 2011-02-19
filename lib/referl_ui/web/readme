@@ -1,0 +1,35 @@
+Web interface for semantic query language.
+
+Uses yaws webserver: http://yaws.hyber.org/yaws.pdf -> installation
+After installation
+ - add to your yaws.conf file:
+    <server localhost>
+        servername = myserver
+        port = 8001
+        listen = 0.0.0.0
+        docroot = .../refactorerl/tool/lib/referl_ui/web
+    </server>
+
+Recommended browser: Mozilla Firefox
+
+1. start Refactorerl tool
+2. start yaws server with "ri:start_yaws()" (it is also initialize needed data tables)
+3. start a browser
+4. execute queries in your browser
+5. stop yaws server with "ri:stop_yaws"
+
+Funkcionalities
+- login with a simple username
+- execute queries with "mods" or "files" initial selector
+- select a previous query (it executes again if the referl database changed, otherwise show the previous result)
+- show queries have been executed by yourselves last time, or you can see all previous queries
+- show the source code of the result entities
+
+Todo-s
+- login with password
+- enable queries with "@..." initial selector with the help of the file and position selector
+- expression editor
+- ebable deleting previous queries
+- make compatible with other browsers
+- refactor the code (especially namings)
+

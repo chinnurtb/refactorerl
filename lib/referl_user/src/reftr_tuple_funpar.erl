@@ -85,7 +85,7 @@
 %%% @author Kornél Horváth <kornel@inf.elte.hu>
 
 -module(reftr_tuple_funpar).
--vsn("$Rev: 4763 $"). % for emacs"
+-vsn("$Rev: 5455 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1, error_text/2]).
@@ -159,11 +159,16 @@ prepare(Args) ->
     end,
 
     FunDefs = ?Query:exec(Fun, ?Query:seq([?Fun:definition(),?Form:clauses()])),
+    ?Check(not is_from_mac_subst(FunDefs), ?RefErr0r(mac_error)),
+
     Impls   = ?Query:exec(Fun, ?Fun:implicits()),
     {_Links, ImplParents} = lists:unzip(lists:flatten([?Syn:parent(Impl)
                                                             || Impl <- Impls])),
-    FunImpExpsWArityNode  = fun_impexps(OrigArity, NewArity, Fun),
-    {FunImpExps, _}       = lists:unzip(FunImpExpsWArityNode),
+    FunImpExpsWArityNode     = fun_impexps(OrigArity, NewArity, Fun),
+    {FunImpExps, ArityNodes} = lists:unzip(FunImpExpsWArityNode),
+    ?Macro:check_single_usage([{ArityNodes, [elex]}]),
+
+    DynFunCalls = ?Dynfun:collect(tuple, Fun, {Idx1, IdxLen}),
 
     [fun() ->
         ?Expr:expand_funexpr(Impls)
@@ -185,17 +190,34 @@ prepare(Args) ->
         [change_impexp_arity(ImpExp, OldArityNode, NewArity)
             || {ImpExp, OldArityNode} <- FunImpExpsWArityNode],
         [?Transform:touch(Node) || Node <- FunDefs ++ ImplParents ++ Apps ++ FunImpExps]
-    end].
+     end,
+     fun(_) ->
+	     ?Dynfun:transform(DynFunCalls)
+     end].
 
 %%% ============================================================================
 %%% Implementation
+
+%% Returns whether there is a function definition clause which comes (partly or wholly)
+%% from a macro substitution.
+%% More exactly, this function checks for tokens of the clause
+is_from_mac_subst(Clauses) when is_list(Clauses) ->
+    lists:any(fun(Clause) -> is_from_mac_subst(Clause) end, Clauses);
+is_from_mac_subst(Clause) ->
+    [] =/= [Token || Token <- ?ESG:path(Clause, [clex]), ?Syn:is_virtual(Token)].
 
 
 make_tuple_in_fundef(FunDef, Idx1, IdxLen) ->
     ?Syn:replace(FunDef, {pattern, Idx1, IdxLen}, tuple_replacer()).
 
 change_impexp_arity(ImpExp, OldArityNode, NewArity) ->
-    ?Syn:replace(ImpExp, {node, OldArityNode}, [new_arity_node(NewArity)]).
+    [Token] = ?Query:exec(OldArityNode, [elex]),
+    case ?Token:is_virtual(Token) of
+        true ->
+            ?Macro:update_virtual_token(Token, integer_to_list(NewArity));
+        _    ->
+            ?Syn:replace(ImpExp, {node, OldArityNode}, [new_arity_node(NewArity)])
+    end.
 
 make_tuple_in_application(App, Idx1, IdxLen) ->
     [ArgList] = ?Query:exec(App, ?Expr:child(2)),

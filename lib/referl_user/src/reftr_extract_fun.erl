@@ -88,14 +88,12 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(reftr_extract_fun).
--vsn("$Rev: 5063 $"). % for emacs"
+-vsn("$Rev: 5455 $"). % for emacs"
 
 %% Callbacks
 -export([prepare/1]).
 
 -include("user.hrl").
-
--define(Debug(DThis), io:format("LINE: ~p, Message: ~p~n", [?LINE, DThis])).
 
 %%% ============================================================================
 %%% Callbacks
@@ -104,7 +102,7 @@
 prepare(Args) ->
     Exprs   = ?Args:expr_range(Args),
     {Link, Parent} = check_expr_link(Exprs),
-    NewName = ?Args:name(Args),
+
     Module = ?Args:module(Args),
     lists:foreach(fun check_expr/1, Exprs),
     Form = ?Query:exec1(hd(Exprs), ?Query:seq([?Expr:clause(),
@@ -114,24 +112,28 @@ prepare(Args) ->
     [File] = ?Query:exec(Form, ?Form:file()),
     {Bound, NotBound} = vars(Exprs),
     OutVars = check_var(Bound,Exprs),
-    ?Check(OutVars =:= [] orelse Link =:= body, 
-	   ?RefError(outside_used_vars, OutVars)),
+    ?Check(OutVars =:= [] orelse Link =:= body,
+           ?RefError(outside_used_vars, OutVars)),
     DelExprs = Exprs,
     PatNames = lists:usort([?Var:name(Var) || Var <- NotBound]),
-    Arity = length(PatNames),
-    check_fun(Module, NewName, Arity),
+    Arity    = length(PatNames),
+    ModName  = ?Mod:name(Module),
+    % todo Add transformation info
+    NewName  = ?Args:ask(Args, name,
+                         fun cc_fun/2, fun cc_error/3, {Module, ModName, Arity}),
+
     FormIndex  = ?Syn:index(File, form, Form),
     ?Transform:touch(File),
     {NewExprs, CommentExprs} = eliminate_begin_end(Exprs),
     Comments = ?Syn:get_comments(CommentExprs),
     [fun() ->
-	     replace_with_app(Parent, NewName, PatNames, 
-			      DelExprs, Link, OutVars),
-	     add_fun_form(File, NewName, PatNames, 
-			  NewExprs, FormIndex, OutVars)
+             replace_with_app(Parent, NewName, PatNames,
+                              DelExprs, Link, OutVars),
+             add_fun_form(File, NewName, PatNames,
+                          NewExprs, FormIndex, OutVars)
      end,
      fun(_) ->
-	     ?Syn:put_comments(NewExprs, Comments)
+             ?Syn:put_comments(NewExprs, Comments)
      end].
 
 vars(Exprs) ->
@@ -143,7 +145,7 @@ vars(Exprs) ->
 eliminate_begin_end(Exprs) ->
     case {?Expr:type(hd(Exprs)), length(Exprs)} of
         {block_expr, 1} ->
-            NewExprs = ?Query:exec(hd(Exprs), 
+            NewExprs = ?Query:exec(hd(Exprs),
                                  ?Query:seq(?Expr:clauses(), ?Clause:body())),
             {[proplists:get_value(Node, ?Syn:copy(Node)) || Node <- NewExprs],
              NewExprs};
@@ -223,14 +225,27 @@ check_expr(Expr) ->
     end.
 
 
-check_fun(Module, NewName, Arity) ->
-    ModName = ?Mod:name(Module),
+cc_fun(NewName, {Module, ModName, Arity}) ->
     ?Check(?Query:exec(Module, ?Mod:local(NewName, Arity)) =:= [],
-           ?RefError(fun_exists, [ModName, NewName, Arity])),
+        ?RefError(fun_exists, [ModName, NewName, Arity])),
     ?Check(?Query:exec(Module, ?Mod:imported(NewName, Arity)) =:= [],
-           ?RefError(imported_fun_exists, [ModName, [NewName, Arity]])),
+        ?RefError(imported_fun_exists, [ModName, [NewName, Arity]])),
     ?Check(not ?Fun:is_autoimported(NewName, Arity),
-           ?RefError(autoimported_fun_exists, [NewName, Arity])).
+        ?RefError(autoimported_fun_exists, [NewName, Arity])),
+    NewName.
+
+cc_error(?RefError(fun_exists, _), NewName, {_, ModName, Arity}) ->
+    error_txt("already exists", ModName, NewName, Arity);
+cc_error(?RefError(imported_fun_exists, _), NewName, {_, ModName, Arity}) ->
+    error_txt("is imported", ModName, NewName, Arity);
+cc_error(?RefError(autoimported_fun_exists, _), NewName, {_, ModName, Arity}) ->
+    error_txt("is autoimported", ModName, NewName, Arity);
+cc_error(_, _, _) ->
+    ?RefErr0r(unknown_exception).
+
+error_txt(Txt, ModName, NewName, Arity) ->
+    ?MISC:format("Function ~p:~p/~p ~s.",
+                 [ModName, NewName, Arity, Txt]).
 
 check_var(BoundVars, Exprs)->
     Occurrences  = lists:flatten([?Query:exec(BoundVars,
@@ -239,9 +254,6 @@ check_var(BoundVars, Exprs)->
     AllVarOccurs = ?Query:exec(BoundVars, ?Var:occurrences()),
     OutsideVars = AllVarOccurs -- Occurrences,
     lists:usort([?Expr:value(Var) || Var <- OutsideVars]).
-
-%%     ?Check(Clash =:= [],
-%% 	   ?RefError(outside_used_vars, Clash)).
 
 %%% ===========================================================================
 %%% Syntactic transformations.
@@ -254,11 +266,11 @@ replace_with_app(Parent, AppName, AppArgNames, DelExprs, Type, OutVars)->
     App      = ?Syn:create(#expr{type = application}, [{esub, [Name]},
                                                        {esub, ArgList}]),
     Pattern = case OutVars of
-		  [] -> App;
-		  _List -> VarPattern = make_pattern(_Role = pattern, OutVars),
-			   ?Syn:create(#expr{type=match_expr},
-				       [{esub, VarPattern}, {esub, App}])
-	      end,
+                  [] -> App;
+                  _List -> VarPattern = make_pattern(_Role = pattern, OutVars),
+                           ?Syn:create(#expr{type=match_expr},
+                                       [{esub, VarPattern}, {esub, App}])
+              end,
     case Type of
         esub  -> ?Syn:replace(Parent, {node, hd(DelExprs)}, [Pattern]);
         body -> Dels = {range, hd(DelExprs), lists:last(DelExprs)},
@@ -270,9 +282,9 @@ add_fun_form(File, FunName, ClPatternNames, Body, FormIndex, OutVars) ->
                      || Name <- ClPatternNames ],
     FName   = ?Syn:create(#expr{type = atom}, [io_lib:write(FunName)]),
     FinalBodies = case OutVars of
-		     [] -> Body;
-		     _List -> Body ++ make_pattern(_Role = expr, OutVars)
-		 end,
+                     [] -> Body;
+                     _List -> Body ++ make_pattern(_Role = expr, OutVars)
+                 end,
     ClNode  = ?Syn:create(#clause{type = fundef},[{name, FName},
                              {pattern, ClPatternNodes},{body, FinalBodies}]),
     FunForm = ?Syn:create(#form{type = func}, [{funcl,ClNode}]),
@@ -280,15 +292,15 @@ add_fun_form(File, FunName, ClPatternNames, Body, FormIndex, OutVars) ->
 
 make_pattern(Role, Vars) ->
     case Vars of
-	[Single] ->
-	    VarNode = ?Syn:create(#expr{role=Role, type=variable, 
-					value=Single}, [Single]),
-	    [VarNode];
-	Vars ->
-	    VarNodes = [ ?Syn:create(#expr{role=Role, type=variable, 
-					   value=Var}, [Var]) ||
-			   Var <- Vars ],
-	    Tuple = ?Syn:create(#expr{type=tuple},
-				[ {esub, Var} || Var <- VarNodes ]),
-	    [Tuple]
+        [Single] ->
+            VarNode = ?Syn:create(#expr{role=Role, type=variable,
+                                        value=Single}, [Single]),
+            [VarNode];
+        Vars ->
+            VarNodes = [ ?Syn:create(#expr{role=Role, type=variable,
+                                           value=Var}, [Var]) ||
+                           Var <- Vars ],
+            Tuple = ?Syn:create(#expr{type=tuple},
+                                [ {esub, Var} || Var <- VarNodes ]),
+            [Tuple]
     end.

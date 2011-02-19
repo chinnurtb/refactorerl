@@ -25,7 +25,7 @@ then
     dialyzer --plt $PLT --check_plt
 else
     echo "Initialising Dialyzer PLT in $PLT. This will take several minutes..."
-    dialyzer --build_plt --output_plt $PLT --apps stdlib kernel gs erts mnesia xref
+    dialyzer --build_plt --output_plt $PLT --apps stdlib kernel gs erts mnesia
 
     echo "Adding the files of RefactorErl to Dialyzer. This will take several more minutes..."
     dialyzer --add_to_plt --plt $PLT -r lib/referl_{core,lib,gen,slicer,ui,user}/ebin/*beam

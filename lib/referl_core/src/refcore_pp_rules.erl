@@ -195,11 +195,11 @@ erlang_rules() ->
             indent = [{'after', first, % first parameter
                        to,      last,  % cl_paren
                        1}]},
-        #indentRule{
-            parent = [{lex, subst}], % macro subsituation
-            indent = [{'after', {llex,3}, % op_paren (OPTIONAL)
-                       to,      last,     % cl_paren
-                       1}]},
+        %#indentRule{
+        %    parent = [{lex, subst}], % macro subsituation
+        %    indent = [{'after', {llex,3}, % op_paren (OPTIONAL)
+        %               to,      last,     % cl_paren
+        %               1}]},
         #indentRule{
             parent = [{lex, incl}], % include attribute
             indent = [{'after', {llex,3}, % op_paren (OPTIONAL)
@@ -294,7 +294,7 @@ erlang_rules() ->
         #tokenRule{
             parents = [{expr, atom}], % function name
             rules   = [
-                {[{check_fun,fun funcform_first_name/1,atom}],  [{nl,2,0}]}]},
+                {[{check_fun,fun funcform_first_name/1,atom}],  [{nl,1,0}]}]},
         #tokenRule{
             parents = [{expr, mstring}],
             rules   = [{[{before_link,esub,string}],     [{ws,0,1}]} ]},
@@ -351,7 +351,7 @@ erlang_rules() ->
         #tokenRule{
             parents = [{form, func}],
             rules   = [{[';'],         [{ws,0,1},{nl,0,1}]},
-                       {[stop],        [{ws,0,1},{nl,0,2}]} ]},
+                       {[stop],        [{ws,0,1},{nl,0,1}]} ]},
         #tokenRule{
             parents = [{form, export}],
             rules   = [
@@ -454,7 +454,7 @@ erlang_rules() ->
         #tokenRule{
             parents = [{clause,fundef},{clause, funexpr},{clause,guard},
                        {clause,timeout},{clause,pattern}],
-            rules   = [{['->'],                        [{nl,0,1}]}]},
+            rules   = [{['->'],        [{nl,0,1}]}]},
         #tokenRule{
             parents = [{clause, funexpr}],
             rules   = [{[{before_link,body,','}],      [{nl,0,1}]}]}
