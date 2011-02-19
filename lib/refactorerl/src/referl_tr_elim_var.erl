@@ -20,203 +20,128 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @doc This module implements the eliminate variable refactoring.
+%%% @doc In this refactoring all instances of a variable are replaced
+%%% with its bound value in that region where the variable is
+%%% visible. The variable can be left out where its value is not used.
+
+%%% Conditions of applicability
+%%% <ul>
+%%% <li>The variable has exactly one binding occurrence on the left hand side of
+%%%   a pattern matching expression, and not a part of a compound pattern.</li>
+%%% <li>The expression bound to the variable has no side effects.</li>
+%%% <li>Every variable of the expression is visible (that is, not shadowed) at
+%%%   every occurrence of the variable to be eliminated.</li>
+%%% </li>
+
+%%% Rules of the transformation
+%%% <ol>
+%%% <li>Substitute every occurrence of the variable with the expression
+%%%   bound to it at its binding occurrence, with parentheses around the
+%%%   expression.</li>
+%%% <li>If the result of the match expression that binds the variable is
+%%%   discarded, remove the whole match expression. Otherwise, replace the match
+%%%   expression with its right hand side.</li>
+%%% </ol>
 %%%
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(referl_tr_elim_var).
--vsn("$Rev: 1967 $").
+-vsn("$Rev: 2599 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/2]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst, {filename, file, pos, var,
-                def, def_used, fvars, binding, refs}).
+-export([prepare/1, error_text/2]).
 
 %%% ============================================================================
 %%% Errors
 
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), integer()) -> ok
-%%
-%% @doc Eliminate the variable in the pointed position `Pos'.
-do(File, Pos) ->
-     ?TRANSFORM:do(?MODULE, {File, Pos}).
+%% @private
+error_text(bindings, [VarName]) ->
+    ["Variable ", VarName, " has multiple bindings"];
+error_text(function, [VarName]) ->
+    ["Variable ", VarName, " is a function parameter"];
+error_text(bind_not_in_match_expr, [_VarName]) ->
+    ["Only variables bound in match expressions can be eliminated"];
+error_text(side_effect, [VarName]) ->
+    ["The definition of ", VarName, " has side effects"];
+error_text(macro, [VarName]) ->
+    ["Variable ", VarName, " is used as a macro argument"];
+error_text(shadowed_vars, [ShadowedVars]) ->
+    ["Free variables of the definition would become shadowed: ", ShadowedVars].
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FileName, Pos}) ->
-    #refst{ filename = FileName,
-            pos = Pos }.
+prepare(Args) ->
+    Var     = ?Args:variable(Args),
+    VarName = ?Var:name(Var),
 
-%% @private
-steps() ->
-    [?MISC:get_file_node(#refst.filename, #refst.file),
-     fun var_node/1,
-     fun get_var_def/1,
-     fun def_is_used/1,
-     fun check_sideeffects/1,
-     fun get_free_vars/1,
-     fun get_refs/1,
-     fun check_macro/1,
-     fun check_visibility/1
-    ].
+    Pattern = ?Query:exec1([Var], ?Var:bindings(),
+                           ?LocalError(bindings, [VarName])),
+    Match = ?Query:exec1([Pattern], [{sub, back}],
+                         ?LocalError(function, [VarName])),
+    ?Check(?Expr:kind(Match) =:= match_expr, ?LocalError(bind_not_in_match_expr, [VarName])),
+    [Pattern, Def] = ?Query:exec([Match], [sub]),
+    ?Check(not lists:any(fun ?Fun:dirty/1,
+                         ?Query:exec([Def], ?Expr:functions())),
+           ?LocalError(side_effect, [VarName])),
+    FVars = free_vars(Def),
+    Refs = ?Query:exec([Var], ?Var:references()),
+    ?Check(not lists:any(fun is_from_macro/1, Refs),
+           ?LocalError(macro, [VarName])),
+    ShadowedVars = lists:concat([FVars -- visible_vars(Ref) || Ref <- Refs]),
+    ShadowedVarNames = lists:map(fun ?Var:name/1, ShadowedVars),
+    ?Check(ShadowedVars == [],
+           ?LocalError(shadowed_vars, [ShadowedVarNames])),
+    DefUsed = def_is_used(Match),
 
-%% @private
-transform(#refst{file = File,
-                 def = Def, def_used = Used,
-                 refs = Refs, binding = Binding}) ->
-    lists:foreach(fun (R) -> replace(R, enclose(copy(Def))) end, Refs),
-    ?ESG:close(),
-    if not Used -> delete(Binding);
-       true     -> replace(Binding, enclose(Def))
-    end,
-    ?ESG:close(),
-    {[File],ok}.
+    [fun () ->
+             lists:foreach(fun (R) -> replace(R, enclose(copy(Def))) end, Refs)
+     end,
+     fun (_) ->
+             ?Transform:touch(Match),
+             if not DefUsed -> delete(Match);
+                true        -> replace(Match, enclose(Def))
+             end
+     end].
+
+%%% ----------------------------------------------------------------------------
+%%% prepare helpers
+
+free_vars(E) ->
+    F = ?Query:exec([E], ?Expr:varrefs()),
+    B = ?Query:exec([E], ?Expr:varbinds()),
+    lists:usort(F) -- B.
+
+visible_vars(E) ->
+    ?Query:exec([E], ?Query:seq(?Expr:clause(), ?Clause:variables())).
+
+is_from_macro(E) ->
+    [] /= ?Query:exec([E], [{elex, {data, '==', virtual}}]).
+
+def_is_used(Match) ->
+    Body = ?Query:exec([Match], ?Query:seq(?Expr:clause(), ?Clause:exprs())),
+    case lists:member(Match, Body) of
+        false ->
+             true;
+        true ->
+            Match == lists:last(Body)
+    end.
+
+%%% ----------------------------------------------------------------------------
+%%% transform helpers
 
 copy(Node) ->
-    proplists:get_value(Node, ?ESG:copy(Node)).
+    proplists:get_value(Node, ?Syn:copy(Node)).
 
 enclose(Node) ->
-    ?SYNTAX:create(#expr{kind=parenthesis}, [{sub, Node}]).
+    ?Syn:create(#expr{kind=parenthesis}, [{sub, Node}]).
 
 replace(From, To) ->
-    [{Tag, Parent}] = ?ESG:parent(From),
-    ?SYNTAX:replace(Parent, {node, From}, [{Tag, To}]).
+    [{_, Parent}] = ?Syn:parent(From),
+    ?Syn:replace(Parent, {node, From}, [To]).
 
 delete(Node) ->
-    [{_, Parent}] = ?ESG:parent(Node),
-    ?SYNTAX:replace(Parent, {node, Node}, []).
-
-%%% ============================================================================
-%%% Implementation
-
-var_node(St = #refst{file = File, pos = Pos}) ->
-    Token = ?LEX:get_token(File, Pos),
-    [{_,Expr}] = ?ESG:parent(Token),
-    case ?ESG:data(Expr) of
-        #expr{kind = variable} ->
-            [Var] = ?ESG:path(Expr, [varref]) ++ ?ESG:path(Expr, [varbind]),
-            St#refst{var = Var};
-        _ ->
-            throw("that's not a variable")
-    end.
-
-get_var_def(St = #refst{var = Var}) ->
-    case ?ESG:path(Var, [{varbind, back}]) of
-        [Pattern] ->
-            case ?ESG:path(Pattern, [{sub, back}]) of
-                [Match] ->
-                    case ?ESG:data(Match) of
-                        #expr{kind = match_expr} ->
-                            [Pattern, Def] = ?ESG:path(Match, [sub]),
-                            St#refst{def = Def};
-                        _ ->
-                            throw("cannot eliminate that variable")
-                    end;
-                _ -> % var is a function parameter
-                    throw("cannot eliminate a function parameter")
-            end;
-        _ -> % var has multiple bindings
-            throw("cannot eliminate variables with multiple bindings")
-    end.
-
-def_is_used(St = #refst{var = Var}) ->
-    [Pattern] = ?ESG:path(Var, [{varbind, back}]),
-    [Intro] = ?ESG:path(Var, [varintro]),
-    %% If the result of the binding expression is not used directly,
-    %% then Pattern will be among Intros children
-    case lists:member(Pattern, ?ESG:path(Intro, [sub])) of
-        false -> St#refst{def_used = true};
-        true  -> St#refst{def_used = last_expr(Intro)}
-    end.
-
-%% @spec last_expr(Expr::node()) -> bool()
-%%
-%% @doc `Expr' is the last expression in the clause. `Expr' must be a
-%% direct child of its clause.
-last_expr(E) ->
-    E == ?ESG:path(E, [{visib, back}, {visib, last}]).
-
-check_sideeffects(#refst{def = Def}) ->
-    ?MISC:error_on_difference(any_tree(fun has_sideeffect/1, Def), false,
-                             "the variable definition has sideeffects").
-
-has_sideeffect(Node) ->
-    case ?ESG:data(Node) of
-        #expr{kind = application} ->
-            case ?ESG:path(Node, [funref]) of
-                [Fun] -> (?ESG:data(Fun))#func.dirty;
-                [] -> false
-            end;
-        _ ->
-             false
-    end.
-
-get_free_vars(St = #refst{def = Def}) ->
-    FVars = free_vars(Def),
-    St#refst{fvars = FVars}.
-
-get_refs(St = #refst{var = VarNode}) ->
-    Exprs = ?ESG:path(VarNode, [{varref, back}]),
-    [Binding] = ?ESG:path(VarNode, [{varbind, back}, {sub, back}]),
-    St#refst{refs = Exprs, binding = Binding}.
-
-check_macro(#refst{refs = Refs}) ->
-    Check = lists:all(fun is_from_macro/1, Refs),
-    ?MISC:error_on_difference(Check, true, "variable is a macro argument"
-                                           " (not supported yet)").
-
-is_from_macro(Expr) ->
-    [] == ?ESG:path(Expr, [{elex, {data, '==', virtual}}]).
-
-check_visibility(#refst{refs = Refs, fvars = FVars}) ->
-    Check = lists:all(fun (R) -> FVars -- visible_vars(R) == [] end, Refs),
-    ?MISC:error_on_difference(Check, true, "the definition refers to a variable"
-                                           " wich is shadowed at an occurence").
-
-visible_vars(Expr) ->
-    ?ESG:path(Expr, [sup, {visib, back}, varvis]).
-
-%%% ============================================================================
-%%% Misc. functions
-
-%% why isn't this in lists?
-any(Bs) -> lists:any(fun (X) -> X end, Bs).
-
-any_tree(Pred, Node) ->
-    fold_tree(fun(N, B) -> Pred(N) orelse B end, fun(Bs) -> any(Bs) end, Node).
-
-free_vars(Node) ->
-    FVars = fold_tree(collect_vars([varref]),  fun lists:flatten/1, Node),
-    BVars = fold_tree(collect_vars([varbind]), fun lists:flatten/1, Node),
-    lists:usort(FVars) -- BVars.
-
-collect_vars(Path) ->
-    fun (Node, Vars) ->
-            case ?ESG:data(Node) of
-                #expr{kind = variable} ->
-                    ?ESG:path(Node, Path) ++ Vars;
-                _ ->
-                    Vars
-            end
-    end.
-
-fold_tree(Reduce, Combine, Root) ->
-    Reduce(Root, Combine([fold_tree(Reduce, Combine, N) ||
-                             {_, N} <- ?ESG:children(Root)])).
+    [{_, Parent}] = ?Syn:parent(Node),
+    ?Syn:replace(Parent, {node, Node}, []).

@@ -24,7 +24,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_print).
--vsn("$Rev: 1974 $").
+-vsn("$Rev: 2663 $").
 
 -export([print_clusterings/1, print_clusterings/2,
          print_clustering/1, print_clustering/2,
@@ -37,9 +37,11 @@
 
 -import(proplists, [get_value/2]).
 
-%%% @type mod_name() = atom().
+%%% @type ent_name() = atom() | func_attr().
 %%%
-%%% It represents the name of a module.
+%%% It represents the name of the entity. In case of a module it is the
+%%% module name; in case of a function it is the module, the name and the arity
+%%% of the function.
 
 %%% @type proplist() = [atom()|{atom(), term()}].
 %%%
@@ -47,14 +49,14 @@
 
 %%%%% Printing clusterings
 
-%% @spec print_clusterings([[[mod_name()]]]) -> ok
+%% @spec print_clusterings([[[ent_name()]]]) -> ok
 %%
 %% @doc Prints a list of clusterings with default options.
 %% Same as `print_clusterings(Clusterings, [])'.
 print_clusterings(Clusterings) ->
     print_clusterings(Clusterings, []).
 
-%% @spec print_clusterings([[[mod_name()]]], proplist()) -> ok
+%% @spec print_clusterings([[[ent_name()]]], proplist()) -> ok
 %%
 %% @doc Prints a list of clusterings.
 %%
@@ -112,14 +114,14 @@ print_clusterings_default() ->
       [{print_clusterings, [clusterings]},
        {print_clustering, [new_section, clusters]}]).
 
-%% @spec print_clustering([[mod_name()]]) -> ok
+%% @spec print_clustering([[ent_name()]]) -> ok
 %%
 %% @doc Prints a clustering with default options.
 %% Same as `print_clustering(Clustering, [])'.
 print_clustering(Clustering) ->
     print_clustering(Clustering, []).
 
-%% @spec print_clustering([[mod_name()]], proplist()) -> ok
+%% @spec print_clustering([[ent_name()]], proplist()) -> ok
 %%
 %% @doc Prints a clustering.
 %%
@@ -136,6 +138,8 @@ print_clustering(Clustering) ->
 %%         It can contain the following items:
 %%         <ul>
 %%              <li>`clusters': prints the clusters.</li>
+%%              <li>`clusters_compact': prints all clusters in a sorted
+%%                  list.</li>
 %%              <li>Meta items.</li>
 %%         </ul>
 %%         The default is:
@@ -147,7 +151,7 @@ print_clustering(Clustering) ->
 %%         The default value:
 %% ```
 %% ["Interface functions:", nl, interface_funs,
-%%  "Modules:", nl, modules, nl]
+%%  "Entities:", nl, entitites, nl]
 %% '''</li>
 %% </ul>
 print_clustering(Clustering, Options) ->
@@ -163,7 +167,8 @@ print_clustering(Clustering, Options) ->
                         print_cluster(Cluster, Opts2)
                 end,
                 Clustering);
-          (modules_compact) ->
+          (clusters_compact) ->
+              %%TODO: make it work when entities are functions
               print_term(W, lists:sort(Clustering), Indent);
           (Meta) ->
               print_meta(W, Meta)
@@ -178,16 +183,16 @@ print_clustering_default() ->
       [{print_clustering, [clusters]},
        {print_cluster,
         ["Interface functions:", nl, interface_funs,
-         "Modules:", nl, modules, nl]}]).
+         "Entities:", nl, entities, nl]}]).
 
-%% @spec print_cluster([mod_name()]) -> ok
+%% @spec print_cluster([ent_name()]) -> ok
 %%
 %% @doc Prints a cluster with default options.
 %% Same as `print_cluster(Cluster, [])'.
 print_cluster(Cluster) ->
     print_cluster(Cluster, []).
 
-%% @spec print_cluster([mod_name()], proplist()) -> ok
+%% @spec print_cluster([ent_name()], proplist()) -> ok
 %%
 %% @doc Prints a cluster.
 %%
@@ -205,14 +210,14 @@ print_cluster(Cluster) ->
 %%         <ul>
 %%              <li>`interface_funs': prints the interface functions of the
 %%                  cluster.</li>
-%%              <li>`modules': prints each module in a separate row.</li>
-%%              <li>`modules_compact': prints all modules in a sorted list.</li>
+%%              <li>`entities': prints each entity in a separate row.</li>
+%%              <li>`entities_compact': prints all entities in a sorted list.</li>
 %%              <li>Meta items.</li>
 %%         </ul>
 %%         The default is:
 %% ```
 %% ["Interface functions:", nl, interface_funs,
-%% "Modules:", nl, modules]
+%% "Entities:", nl, entities]
 %% '''</li>
 %% </ul>
 print_cluster(Cluster, Options) ->
@@ -222,14 +227,26 @@ print_cluster(Cluster, Options) ->
     Indent = get_value(indent, Opts),
     lists:foreach(
       fun (interface_funs) ->
-              print_string_list(
-                W,
-                lists:usort([fun_description(Fun) ||
-                                Fun <- interface_funs(Cluster)]),
-                Indent);
-          (modules) ->
-              print_string_list(W, Cluster, Indent);
-          (modules_compact) ->
+              case get_value(entities, Opts) of
+                  modules ->
+                      print_string_list(
+                        W,
+                        lists:usort([fun_description(Fun) ||
+                                        Fun <- interface_funs(Cluster)]),
+                        Indent);
+                  functions ->
+                      %% TODO implement this
+                      cl_out:fwrite(W, "Not yet implemented.~n", [])
+              end;
+          (entities) ->
+              case get_value(entities, Opts) of
+                  modules ->
+                      print_string_list(W, Cluster, Indent);
+                  functions ->
+                      print_object_pure_list(W, Cluster, Indent)
+              end;
+          (entities_compact) ->
+              %%TODO: make it work when entities are functions
               print_term(W, lists:sort(Cluster), Indent);
           (Meta) ->
               print_meta(W, Meta)
@@ -239,11 +256,12 @@ print_cluster(Cluster, Options) ->
     cl_out:close(C).
 
 print_cluster_default() ->
-    [{output, stdout},
+    [{entities, modules},
+     {output, stdout},
      {indent, "    "},
      {print_cluster,
       ["Interface functions:", nl, interface_funs,
-       "Modules:", nl, modules]}].
+       "Entities:", nl, entities]}].
 
 %%%%% Printing cuts
 
@@ -442,8 +460,9 @@ print_cut({ObjectsNotMoved, ObjectsMoved}, Options) ->
             undefined ->
                 undefined;
             _ ->
-                {file, File2} = ?SYNTAX:file(FileName),
-                File2
+                throw(todo)
+                %{file, File2} = ?SYNTAX:file(FileName),
+                %File2
         end,
 
     lists:foreach(
@@ -536,11 +555,12 @@ print_objects(W, Objects, PrintItems, ClusterId, Cluster, File, Opts) ->
 %% @doc Returns the category of the given object.
 object_category(#fun_attr{}, undefined) ->
     funs;
-object_category(#fun_attr{name=Name, arity=Arity}, File) ->
-    case ?SEMINF:is_exported(File, Name, Arity) of
-        true -> exp_funs;
-        false -> int_funs
-    end;
+object_category(#fun_attr{name=_Name, arity=_Arity}, _File) ->
+    throw(todo);
+%    case ?SEMINF:is_exported(File, Name, Arity) of
+%        true -> exp_funs;
+%        false -> int_funs
+%    end;
 object_category(#rec_attr{}, _) ->
     records;
 object_category(#macro_attr{}, _) ->
@@ -638,8 +658,8 @@ print_object_pure_list(W, L, Indent) ->
 %% @spec object_pure_to_string(object()) -> string()
 %%
 %% @doc Converts the given object to string.
-object_pure_to_string(#fun_attr{name=Name, arity=Arity}) ->
-    atom_to_list(Name)++"/"++integer_to_list(Arity);
+object_pure_to_string(#fun_attr{mod=ModName, name=Name, arity=Arity}) ->
+    atom_to_list(ModName)++":"++atom_to_list(Name)++"/"++integer_to_list(Arity);
 object_pure_to_string(#rec_attr{name=Name}) ->
     atom_to_list(Name);
 object_pure_to_string(#macro_attr{name=Name}) ->
@@ -693,7 +713,7 @@ module_module_calls() ->
               {module, CallerMod} = ?ESG:data(Module),
               {module, CalledMod} =
                   ?ESG:data(hd(?ESG:path(Call, [{func, back}]))),
-              {func, _, Fun, Arity} = ?ESG:data(Call),
+              #func{name=Fun, arity=Arity} = ?ESG:data(Call),
               {CallerMod, CalledMod, Fun, Arity}
       end,
       L).

@@ -20,171 +20,295 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @doc This module implements the inline function refactoring.
-%%%
-%%% @author István Bozó <bozo_i@inf.elte.hu>
+%%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
+%%% @doc This module implements the inline function refactoring. The inline
+%%% function refactoring step substitutes the selected application with the
+%%% corresponding function body and executes the required compensations.
+%%%
+%%% Conditions of applicability
+%%% <ul>
+%%%   <li>Applying the inline function must not cause variable name
+%%%   conflicts. A variable name conflict arises when the same variable name
+%%%   is used in the body of the function clause and in the scope of the
+%%%   selected function application, except the variables which are bound in
+%%%   the formal parameters where the structure of the formal and
+%%%   the actual parameters are equivalent</li>
+%%%   <li>If the function is defined in other module:
+%%%   <ul>
+%%%     <li>the function do not contain local (not exported) function
+%%%     applications in its body.</li>
+%%%     <li>macro name conflicts must not occur in the current module, that is,
+%%%     macro names used in the functions must refer to the same macro
+%%%     definition in the current and in the definition module. This applies to
+%%%     macros used in these macros too.</li>
+%%%     <li>record name conflicts must not occur in the current module, that is,
+%%%     record names used in the functions must refer to the same record
+%%%     definition in the current and in the definition module.</li>
+%%%   </ul></li>
+%%% </ul>
+%%%
+%%% Rules of the transformation
+%%% <ol>
+%%%   <li>In the refactoring step the functions application to be inlined have
+%%%   to be marked.</li>
+%%%   <li>The defining module of the corresponding function must be loaded.</li>
+%%%   <li>Copy the function clause(s) and create (if it is needed) a
+%%%   corresponding structure from the expressions of the body(ies), the guard
+%%%   expressions (if there is any) and from the patterns of the function
+%%%   clause(s).</li>
+%%%   <li>Where the actual and formal parameters are structurally equivalent,
+%%%   create variable name pairs and rename the corresponding variables in the
+%%%   copied body.</li>
+%%%   <li>Where the formal and structural parameters are not equivalent, create
+%%%   a match expression from these parameters. The left hand side is a tuple
+%%%   from the formal parameters, and the right hand side is a tuple from the
+%%%   actual parameters.</li>
+%%%   <li>If the function consists of
+%%%   <ul>
+%%%     <li>one clause and does not have guard expression and the body of the
+%%%     function contains only one expression and match expressions should not
+%%%     be created from the parameters, replace the application with this single
+%%%     expression.</li>
+%%%     <li>one clause and does not have guard expression and the body of the
+%%%     function contains more than one  expression and the parent expression of
+%%%     the selected application is a clause, replace the application with the
+%%%     sequence of the expressions from the body of the function clause
+%%%     extended with the created match expression.</li>
+%%%     <li>one clause and does not have guard expression and the body of the
+%%%     function contains more than one expression and the selected application
+%%%     is a subexpression:
+%%%     <ol>
+%%%       <li>create a begin-end block from the sequence of the expressions
+%%%       from the body of the function clause extended with the created match
+%%%       expression</li>
+%%%       <li>replace the application with this begin-end block.</li>
+%%%     </ol></li>
+%%%     <li>more than one clause, or it has guard expressions (or both) or
+%%%     variables appear multiple times with the same name in a pattern list:
+%%%     <ol>
+%%%       <li>create a case expression from the function clause body(ies)
+%%%       expression(s), guard and pattern expressions</li>
+%%%       <li>replace the application with this case expression.</li>
+%%%     </ol></li>
+%%%   </ul></li>
+%%%   <li>If the definition of the function is in another module
+%%%   <ul>
+%%%     <li>qualify the applications in the copied body which call exported
+%%%     functions from the defining module.</li>
+%%%     <li>qualify the applications in the copied body which call imported
+%%%     functions.</li>
+%%%     <li>copy or import record and macro definitions to the current module
+%%%     which are used in the copied body(ies).</li>
+%%%   </ul></li>
+%%% </ol>
 
 -module(referl_tr_inline_fun).
--vsn("$Rev: 1991 $").
+-vsn("$Rev: 2619 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/2]).
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst, {filename, pos, file, module, token, form, index,
-                expr, appnode, qualifier, parameters, funnode,
-                funclauses, guards, funfile, funpatternlists,
-                funpatternvarlists, appclause,
-                appvariables, funbodynodelists, unusedvarlists, boundvarlists,
-                varpairlists, matchpairlists, appnodelists, appparent, plink,
-                imported, exported, localapps}).
+-export([prepare/1, error_text/2]).
 
 %%% ============================================================================
 %%% Errors
 
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), integer()) -> ok
-%%
-%% @doc Inline the function application in the source file `FileName' on the
-%% selected position `Pos'.
-do(FileName, Pos) ->
-    ?TRANSFORM:do(?MODULE,{FileName, Pos}).
+error_text(var_name_collision, CollVars) ->
+    ["Variable names would collide: ", ?MISC:separated_text(CollVars)];
+error_text(local_apps, [FunModuleName, LocalApps]) ->
+    LocalAppsText =
+        [ ?MISC:fun_text([Name, Arity]) || {_, Name, Arity} <- LocalApps],
+    ["Local functions of module ", atom_to_list(FunModuleName),
+     " are called in the function body: ",
+     ?MISC:join(LocalAppsText)].
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FileName, Pos})->
-    #refst{ filename = FileName, pos  = Pos}.
+prepare(Args)->
+    File = ?Args:file(Args),
+    [AppModule] = ?Query:exec(File, ?File:module()),
+    %% The selected expression
+    Expr = ?Args:expression(Args),
+    %% Determines the application node, if the selected posiotion is not an
+    %% application then throws an error
+    AppNode = get_app_node(Expr),
+    AppArgs = tl(?Query:exec(AppNode, ?Expr:children())),
+    FunObjNode = ?Args:function(Args),
+    [FunForm] = ?Query:exec(FunObjNode, ?Fun:definition()),
+    FunClauses = ?Query:exec(FunForm, ?Form:clauses()),
+    ?Check(FunClauses /= [], ?RefError(fun_not_found,[?Fun:name(FunObjNode),
+                                                      ?Fun:arity(FunObjNode)])),
+    [FunModule] = ?Query:exec(FunObjNode, ?Fun:module()),
+    [FunFile] = ?Query:exec(FunModule, ?Mod:file()),
+    %% Get application nodes from the function and check if there is any local
+    %% application used, which is needed to be included or qualified
+    AppNodeLists =
+        get_app_nodes_from_clauses(FunClauses),
+    {Imported, Exported, LocalsAndBIFs} =
+        get_application_data(AppNodeLists, AppModule, FunModule),
+    LocalApps = check_applications(LocalsAndBIFs, AppModule, FunModule),
+    FunModuleName = ?Mod:name(FunModule),
+    ?Check( LocalApps == [],
+           ?LocalError(local_apps, [FunModuleName, LocalApps])),
+    %% Checks the record/macro information if the files are different
+    RecMacInfo =
+        if FunFile =:= File ->
+                [];
+           true ->
+                referl_tr_move_fun:prepare_recmac([FunForm], FunFile, File)
+        end,
+    PatternLists =
+        [?Query:exec(Clause, ?Clause:patterns()) || Clause <- FunClauses],
+    GuardLists =
+        [?Query:exec(Clause, ?Clause:guard()) || Clause <- FunClauses],
+    ClauseBodyNodeLists =
+        [?Query:exec(Clause, ?Clause:body()) || Clause <- FunClauses],
+    ScopeVariables =
+        ?Query:exec(Expr, ?Query:seq(?Expr:clause(), ?Clause:variables())),
+    {VarPairLists, MatchPairLists} = get_attr_pairs(AppArgs, PatternLists),
+    {BoundVarLists, UnusedVarLists} =
+        get_bound_and_unused_vars_from_pattern(PatternLists),
+    %% Check the possible variable name collisions
+    CollVars = check_var_collisions(FunClauses, ScopeVariables, VarPairLists),
+    ?Check(CollVars == [], ?LocalError(var_name_collision, CollVars)),
+    [{_, AppParent}] = ?Syn:parent(AppNode),
+    VarsAndNames = varnodes_and_names(FunClauses),
+    AppComments = ?Syn:get_comments(AppNode),
+    %% The transformation and compensation steps
+    [fun()->
+             transform_first_phase(FunClauses, GuardLists, AppParent, AppNode,
+                                   ClauseBodyNodeLists, PatternLists, AppArgs,
+                                   VarPairLists, MatchPairLists, BoundVarLists,
+                                   VarsAndNames, UnusedVarLists)
+     end,
+     fun({CopiedNodes, VarLists, NodeForComment})->
+             ?Syn:put_comments(NodeForComment, AppComments),
+             {CopiedNodes, VarLists}
+     end,
+     fun({CopiedNodes, VarLists})->
+             Nodes =  ?Query:exec(CopiedNodes, ?Expr:deep_sub()),
+             AppNodes = [ Node || Node <- Nodes,
+                                  ?Expr:kind(Node) == application,
+                                 ?Query:exec(Node, ?Expr:modq()) == []],
+             PairLists = pairs_to_rename(VarLists, VarPairLists),
+             rename_variables(PairLists),
+             AppNodes
+     end,
+     fun(AppNodes) ->
+             case AppModule of
+                 FunModule -> ok;
+                 _ ->
+                     maintain_applications(AppNodes, Imported, Exported)
+             end
+     end
+    ] ++ rec_mac_tr_steps(FunFile, File, RecMacInfo).
 
-%% @private
-steps() ->
-    [fun file_node/1,
-     fun module_node/1,
-     fun current_token/1,
-     fun expr_type_kind/1,
-     fun app_and_module/1,
-     fun get_parameters/1,
-     fun get_fun_data/1,
-     fun get_function_bodynodes/1,
-     fun get_fun_module/1,
-     fun get_appclause_variables/1,
-     fun get_attr_pairs/1,
-     fun get_bound_and_unused_vars_from_pattern/1,
-     fun check_var_collisions/1,
-     fun get_app_nodes_from_clauses/1,
-     fun get_applications/1,
-     fun check_applications/1,
-     fun get_parent_node/1,
-     fun check_macros_records/1].
+
+%%% ============================================================================
+%%% Implementation
+
+rec_mac_tr_steps(FunFile, File, RecMacInfo) ->
+    Corr = fun referl_tr_move_fun:correct_recmac/4,
+    [fun(_) -> Corr(record, {Loc_Incl, Node, Form, Removable}, FunFile, File)
+     end || {rec_info, Loc_Incl, Node, Form, Removable} <- RecMacInfo] ++
+        [fun(_) -> Corr(macro, {Loc_Incl, Form, Form, Removable}, FunFile, File)
+         end || {mac_info, Loc_Incl,Form, Removable} <- RecMacInfo].
 
 %% Removes the application and inserts a function clause(s) instead.
-%% @private
-transform(#refst{ file = File, funclauses = FunClauses, guards = Guards,
-                  appparent = AppParent, appnode = AppNode, plink = PLink,
-                  funbodynodelists = FunBodyNodeLists, funfile = FunFile,
-                  funpatternlists = FunPatternLists, parameters = Parameters,
-                  varpairlists = VarPairLists, matchpairlists = MatchPairLists,
-                  unusedvarlists = _UnusedVarLists,
-                  boundvarlists = BoundVarLists,
-                  imported = Imported, exported = Exported}) ->
+transform_first_phase(FunClauses, GuardLists, AppParent, AppNode,
+                      ClauseBodyNodeLists, PatternLists, Parameters,
+                      VarPairLists, MatchPairLists, BoundVarLists,
+                      VarsAndNames, UnusedVarLists) ->
     ClauseNr = length(FunClauses),
-    GuardedOrAmbiguous = 
-        (length(lists:flatten(Guards)) /= 0) 
+    GuardedOrAmbiguous =
+        (length(lists:flatten(GuardLists)) /= 0)
         or (is_var_rename_ambiguous(VarPairLists)),
-    SubsNodeNr = length(hd(FunBodyNodeLists) ++
+    SubsNodeNr = length(hd(ClauseBodyNodeLists) ++
                         lists:flatten(hd(MatchPairLists))),
     ReplaceType = get_replace_type(AppParent),
-    case {ClauseNr,GuardedOrAmbiguous,SubsNodeNr,ReplaceType} of
-        {1, false, 1, simple} -> %% simple replace
-            [CopiedNodes] =
-                replicate_nodes_and_rename_vars(FunBodyNodeLists,
-                                                BoundVarLists,
-                                                VarPairLists),
-            ?SYNTAX:replace(AppParent,{node, AppNode}, 
-                            [{PLink, hd(CopiedNodes)}]);
-        {1, false, 1, block} -> %% simple replace with parenthesis
-            [CopiedNodes] =
-                replicate_nodes_and_rename_vars(FunBodyNodeLists,
-                                                BoundVarLists,
-                                                VarPairLists),
-            Paren =
-                ?SYNTAX:create(#expr{kind='parenthesis'},
-                               [{sub,hd(CopiedNodes)}]),
-            ?SYNTAX:replace(AppParent,{node, AppNode}, [{PLink, Paren}]);
-        {1, false, _, simple} -> %% simple replace
-            Match =
-                create_match_expr(hd(MatchPairLists),
-                                  hd(BoundVarLists),
-                                  hd(VarPairLists)),
-            [CopiedNodes] =
-                replicate_nodes_and_rename_vars(FunBodyNodeLists,
-                                                BoundVarLists,
-                                                VarPairLists),
-            Body = [ {PLink, B} || B <- Match ++ CopiedNodes],
-            ?SYNTAX:replace(AppParent,{node, AppNode}, Body);
-        {1, false, _, _} -> %% block replace
-            Match =
-                create_match_expr(hd(MatchPairLists),
-                                  hd(BoundVarLists),
-                                  hd(VarPairLists)),
-            [CopiedNodes] =
-                replicate_nodes_and_rename_vars(FunBodyNodeLists,
-                                                BoundVarLists,
-                                                VarPairLists),
-            Block =
-                ?SYNTAX:create(#clause{kind=block},
-                               [{body, Match ++ CopiedNodes}]),
-            BlockExpr =
-                ?SYNTAX:create(#expr{kind=block_expr},
-                               [{exprcl,Block}]),
-            ?SYNTAX:replace(AppParent,{node, AppNode},
-                            [{PLink,BlockExpr}]);
-        _ ->
-            ClauseDatas =
-                create_data_for_case_expr(FunPatternLists, Guards, 
-                                          FunBodyNodeLists,
-                                          BoundVarLists, VarPairLists),
-            CopiedNodes = 
-                lists:flatten([ [F] ++ [S] ++ [T] || {F, S, T} <- ClauseDatas]),
-            replace_app_with_case_expr(AppParent, AppNode, PLink,
-                                       Parameters, ClauseDatas)
+    ?Transform:touch(AppParent),
+    VarLists =
+        case {ClauseNr,GuardedOrAmbiguous,SubsNodeNr,ReplaceType} of
+            {1, false, 1, simple} -> %% simple replace
+                {[CopiedNodes], VarLsts} =
+                    replicate_nodes_and_return_vars(ClauseBodyNodeLists,
+                                                    BoundVarLists, VarsAndNames,
+                                                    UnusedVarLists),
+                ?Syn:replace(AppParent,{node, AppNode},
+                             [hd(CopiedNodes)]),
+                NodeForComment = hd(CopiedNodes),
+                VarLsts;
+            {1, false, 1, block} -> %% simple replace with parenthesis
+                {[CopiedNodes], VarLsts} =
+                    replicate_nodes_and_return_vars(ClauseBodyNodeLists,
+                                                    BoundVarLists, VarsAndNames,
+                                                    UnusedVarLists),
+                Paren =
+                    ?Syn:create(#expr{kind='parenthesis'},
+                                [{sub,hd(CopiedNodes)}]),
+                ?Syn:replace(AppParent,{node, AppNode}, [Paren]),
+                NodeForComment = Paren,
+                VarLsts;
+            {1, false, _, simple} -> %% simple replace with match
+                {Match, VarLst} =
+                    create_match_expr(hd(MatchPairLists),
+                                      hd(BoundVarLists), VarsAndNames,
+                                      hd(UnusedVarLists)),
+                {[CopiedNodes], VarLsts} =
+                    replicate_nodes_and_return_vars(ClauseBodyNodeLists,
+                                                    BoundVarLists, VarsAndNames,
+                                                    UnusedVarLists),
+                ?Syn:replace(AppParent,{node, AppNode}, Match ++ CopiedNodes),
+                NodeForComment = 
+                    case Match of
+                        [] -> hd(CopiedNodes);
+                        _  -> hd(Match)
+                    end,
+                [lists:flatten(VarLsts ++ VarLst)];
+            {1, false, _, _} -> %% block replace
+                {Match, VarLst} =
+                    create_match_expr(hd(MatchPairLists),
+                                      hd(BoundVarLists), VarsAndNames,
+                                      hd(UnusedVarLists)),
+                {[CopiedNodes], VarLsts} =
+                    replicate_nodes_and_return_vars(ClauseBodyNodeLists,
+                                                    BoundVarLists, VarsAndNames,
+                                                    UnusedVarLists),
+                Block =
+                    ?Syn:create(#clause{kind=block},
+                                [{body, Match ++ CopiedNodes}]),
+                BlockExpr =
+                    ?Syn:create(#expr{kind=block_expr},
+                                [{exprcl,Block}]),
+                ?Syn:replace(AppParent,{node, AppNode},
+                             [BlockExpr]),
+                NodeForComment = BlockExpr,
+                [lists:flatten(VarLsts ++ VarLst)];
+            _ -> %% case replace
+                {ClauseData_, VarLsts} =
+                    create_data_for_case_expr(PatternLists, GuardLists,
+                                              ClauseBodyNodeLists,BoundVarLists,
+                                              VarsAndNames, UnusedVarLists),
+                CopiedNodes =
+                    lists:flatten(
+                      [ [F] ++ [S] ++ [T] || {F, S, T} <- ClauseData_]),
+                NodeForComment = 
+                    replace_app_with_case_expr(AppParent, AppNode,
+                                               Parameters, ClauseData_),
+                VarLsts
     end,
-    ?ESG:close(),
-    case File of
-        FunFile ->
-            ok;
-        _ ->
-            maintain_applications(CopiedNodes, Imported, Exported)
-    end,
-    ?ESG:close(),
-    {[File], ok}.
+    {CopiedNodes, VarLists, NodeForComment}.
 
 get_replace_type(AppParent)->
-    case ?ESG:data(AppParent) of
-        #clause{kind = expr} ->
-            UpperNode =
-                ?GRAPH:path(AppParent,
-                            [{{exprcl,back},
-                              {{kind, '==', list_comp},'or',
-                               {{kind, '==', list_gen},'or',
-                                {kind, '==', filter}}}}]),
-            if UpperNode == [] -> simple;
-               true -> block
-            end;
-        #clause{} ->
+    PClass = ?Syn:class(AppParent),
+    [{_, PP}] = ?Syn:parent(AppParent),
+    PPClass = ?Syn:class(PP),
+    case {PClass, PPClass} of
+        {clause, expr} ->
+            block;
+        {clause, _} ->
             simple;
         _ ->
             block
@@ -192,7 +316,7 @@ get_replace_type(AppParent)->
 
 is_var_rename_ambiguous(VarPairLists)->
     Result =
-        lists:flatten([ is_ambiguous(VarPairList) || VarPairList <- 
+        lists:flatten([ is_ambiguous(VarPairList) || VarPairList <-
                                                          VarPairLists]),
     lists:member(true, Result).
 
@@ -201,234 +325,198 @@ is_ambiguous(VarPairList) ->
         lists:usort([ From || {From,_} <- VarPairList]),
     length(VarPairList) /= length(FromNames).
 
-create_data_for_case_expr(FunPatternLists, Guards, FunBodyNodeLists, 
-                          BoundVarLists, VarPairLists)->
-    CasePatterns =
-        replicate_nodes_and_rename_vars(FunPatternLists, BoundVarLists, 
-                                        VarPairLists),
-    CaseClauseGuards =
-        replicate_guards_and_rename_vars(Guards, BoundVarLists, 
-                                         VarPairLists),
-    CaseClauseBodies =
-        replicate_nodes_and_rename_vars(FunBodyNodeLists, BoundVarLists, 
-                                        VarPairLists),
-    lists:zip3(CasePatterns, CaseClauseGuards,
-               CaseClauseBodies).
+create_data_for_case_expr(FunPatternLists, Guards, FunBodyNodeLists,
+                          BoundVarLists, VarsAndNames, UnusedVarLists)->
+    {CasePatterns, VarLists1} =
+        replicate_nodes_and_return_vars(FunPatternLists, BoundVarLists,
+                                        VarsAndNames, UnusedVarLists),
+    {CaseClauseGuards, VarLists2} =
+        replicate_guards_and_return_vars(Guards, BoundVarLists, VarsAndNames),
+    {CaseClauseBodies, VarLists3} =
+        replicate_nodes_and_return_vars(FunBodyNodeLists, BoundVarLists,
+                                        VarsAndNames, UnusedVarLists),
+    VarZip = lists:zip3(VarLists1, VarLists2, VarLists3),
+    VarLists =
+        [ F ++ S ++ T || {F, S, T} <- VarZip],
+    {lists:zip3(CasePatterns, CaseClauseGuards,CaseClauseBodies), VarLists}.
 
+replicate_guards_and_return_vars(Guards, BoundVarLists, VarsAndNames) ->
+    Zipped = lists:zip(Guards, BoundVarLists),
+    GuardsAndVars =
+        lists:map(
+          fun({Guard, BoundVars})->
+                  case Guard of
+                      [] -> {[],[]};
+                      _ ->
+                          copy_node_and_return_variables(hd(Guard), BoundVars,
+                                                         VarsAndNames, [])
+                  end
+          end,Zipped),
+    lists:unzip(GuardsAndVars).
 
-get_pair2(Node, NodeList)->
-    {value, {_, NodePair}} =
-        lists:keysearch(Node, 1, NodeList),
-    NodePair.
-    
-
-replicate_guards_and_rename_vars(Guards, BoundVarLists, VarPairLists) ->
-    Zipped = lists:zip3(Guards, BoundVarLists, VarPairLists),
-    lists:map(
-      fun({Guard, BoundVars, VarPairList})->
-              case Guard of
-                  [] -> [];
-                  _ ->
-                      Nodes =
-                          ?ESG:copy(Guard),
-                      CopiedNode = get_pair2(Guard, Nodes),
-                      OldVariables =
-                          [ OldNode || {OldNode, _} <- Nodes,
-                                       lists:member(OldNode, BoundVars)],
-                      [ begin
-                            NewVarNode = get_pair2(Variable, Nodes),
-                            OldVarToken = 
-                                ?GRAPH:path(Variable,[elex]),
-                            NewVarToken =
-                                get_pair2(OldVarToken, Nodes),
-                            %%update name
-                            #expr{value = OldName} = ?GRAPH:data(Variable),
-                            NewName = get_pair(OldName, VarPairList),
-                            update_var_name(NewVarNode, NewVarToken, 
-                                            NewName)
-                        end || Variable <- OldVariables],
-                      CopiedNode
-              end
-      end,Zipped).
-
-
-replicate_nodes_and_rename_vars(NodeLists, BoundVarLists, VarPairLists) ->
+replicate_nodes_and_return_vars(NodeLists, BoundVarLists, VarsAndNames,
+                                UnusedVarLists) ->
     Zipped =
-        lists:zip3(NodeLists, BoundVarLists, VarPairLists),
-    [ [ begin
-            Nodes =
-                ?ESG:copy(Node),
-            CopiedNode = get_pair2(Node, Nodes),
-            OldVariables =
-                [ OldNode || {OldNode, _} <- Nodes,
-                             lists:member(OldNode, BoundVars)],
-            [ begin
-                  NewVarNode = get_pair2(Variable, Nodes),
-                  [OldVarToken] = 
-                      ?GRAPH:path(Variable,[elex]),
-                  NewVarToken =
-                      get_pair2(OldVarToken, Nodes),
-                  %%update name
-                  #expr{value = OldName} = ?GRAPH:data(Variable),
-                  NewName = get_pair(OldName, VarPairList),
-                  update_var_name(NewVarNode, NewVarToken, 
-                                  NewName)
-              end || Variable <- OldVariables],
-            CopiedNode
-        end
-        || Node <- BodyNodes]
-      || {BodyNodes, BoundVars, VarPairList} <- Zipped].
+        lists:zip3(NodeLists, BoundVarLists, UnusedVarLists),
+    NodeAndVarPairLists =
+        [[ copy_node_and_return_variables(Node, BoundVars, VarsAndNames,
+                                          UnusedVars)
+           || Node <- BodyNodes]
+         || {BodyNodes, BoundVars, UnusedVars} <- Zipped],
+    CopiedNodeLists =
+        [[ Node || {Node, _} <- PairList]
+         || PairList <- NodeAndVarPairLists],
+    VarLists =
+        [ lists:flatten([ Vars || {_, Vars} <- PairList])
+          || PairList <- NodeAndVarPairLists],
+    {CopiedNodeLists, VarLists}.
 
-create_match_expr(MatchPairList, BoundVars, VarPairList)->
-    LeftSideNodes =
-        [begin
-            Nodes =
-                ?ESG:copy(Left),
-            LeftNode = get_pair2(Left, Nodes),
-            OldVariables =
-                [ OldNode || {OldNode, _} <- Nodes,
-                             lists:member(OldNode, BoundVars)],
-            [ begin
-                  NewVarNode = get_pair2(Variable, Nodes),
-                  [OldVarToken] = 
-                      ?GRAPH:path(Variable,[elex]),
-                  NewVarToken =
-                      get_pair2(OldVarToken, Nodes),
-                  %%update name
-                  #expr{value = OldName} = ?GRAPH:data(Variable),
-                  NewName = get_pair(OldName, VarPairList),
-                  update_var_name(NewVarNode, NewVarToken, 
-                                  NewName)
-              end || Variable <- OldVariables],
-             LeftNode
-         end
-         || {Left, _} <- MatchPairList],
+create_match_expr(MatchPairList, BoundVars, VarsAndNames, UnusedVars)->
+    {LeftSideNodes, VarNodes} =
+        lists:unzip(
+          [ copy_node_and_return_variables(Left, BoundVars, VarsAndNames,
+                                           UnusedVars)
+            || {Left, _} <- MatchPairList]),
     RightSideNodes =
         [ begin
-              RightSide = ?ESG:copy(Right),
-              get_pair2(Right,RightSide)
+              RightSide = ?Syn:copy(Right),
+              get_pair(Right,RightSide)
           end
-          || {_, Right} <- MatchPairList ],
-
+          || {_, Right} <- MatchPairList],
     case {LeftSideNodes, RightSideNodes} of
         {[],[]} ->
-            [];
+            {[],[]};
         {[LeftNode],[RightNode]} ->
-            [?SYNTAX:create(#expr{kind=match_expr},
-                            [{sub,LeftNode},{sub,RightNode}])];
+            {[?Syn:create(#expr{kind=match_expr},
+                         [{sub,LeftNode},{sub,RightNode}])],
+             lists:flatten(VarNodes)};
         _ ->
             LeftSide =
-                ?SYNTAX:create(#expr{kind=tuple},
+                ?Syn:create(#expr{kind=tuple},
                                [{sub , LeftSideNodes}]),
             RightSide =
-                ?SYNTAX:create(#expr{kind=tuple},
+                ?Syn:create(#expr{kind=tuple},
                                [{sub , RightSideNodes}]),
-            [?SYNTAX:create(#expr{kind=match_expr},
-                            [{sub,LeftSide},{sub,RightSide}])]
+            {[?Syn:create(#expr{kind=match_expr},
+                          [{sub,LeftSide},{sub,RightSide}])],
+             lists:flatten(VarNodes)}
     end.
 
-replace_app_with_case_expr(AppParent, AppNode, PLink, Parameters, ClauseDatas)->
+copy_node_and_return_variables(Node, BoundVars, VarsAndNames, UnusedVarList) ->
+    Nodes =
+        ?Syn:copy(Node),
+    CopiedNode = get_pair(Node, Nodes),
+    Variables =
+        [ begin
+              case lists:member(OldNode, UnusedVarList) of
+                  true ->
+                      {NewNode, "_"};
+                  _ ->
+                      Name = get_pair(OldNode, VarsAndNames),
+                      {NewNode, Name}
+              end
+          end
+          || {OldNode, NewNode} <- Nodes,
+             lists:member(OldNode, BoundVars)],
+    {CopiedNode, Variables}.
+
+
+varnodes_and_names(Clauses) ->
+    lists:flatten(
+      [ begin
+            VarObjs = ?Query:exec(Clause, ?Clause:variables()),
+            [ begin
+                  Name = ?Var:name(VarObj),
+                  Occ = ?Query:exec(VarObj, ?Var:occurrences()),
+                  [ {O, Name} || O <- Occ]
+              end
+              || VarObj <- VarObjs]
+        end
+        || Clause <- Clauses]).
+
+replace_app_with_case_expr(AppParent, AppNode, Parameters, ClauseData_)->
     ArgNode =
-        case Parameters of
-            [Par] ->
-                Par;
-            _ ->
-                ?SYNTAX:create(#expr{kind=tuple},
-                               [{sub , Parameters}])
+        begin
+            ?Syn:replace(AppNode,{sub,2,length(Parameters)},[]),
+            case Parameters of
+                [P] -> P;
+                _ ->
+                    ?Syn:create(#expr{kind=tuple},
+                                [{sub , Parameters}])
+            end
         end,
     HeadClause =
-        ?SYNTAX:create(#clause{kind=expr},[{body,ArgNode}]),
+        ?Syn:create(#clause{kind=expr},[{body,ArgNode}]),
     Branches =
-        lists:map(fun({FunPattern, Guard, FunBodyNodes})->
-                          Pattern =
-                              case FunPattern of
-                                  [FP] ->
-                                      FP;
-                                  _ ->
-                                      ?SYNTAX:create(#expr{kind=tuple},
-                                                     [{sub,FunPattern}])
-                              end,
-                          case Guard of
-                              [] ->
-                                  ?SYNTAX:create(#clause{kind=pattern},
-                                                 [{pattern, Pattern},
-                                                  {body, FunBodyNodes}]);
-                              _ ->
-                                  ?SYNTAX:create(#clause{kind=pattern},
-                                                 [{pattern, Pattern},
-                                                  {guard, Guard},
-                                                  {body, FunBodyNodes}])
-                          end
-                  end,ClauseDatas),
+        lists:map(
+          fun({FunPattern, Guard, FunBodyNodes})->
+                  Pattern =
+                      case FunPattern of
+                          [FP] ->
+                              FP;
+                          _ ->
+                              ?Syn:create(#expr{kind=tuple},
+                                          [{sub,FunPattern}])
+                      end,
+                  case Guard of
+                      [] ->
+                          ?Syn:create(#clause{kind=pattern},
+                                      [{pattern, Pattern},
+                                       {body, FunBodyNodes}]);
+                      _ ->
+                          ?Syn:create(#clause{kind=pattern},
+                                      [{pattern, Pattern},
+                                       {guard, Guard},
+                                       {body, FunBodyNodes}])
+                  end
+          end,ClauseData_),
     CaseExpr =
-        ?SYNTAX:create(#expr{kind=case_expr},
+        ?Syn:create(#expr{kind=case_expr},
                        [{headcl, HeadClause},
                         {exprcl, Branches}]),
-    ?SYNTAX:replace(AppParent,{node,AppNode},[{PLink, CaseExpr}]).
+    ?Syn:replace(AppParent,{node,AppNode},[CaseExpr]),
+    CaseExpr.
 
-get_bound_and_unused_vars_from_pattern(St = #refst{funpatternlists =
-                                                   FunPatternLists})->
-    FunPatternVars =
-        [ ?SEMINF:vars(sub,PatternNodes) || PatternNodes <- FunPatternLists],
-    VarObjs =
-        [ ?SEMINF:varbinds(PatternVars) || PatternVars <- FunPatternVars ],
-    VarNodes =
-        [?SEMINF:varbinds_back(VarObj) ++ ?SEMINF:varrefs_back(VarObj)
-          || VarObj <- VarObjs],
-    UnusedVarNodes =
-        [[ ?SEMINF:varbinds_back([Obj]) ||
-             Obj <- VarObj,
-             length(?SEMINF:varrefs_back([Obj])) == 0]
-         || VarObj <- VarObjs],
-    St#refst{boundvarlists = VarNodes, unusedvarlists = UnusedVarNodes,
-             funpatternvarlists = FunPatternVars}.
 
-update_var_name(VarNode, VarToken, NewName)->
+pairs_to_rename(VarLists, VarPairLists) ->
+    Zipped = lists:zip(VarLists, VarPairLists),
+    [ [ begin
+            case OldName of
+                "_" ->
+                    {Var, "_"};
+                _ ->
+                    NewName = get_pair(OldName, VarPairList),
+                    {Var, NewName}
+            end
+        end || {Var, OldName} <- VarList ]
+      || {VarList, VarPairList} <- Zipped].
+
+rename_variables(PairLists)->
+    [ [ update_var_name(Pair) || Pair <- PairList]
+      || PairList <- PairLists].
+
+update_var_name({VarNode, NewName})->
     case NewName of
         no_pair ->
             ok;
         _ ->
-            Data = ?GRAPH:data(VarNode),
-            Lex = ?GRAPH:data(VarToken),
-            #lex{data = TokenData = #token{value = _OldName}} = Lex,
-            NewToken =
-                Lex#lex{data =
-                        TokenData#token{value = NewName,
-                                        text = NewName}},
-            ?GRAPH:update(VarNode, Data#expr{value = NewName}),
-            ?GRAPH:update(VarToken, NewToken)
+            ?Syn:replace(VarNode, {elex, 1}, [NewName])
     end.
 
-maintain_applications(Nodes, Imported, Exported)->
+maintain_applications(AppNodes, Imported, Exported)->
     FunData = Imported ++ Exported,
-    AppNodes = 
-        ?SEMINF:apps(sub,Nodes),
     [begin
-         [FunObj] = 
-             ?GRAPH:path(App,[funref]),
-         #func{name = Name, arity = Arity} =
-             ?GRAPH:data(FunObj),
+         [FunObj] = ?Query:exec(App, ?Expr:function()),
+         Name = ?Fun:name(FunObj),
+         Arity = ?Fun:arity(FunObj),
          case get_mod({Name,Arity}, FunData) of
              [] ->
                  ok;
              Mod ->
-                 insert_module_qualifier(Mod, App)
+                 ?Expr:add_modq(App, Mod)
          end
-     end 
+     end
      || App <- AppNodes].
-
-insert_module_qualifier(ModName, AppNode)->
-    AppSubExpr = ?GRAPH:path(AppNode,[{sub,1}]),
-    #expr{value = AppName} =
-        ?GRAPH:data(hd(AppSubExpr)),
-    NewAppSub =
-        ?SYNTAX:create(#expr{kind='atom'},[atom_to_list(AppName)]),
-    ModuleExpr =
-        ?SYNTAX:create(#expr{kind='atom'},[atom_to_list(ModName)]),
-    ModuleQualifier =
-        ?SYNTAX:create(#expr{kind='infix_expr',value=':'},
-                       [{sub,[ModuleExpr, NewAppSub]}]),
-    ?SYNTAX:replace(AppNode,{node,hd(AppSubExpr)},[{sub, [ModuleQualifier]}]).
 
 get_mod(_, []) ->
     [];
@@ -437,121 +525,47 @@ get_mod({Name,Arity},[{Mod, Name, Arity}|_Tail])->
 get_mod({Name,Arity},[_| Tail]) ->
     get_mod({Name,Arity},Tail).
 
-get_pair(Name,[{Name,NewName}|_Rest])->
-    NewName;
-get_pair(Name,[_|Rest]) ->
-    get_pair(Name,Rest);
-get_pair(_Name,[]) ->
-    no_pair.
-
-%%% ============================================================================
-%%% Implementation
-
-file_node(St = #refst{filename = FileName}) ->
-    case ?SYNTAX:file(FileName) of
-        {file, File} -> St#refst{file = File};
-        _            -> throw("File is not present in the database!")
+get_pair(N, NList)->
+    case lists:keysearch(N, 1, NList) of
+        {value, {_, NPair}} ->
+            NPair;
+        _Otherwise ->
+            no_pair
     end.
 
-module_node(St = #refst{file = File}) ->
-    case ?GRAPH:path(File, [moddef]) of
-        [ModuleNode] -> St#refst{module = ModuleNode};
-        _            -> throw("Module is not present!")
+get_app_node(Expr)->
+    Parent = ?Query:exec1(Expr, ?Expr:parent(), 
+                          ?RefError(bad_kind, application)),
+    case ?Expr:kind(Parent) of
+        application ->
+            Parent;
+        infix_expr ->
+            Parent2 =
+                ?Query:exec1(Parent, ?Expr:parent(), 
+                             ?RefError(bad_kind, application)),
+            ?Check(?Expr:kind(Parent2) == application,
+                   ?RefError(bad_kind, application)),
+            Parent2
     end.
 
-current_token(St = #refst{file = File, pos = Pos}) ->
-    Token = ?LEX:token_by_pos(File, Pos),
-    case Token of
-        illegal -> 
-            throw(?MISC:format("The selected position ~p does not indicate" ++
-                               " a function application!",[Pos]));
-        _       -> ok
-    end,
-    {_, TokenNode} = Token,
-    St#refst{token = TokenNode}.
+get_bound_and_unused_vars_from_pattern(PatternLists) ->
+    VarObjLists =
+        [ ?Query:exec(PatternNodes, ?Expr:variables())
+          || PatternNodes <- PatternLists],
+    VarNodes =
+        [ ?Query:exec(VarObjList, ?Var:occurrences())
+          || VarObjList <- VarObjLists],
+    UnusedVarNodes =
+        [lists:flatten([ ?Query:exec(Obj,?Var:bindings()) ||
+             Obj <- VarObjList,
+             length(?Query:exec(Obj, ?Var:references())) == 0])
+         || VarObjList <- VarObjLists],
+    {VarNodes, UnusedVarNodes}.
 
-expr_type_kind(St = #refst{token = Token, pos = Pos}) ->
-    [{_,Expr}] = ?ESG:parent(Token),
-    Data = ?ESG:data(Expr),
-    case Data of
-        #expr{kind = Kind} ->
-            case Kind of
-                atom ->
-                    St#refst{ expr = Expr};
-                infix_expr ->
-                    SubExpr =
-                        hd(lists:reverse(?ESG:path(Expr,[sub]))),
-                    St#refst{ expr = SubExpr};
-                _ -> 
-                    throw(?MISC:format("The selected position ~p does not" ++ 
-                                       " indicate a function application!"
-                                       ,[Pos]))
-            end;
-        _ -> 
-            throw(?MISC:format("The selected position ~p does not indicate" ++
-                               " a function application!",[Pos]))
-    end.
-
-app_and_module(St = #refst{expr = Expr, pos = Pos}) ->
-    Node = ?ESG:path(Expr, [{sub,back}]),
-    if Node == [] -> 
-            throw(?MISC:format("The selected position ~p does not indicate" ++
-                               " a function application!",[Pos]));
-        true -> ok
-    end,
-    #expr{kind = Kind} = ?ESG:data(hd(Node)),
-    CurrNode = hd(Node),
-    {Qualifier, AppNode} =
-        case Kind of
-            infix_expr ->
-                App = hd(?ESG:path(CurrNode,[{sub,back}])),
-                {Node, App};
-            application -> {undefined, CurrNode};
-            _           -> 
-                throw(?MISC:format("The selected position ~p does not indicate"
-                                   ++ " a function application!",[Pos]))
-        end,
-    [{PLink,_}] = ?ESG:parent(AppNode),
-    St#refst{ appnode = AppNode, qualifier = Qualifier, plink = PLink}.
-
-get_parameters(St = #refst{appnode = AppNode}) ->
-    Subs = ?ESG:path(AppNode, [sub]),
-    St#refst{ parameters = tl(Subs)}.
-
-get_fun_data(St = #refst{appnode = AppNode}) ->
-    Node = ?ESG:path(AppNode, [funref, {fundef,back}]),
-    case Node of
-        [] ->
-            throw("The definition module of the function is not present in the"
-                  ++ " database!");
-        _ ->
-            [FunNode] = Node,
-            FunClauses = ?ESG:path(FunNode,[funcl]),
-            FunPatternLists =
-                [?ESG:path(Clause,[pattern])|| Clause <- FunClauses],
-            Guards =
-                lists:map(fun(Clause)->
-                    Guard = ?ESG:path(Clause,[guard]),
-                    case Guard of
-                        [] -> [];
-                        _  -> hd(Guard)
-                    end
-                end,FunClauses),
-            St#refst{funnode = FunNode, funclauses = FunClauses,
-                     funpatternlists = FunPatternLists, guards = Guards}
-    end.
-
-get_appclause_variables(St = #refst{appnode = AppNode}) ->
-    [ClauseNode] = ?ESG:path(AppNode, [sup,{visib, back}]),
-    VarNode = lists:flatten(?SEMINF:vars(clause,[ClauseNode])),
-    St#refst{appvariables = VarNode, appclause = ClauseNode}.
-
-
-get_attr_pairs(St = #refst{parameters = Parameters, 
-                           funpatternlists = FunPatternLists}) ->
-     AttrPairLists =
+get_attr_pairs(Parameters, FunPatternLists) ->
+    AttrPairLists =
         lists:map(fun(Elem)->
-                          get_attr_pairs(Elem,Parameters)
+                          get_attr_pairs({Elem,Parameters})
                   end,FunPatternLists),
     VarPairs =
         [[ Pair || {Kind, Pair} <- AttrPairList, Kind == variable]
@@ -559,40 +573,50 @@ get_attr_pairs(St = #refst{parameters = Parameters,
     MatchPairs =
         [[ Pair || {Kind, Pair} <- AttrPairList, Kind == match]
          || AttrPairList <- AttrPairLists],
-
-    St#refst{varpairlists = VarPairs, matchpairlists = MatchPairs}.
+    {VarPairs, MatchPairs}.
 
 
 %%supporting function for previous
 
-get_attr_pairs(Patterns, Parameters)->
+get_attr_pairs({Patterns, Parameters})->
     Zipped = lists:zip(Patterns, Parameters),
     lists:flatten(
       lists:map(
         fun({FunArg, AppArg})->
-                #expr{kind = FunArgType,value = FunArgName} = ?ESG:data(FunArg),
-                #expr{kind = AppArgType,value = AppArgName} = ?ESG:data(AppArg),
+                FunArgType = ?Expr:kind(FunArg),
+                AppArgType = ?Expr:kind(AppArg),
                 case FunArgType of
                     AppArgType when AppArgType == variable ->
-                        [{variable,{FunArgName,AppArgName}}];
+                        ArgVariable = ?Query:exec(FunArg,
+                                                  ?Expr:variables()),
+                        case ArgVariable of
+                            [] -> [];
+                            _ ->
+                                [{variable,
+                                  {?Var:name(hd(ArgVariable)),
+                                   ?Var:name(
+                                      hd(?Query:exec(AppArg,
+                                                     ?Expr:variables())))}}
+                                ]
+                        end;
 
                     AppArgType when (AppArgType == cons ) ->
-                        FunArgSub = ?ESG:path(FunArg,[sub]),
-                        AppArgSub = ?ESG:path(AppArg,[sub]),
+                        FunArgSub = ?Query:exec(FunArg, ?Expr:children()),
+                        AppArgSub = ?Query:exec(AppArg, ?Expr:children()),
                         case length(FunArgSub)==length(AppArgSub) of
                             true ->
                                 SubNodes =
-                                    get_attr_pairs(FunArgSub,AppArgSub),
-                                case [{Kind, Rest} || {Kind, Rest} <- SubNodes, 
+                                    get_attr_pairs({FunArgSub,AppArgSub}),
+                                case [{Kind, Rest} || {Kind, Rest} <- SubNodes,
                                                       Kind == match] of
                                     [] ->
-                                        [{Kind, Rest} || {Kind, Rest} 
-                                                             <- SubNodes, 
+                                        [{Kind, Rest} || {Kind, Rest}
+                                                             <- SubNodes,
                                                          Kind == variable];
                                     _ ->
                                         [{match,{FunArg, AppArg}}] ++
-                                            [{Kind, Rest} || {Kind, Rest} 
-                                                                 <- SubNodes, 
+                                            [{Kind, Rest} || {Kind, Rest}
+                                                                 <- SubNodes,
                                                              Kind == variable]
                                 end;
                             _ ->
@@ -601,19 +625,19 @@ get_attr_pairs(Patterns, Parameters)->
                     AppArgType when (AppArgType == record_expr) ->
                         [{match,{FunArg,AppArg}}];
                     AppArgType when (AppArgType == match_expr) ->
-                        FunArgSub = ?ESG:path(FunArg,[sub]),
-                        AppArgSub = ?ESG:path(AppArg,[sub]),
+                        FunArgSub = ?Query:exec(FunArg, ?Expr:children()),
+                        AppArgSub = ?Query:exec(AppArg, ?Expr:children()),
                         SubNodes =
-                            get_attr_pairs(FunArgSub,AppArgSub),
+                            get_attr_pairs({FunArgSub,AppArgSub}),
                         [{match,{FunArg,AppArg}}] ++
                             [ {Kind,Rest} || {Kind, Rest} <- SubNodes,
                                              Kind == variable];
                     AppArgType ->
-                        FunArgSub = ?ESG:path(FunArg,[sub]),
-                        AppArgSub = ?ESG:path(AppArg,[sub]),
+                        FunArgSub = ?Query:exec(FunArg, ?Expr:children()),
+                        AppArgSub = ?Query:exec(AppArg, ?Expr:children()),
                         case length(FunArgSub) == length(AppArgSub) of
                             true ->
-                                get_attr_pairs(FunArgSub,AppArgSub);
+                                get_attr_pairs({FunArgSub,AppArgSub});
                             _Other ->
                                 [{match,{FunArg,AppArg}}]
                         end;
@@ -622,156 +646,88 @@ get_attr_pairs(Patterns, Parameters)->
                 end
         end,Zipped)).
 
-get_parent_node(St = #refst{appnode = AppNode}) ->
-    [{_,Parent}] = ?ESG:parent(AppNode),
-    St#refst{appparent = Parent}.
+get_app_nodes_from_clauses(FunClauses) ->
+    ExprLists =
+        [ ?Query:exec(Clause, ?Query:seq(?Clause:exprs(), ?Expr:deep_sub()))
+          || Clause <- FunClauses],
+    [[ Expr
+       || Expr <- ExprList, ?Expr:kind(Expr) == application ]
+     || ExprList <- ExprLists].
 
-get_app_nodes_from_clauses(St = #refst{funclauses = FunClauses}) ->
-    AppNodes =
-        lists:map(fun(Clause)->
-            ?SEMINF:apps(clause,[Clause])
-        end,FunClauses),
-    St#refst{appnodelists = AppNodes}.
-
-get_fun_module(St = #refst{funnode = FunNode}) ->
-    FunFile = ?ESG:path(FunNode,[{form,back}]),
-    case FunFile of
-        [] -> throw("The definition module of the function is not loaded to the database!");
-        _  -> St#refst{funfile = hd(FunFile)}
-    end.
-
-get_data_about_app(AppNode)->
-    [PossibleQual] = ?ESG:path(AppNode,[{sub,1}]),
-    case ?ESG:data(PossibleQual) of
-        #expr{value = ':'} ->
-            [];
-        _ ->
-            [FunObj] = ?ESG:path(AppNode,[funref]),
-            ExpObj = ?ESG:path(FunObj,[{funexp, back}]),
-            ImpObj = ?ESG:path(FunObj,[{funimp, back}]),
-            #func{name = Name, arity = Arity} =
-                ?ESG:data(FunObj),
-            case {ExpObj,ImpObj} of
-                {[],[]} ->
+get_data_about_app(Mod, Node)->
+    PossibleQual = ?Query:exec(Node, ?Expr:modq()),
+    case PossibleQual of
+        [] ->
+            [FunObj] = ?Query:exec(Node, ?Expr:function()),
+            IsExported = ?Fun:exported(FunObj),
+            Name = ?Fun:name(FunObj),
+            Arity = ?Fun:arity(FunObj),
+            IsImported = (?Query:exec(Mod, ?Mod:imported(Name, Arity)) /= []),
+            FunObjMod = ?Query:exec1(FunObj, ?Fun:module(), ambiguous),
+            case {IsExported, IsImported} of
+                {false, false} ->
                     {undefined,{undefined, Name, Arity}};
-                {[Mod],[]} ->
-                    #module{name = ModName} = ?ESG:data(Mod),
+                {true, false} ->
+                    ModName = ?Mod:name(FunObjMod),
                     {exported, {ModName, Name, Arity}};
-                {[],[_Mod]} ->
-                    [ModObj] = ?ESG:path(FunObj,[{func,back}]),
-                    #module{name = ModName} = ?ESG:data(ModObj),
+                {false, true} ->
+                    ModName = ?Mod:name(FunObjMod),
                     {imported, {ModName, Name, Arity}}
-            end
-    end.
-
-get_applications(St = #refst{file = File, funfile = FunFile,
-                                         appnodelists = AppNodeLists}) ->
-    case File of
-        FunFile ->
-            St;
+            end;
         _ ->
-            AppLists =
-                [lists:flatten([ get_data_about_app(AppNode) 
-                                 || AppNode <- AppNodeList])
-                 || AppNodeList <- AppNodeLists],
-            Undefined =
-                [ [ Fun || {Kind, Fun} <- AppList, Kind == undefined]
-                  || AppList <- AppLists],
-            Exported =
-                lists:usort(
-                  lists:flatten(
-                    [ [ Fun || {Kind, Fun} <- AppList, Kind == exported]
-                      || AppList <- AppLists])),
-            Imported =
-                lists:usort(
-                  lists:flatten(
-                    [ [ Fun || {Kind, Fun} <- AppList, Kind == imported]
-                      || AppList <- AppLists])),
-            St#refst{imported = Imported, exported = Exported,
-                     localapps = Undefined}
+            []
     end.
 
-get_function_bodynodes(St = #refst{funclauses = FunClauses})->
-    BodyNodeLists =
-        [?ESG:path(Clause,[body]) || Clause <- FunClauses],
-    St#refst{funbodynodelists = BodyNodeLists}.
+get_application_data(AppNodeLists, AppMod, FunMod) when AppMod /= FunMod ->
+    AppLists =
+        [lists:flatten([ get_data_about_app(FunMod, Node)
+                         || Node <- AppNodeList])
+         || AppNodeList <- AppNodeLists],
+    LocalsAndBIF =
+        [ [ Fun || {Kind, Fun} <- AppList, Kind == undefined]
+          || AppList <- AppLists],
+    Exported =
+        lists:usort(
+          lists:flatten(
+            [ [ Fun || {Kind, Fun} <- AppList, Kind == exported]
+              || AppList <- AppLists])),
+    Imported =
+        lists:usort(
+          lists:flatten(
+            [ [ Fun || {Kind, Fun} <- AppList, Kind == imported]
+              || AppList <- AppLists])),
+    {Imported, Exported, LocalsAndBIF};
+get_application_data(_,_,_) ->
+    {[], [], []}.
 
-concat_names([])->
-    "";
-concat_names([Head|[]]) ->
-    atom_to_list(Head);
-concat_names([Head|Tail]) ->
-    atom_to_list(Head) ++ ", " ++ concat_names(Tail).
 
 %%% ============================================================================
 %%% Checks
 
-check_var_collisions(#refst{funclauses = FunClauses,
-                            appvariables = AppVarNodes,
-                            varpairlists = VarPairLists}) ->
-    AppVarNames =
-        ?SEMINF:var_names(AppVarNodes),
+check_var_collisions(FunClauses, ScopeVarObjs, VarPairLists) ->
+    ScopeVarNames =
+        [?Var:name(Obj) || Obj <- ScopeVarObjs],
     Zipped = lists:zip(FunClauses, VarPairLists),%%BoundVarNames),
-    Collisions =
-        lists:flatten(
-          lists:map(
-            fun({Clause, VarPairList})->
-                    VarNodes =
-                        ?SEMINF:vars(clause,[Clause]),
-                    VarNames =
-                        ?SEMINF:var_names(VarNodes),
-                    Inter = ?MISC:intersect(VarNames, AppVarNames) --
-                        [First || {First,_} <- VarPairList],
-                    [ list_to_atom(In) || In <- Inter]
-            end, Zipped)),
-    case Collisions of
-        [] ->
-            ok;
-        _ -> 
-            throw("There are variable name collisions: " ++ 
-                  concat_names(Collisions))
-    end,
-    ok.
+    lists:flatten(
+      lists:map(
+        fun({Clause, VarPairList})->
+                VarObjNodes =
+                    ?Query:exec(Clause, ?Clause:variables()),
+                VarNames =
+                    [ ?Var:name(VarObj) || VarObj <- VarObjNodes],
+                Inter = ?MISC:intersect(VarNames, ScopeVarNames) --
+                    [First || {First,_} <- VarPairList],
+                [ list_to_atom(In) || In <- Inter]
+        end, Zipped)).
 
-check_applications(#refst{file = File, funfile = FunFile,
-                          localapps = LocalApps})->
-    case File of
-        FunFile ->
-            ok;
+check_applications(LocalApps, AppMod, FunMod) ->
+    case AppMod of
+        FunMod -> [];
         _ ->
             Apps =
                 lists:flatten(LocalApps),
             BifList =
                 [{Type, Name, Arity}
                  || {Type, Name, Arity} <- Apps, erl_internal:bif(Name, Arity)],
-            case (Apps -- BifList) of
-                [] ->
-                    ok;
-                _ -> throw("There are local function calls in the body of the"
-                           ++ " function: " ++ concat_names(Apps -- BifList))
-            end
-    end.
-
-check_macros_records(#refst{file = File, funfile = FunFile, 
-                            funnode = FunNode})->
-    case File of
-        FunFile ->
-            ok;
-        _ ->
-            {Macros, _} = ?LEX:used_macros([FunNode]),
-            {Records, _} = ?LEX:used_records([FunNode]),
-            case {Macros,Records} of
-                {[],[]} ->
-                    ok;
-                {_,[]} ->
-                    throw("There are macro applications in the body of the"
-                           ++ " function. This case is not implemented yet.");
-                {[], _} ->
-                    throw("There are record expressions in the body of the"
-                           ++ " function. This case is not implemented yet.");
-                _ ->
-                    throw("There are record expressionsand macro applications"
-                          ++ " in the body of the"
-                           ++ " function. This case is not implemented yet.")
-            end
+            Apps -- BifList
     end.

@@ -20,158 +20,93 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
+%%% @doc
+%%% This refactoring renames records in modules or header files. After the
+%%% transformation, the old name will be replaced by the
+%%% new name in the record definition and in every reference to the given
+%%% record (e.g.\ record field access or field update expressions). The
+%%% condition of the renaming is that there is no name conflict with another
+%%% record in the file (which contains the given record), in its
+%%% includes, or where it is included (the latter is only possible when we
+%%% are renaming in a header file).
 %%%
-%%% @doc Rename record
+%%% Parameters
+%%% <ul>
+%%%   <li>The record to be renamed can be specified by:
+%%%     <ul>
+%%%       <li>The containing file and a position that points to the record
+%%%       definition or to a usage of the record (used in Emacs).</li>
+%%%       <li>The containing file and the old record name (used in command
+%%%       line).</li>
+%%%     </ul>
+%%%   </li>
+%%%   <li>The new name of the record as a string or as an atom.</li>
+%%% </ul>
+%%%
+%%% Side conditions
+%%% <ul>
+%%%   <li>There must be no record with the new name
+%%%     <ul>
+%%%       <li>in the file that contains the record,</li>
+%%%       <li>in files, which are included by this file,</li>
+%%%       <li>in files, which include this file.</li>
+%%%     </ul>
+%%%   </li>
+%%% </ul>
+%%%
+%%% Transformation steps and compensations
+%%% <ol>
+%%%   <li>The record name is changed to the new name in the definition of
+%%%   the record and in every record expression that refers the record.</li>
+%%% </ol>
+%%%
+%%%
+%%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
+%%% @author Lilla Hajos <lya@elte.hu>
+
 
 -module(referl_tr_rename_rec).
--vsn("$Rev: 1973 $").
+-vsn("$Rev: 2599 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/4]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
-%% State record
--record(state, {filepath, file, record,
-                pos = undefined, oldname = undefined,
-                newname, refs}).
-
-%%% ============================================================================
-%%% Errors
-
-throw_record_not_found() ->
-    throw("record not found").
-
-msg_name_collision() ->
-    "name collision with an existing record".
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(pos | name, string(), integer() | atom(), atom()) -> ok
-%% @doc Renames the specified record to a new name.
-%% The record can be specified by a position in the file or by its old name.
-do(pos, FilePath, Pos, NewName) ->
-    ?TRANSFORM:do(?MODULE, {pos, FilePath, Pos, NewName});
-do(name, FilePath, OldName, NewName) ->
-    ?TRANSFORM:do(?MODULE, {name, FilePath, OldName, NewName}).
+-export([prepare/1]).
 
 %%% ============================================================================
 %%% Callbacks
 
-%% @private
-init({pos, FilePath, Pos, NewName}) ->
-    #state{filepath = FilePath, pos = Pos, newname = NewName};
-
-init({name, FilePath, OldName, NewName}) ->
-    #state{filepath = FilePath, oldname = OldName, newname = NewName}.
-
-%% @private
-steps() ->
-    [
-     fun new_name_to_atom/1,
-     fun check_file_record/1,
-     fun check_name_conflicts/1,
-     fun query_rec_refs/1
-    ].
-
-%% @private
-transform(#state{file = _File, refs = Refs, newname = NewName, record=Record}) ->
-    Update =
-        fun (D=#expr{kind=atom}) ->
-                D#expr{value=NewName};
-            (D=#lex{data=Data}) ->
-                D#lex{data=Data#token{value=NewName, text=?MISC:to_list(NewName)}};
-            (_) ->
-                throw("Unknown reference")
-        end,
-    [?ESG:update(Node, Update(?ESG:data(Node))) || Node <- Refs],
-    ?ESG:update(Record, (?ESG:data(Record))#record{name=NewName}),
-    {changed_files(Refs), ok}.
-
-changed_files(Refs) ->
-    lists:usort([?SEMINF:parent_file(N) || N <- Refs]).
-
-    
+prepare(Args) ->
+    NewName = ?Args:name(Args),
+    Record  = ?Args:record(Args),
+    check_name_conflicts(Record, NewName),
+    Refs    = query_rec_refs(Record),
+    fun() ->
+        [ begin
+            ?Syn:replace(Expr, {elex,1}, [io_lib:write_atom(NewName)]),
+            ?Transform:touch(Expr)
+          end || Expr <- Refs ]
+    end.
 
 %%% ============================================================================
 %%% Implementation
 
-new_name_to_atom(St = #state{newname=NN}) ->
-    St#state{newname=?MISC:to_atom(NN)}.
+check_name_conflicts(Record, NewName) ->
+    File  = ?Query:exec(Record,?Rec:file()),
+    Files = lists:usort(?Query:exec(File, {all, [incl], [{incl, back}]})),
+    Names = [?Rec:name(Rec) || Rec <- ?Query:exec(Files,?File:records())],
+    ?Check( not lists:member(NewName, Names),
+            ?RefError(rec_exists,io_lib:write_atom(NewName))).
 
-check_file_record(St = #state{oldname = undefined,
-                              filepath = FilePath,
-                              pos = Pos}) ->
-    File = ?SYNTAX:get_file(FilePath),
-    Token = ?LEX:get_token(File, Pos),
-    [{_, Node}] = ?ESG:parent(Token),
-    [RecNode] =
-        case ?ESG:data(Node) of
-            #expr{} ->
-                referred_record(Node);
-            #form{type=attrib, tag=record} ->
-                ?ESG:path(Node, [recdef]);
-            _ ->
-                throw_record_not_found()
-        end,
-    St#state{file = File, record = RecNode};
-
-check_file_record(St = #state{pos = undefined,
-                              filepath = FilePath,
-                              oldname = OldName}) ->
-    File = ?SYNTAX:get_file(FilePath),
-    [RecNode] = ?ESG:path(File, referl_anal_rec:record(OldName)),
-    St#state{file = File, record = RecNode}.
-
-referred_record(Node) ->
-    case ?ESG:path(Node, [sup, {attr, back}, recdef]) ++
-        ?ESG:path(Node, [{sub, back}, recref]) of
-        [] -> throw_record_not_found();
-        Rec -> Rec
-    end.
-
-check_name_conflicts(#state{file = File, newname = NewName}) ->
-    Names = busy_recordnames(File),
-    ?MISC:error_on_difference(lists:member(NewName, Names), false, msg_name_collision()).
-
-busy_recordnames(File) ->
-    Files = lists:usort(?ESG:path(File, [incl]) ++ ?ESG:path(File, [{incl, back}])),
-    Names =
-        lists:foldl(
-          fun(F, Acc) ->
-                  {Ns, _} =
-                      lists:unzip(?LEX:existing_records_with_source(F)),
-                  Acc ++ Ns
-          end,
-          [],
-          Files),
-    lists:usort(Names).
-
-query_rec_refs(St = #state{record = Record}) ->
-    Refs = [{Node, Data} || Node <- ?ESG:path(Record, [{recref, back}]),
-                            Data <- [?ESG:data(Node)]],
-    Exprs =
-        lists:flatmap(
-          fun({Node, #expr{kind=Kind}})
-             when Kind == record_expr orelse Kind == record_index ->
-                  ?ESG:path(Node, [{sub, 1}]);
-             ({Node, #expr{kind=Kind}})
-             when Kind == record_update orelse Kind == record_access ->
-                  ?ESG:path(Node, [{sub, 2}])
-          end,
-          Refs) ++ ?ESG:path(Record, [{recdef, back}, {attr, 1}]),
-    Tokens =
-        lists:flatmap(
-          fun(Expr) -> ?ESG:path(Expr, [elex]) end,
-          Exprs),
-    St#state{refs = Exprs ++ Tokens}.
+query_rec_refs(Record) ->
+    ?Query:exec(Record, [{recdef, back}, {attr, 1}]) ++
+    lists:flatmap(
+      fun(Node) ->
+          Kind = ?Expr:kind(Node),
+          if
+            Kind == record_expr orelse Kind == record_index ->
+              ?Query:exec(Node, [{sub, 1}]);
+            Kind == record_update orelse Kind == record_access ->
+              ?Query:exec(Node, [{sub, 2}])
+          end
+      end,
+      ?Query:exec(Record,[{recref, back}])).

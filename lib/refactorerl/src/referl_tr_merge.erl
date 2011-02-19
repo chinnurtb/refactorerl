@@ -22,346 +22,217 @@
 
 %%% @doc This module implements the ``merge expression duplicates'' transformation.
 %%%
+%%% <h2>Parameters</h2>
+%%% <ol>
+%%% <li>
+%%%     An expression in the Erlang file whose duplicates are to be merged.
+%%%     Currently it is specified by
+%%%         the file name and
+%%%         two positions in the file that delimit the expression.
+%%% </li><li>
+%%%     A name for the variable that will bind the value of the expression.
+%%%     This is a string that must conform to the requirement on variables names of
+%%%     the Erlang language.
+%%% </li></ol>
+%%%
+%%% <h2>Side conditions</h2>
+%%% <ol>
+%%% <li>
+%%%     The expression cannot be substituted if any of its subexpressions
+%%%     have side effects.
+%%% </li><li>
+%%%     The transformation cannot be executed if the expression is
+%%%     in the head of a list comprehension,
+%%%     in a pattern or
+%%%     in a guard expression.
+%%% </li><li>
+%%%     If the expression occurs in a generator expression, it should not contain
+%%%     variables that are bound by generator patterns.
+%%% </li><li>
+%%%     The given variable name should not already exist in the given scope
+%%%     in order to avoid name clashes.
+%%% </li></ol>
+%%%
+%%%
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(referl_tr_merge).
--vsn("$Rev: 1566 $").
+-vsn("$Rev: 2599 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/4]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst,  {
-                    filename,       % name of the file
-                    fpos, tpos,     % the beginning and the end of the selection
-                    newname,        % the name of the variable to be introduced
-
-                    file,           % the file node
-                    topexpr,        % the selected expression node
-                    instparents,    % the instances of the expression
-                                    % and their parents in the tree
-                    inspoint,       % the insertion point of the new match expr
-                    changeinsts,
-                    matchexprparent,
-                    insprev,
-                    vars,
-                    allvars
-                }).
+-export([prepare/1, error_text/2]).
 
 %%% ============================================================================
 %%% Errors
 
-%warn_only_instance() ->
-%    "Warning: name is only instance.".
-
-no_expr_found() ->
-    "The selection is not a valid expression.".
-
-too_many_overexprs() ->
-    "Too many over-expressions".
-
-invalid_var_name(Name) ->
-    ?MISC:format("\"~p\" is not a variable name.", [Name]).
-
-error_not_replaceable(TopExpr) ->
-    IsListComp  = "Selection is in a list comprehension",
-    IsListGen   = "Selection is in a list generator",
-    IsGuard     = "Selection is in a guard expression",
-    IsPattern   = "Selection is in a pattern",
-    Errors =
-        [   {IsListComp,    over_expr_has_type(TopExpr, list_comp)},
-            {IsListGen,     over_expr_has_type(TopExpr, list_gen)},
-            {IsGuard,       sup_expr_has_type(TopExpr, guard)},
-            {IsPattern,     sup_expr_has_type(TopExpr, pattern)} ],
-
-    case [ ErrMsg || {ErrMsg, true} <- Errors ] of
-        [ErrMsg|_] -> throw(ErrMsg);
-        _          -> throw("Internal error")
-    end.
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), integer(), integer(), string()) -> [node()]
-%% @doc Merges all duplicates of the selection in the file to the new name.
-%%      Returns the node of the file that has been changed.
-do(FileName, FPos, TPos, NewName) ->
-    ?TRANSFORM:do(?MODULE, {FileName, FPos, TPos, NewName}).
+%% @private
+error_text(no_inst, []) ->
+    % This should be impossible
+    ["No instance of the expression is available for refactoring"];
+error_text(dirty_fun, []) ->
+    ["The selected expression has functions with possible side effects"];
+error_text(message_passing, []) ->
+    ["The selected expression contains message passing"].
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FileName, FPos, TPos, NewName}) ->
-    #refst{
-        filename    = FileName,
-        fpos        = FPos,
-        tpos        = TPos,
-        newname     = NewName
-    }.
+prepare(Args) ->
+    Exprs         = ?Args:expr_range(Args),
+    ?Check(1 == length(Exprs), ?RefError(token_parent, [expr])),
+    [Expr]        = Exprs,
 
-%% @private
-steps() ->
-    [
-        fun check_var_name/1,
-        fun check_var_exists/1,
-        fun file/1,
-        fun top_expr/1,
-        fun selection_vars/1,
-        fun instances/1,
-        fun inst_parents/1,
-        fun check_replaceable_selection/1,
-        fun match_expr_parent/1,
-        fun inspoint/1
-    ].
+    NewVarName    = ?Args:varname(Args),
+    ScopeVarNames =
+            [?Var:name(V) || V <- ?Query:exec([Expr], ?Expr:scope_varbinds())],
+    ?Check( not lists:member(NewVarName, ScopeVarNames),
+            ?RefError(var_exists, NewVarName)),
 
-%% @private
-transform(St = #refst{file = File}) ->
-    insert_new_match_expr(St),
-    change_instances(St),
-    {[File], ok}.
+    Disqual  = instance_disqualifiers(Expr),
+    ?Check( [] == Disqual, ?RefError(bad_kind, Disqual)),
 
+    Insts = instances(Expr),
+    ?Check( [] /= Insts,                    ?LocalError(no_inst, [])),
+    ?Check( not has_message_passing(Expr),  ?LocalError(message_passing, [])),
+    ?Check( not has_dirty_fun(Expr),        ?LocalError(dirty_fun, [])),
 
-insert_new_match_expr(#refst{newname         = NewName,
-                             topexpr         = TopExpr,
-                             matchexprparent = MatchExprParent,
-                             insprev         = InsPrev }) ->
+    % todo Warn if expression is only instance.
+    InstParents         = [{?Syn:parent(Inst), Inst} || Inst <- Insts],
+    InsLoc = {TopCl, _} = insertion_location(Insts),
 
-    {value, {_, TopCopy}} = lists:keysearch(TopExpr, 1, ?ESG:copy(TopExpr)),
-    NewVar       = ?SYNTAX:create(#expr{kind=variable}, [NewName]),
-    NewMatchExpr = ?SYNTAX:create(#expr{kind=match_expr},
-                                  [{sub, NewVar}, {sub, TopCopy}]),
-    MatchExpr    = [ {body, NewMatchExpr} ],
-
-    case InsPrev of
-        []       -> InsTo = {body, 1, 1};
-        [Prev|_] -> InsTo = {next_to, Prev}
-    end,
-
-    ?SYNTAX:replace(MatchExprParent, InsTo, MatchExpr),
-    ?ESG:close().
-
-
-% TODO if parenthesized expression is replaced, do not leave the parentheses
-change_instances(#refst{newname     = NewName,
-                        instparents = InstParents }) ->
-    ReplInstParents = InstParents,
-    lists:foreach(
-        fun({RInst, {_Link, RParent}}) ->
-            NewVar = ?SYNTAX:create(#expr{kind=variable}, [NewName]),
-            ?SYNTAX:replace(RParent, {RInst, RInst}, [{body, [NewVar]}]),
-            ?ESG:close()
-        end, ReplInstParents).
+    [   fun() ->
+            MatchExpr = new_match_expr(NewVarName, Expr),
+            insert_new_match_expr(MatchExpr, InsLoc)
+        end,
+        [ fun(_) -> change_instance(NewVarName, Parent, Inst) end
+            || {[{_Link, Parent}], Inst} <- InstParents],
+        fun(_) ->
+            ?Transform:touch(TopCl),
+            ok
+        end
+        ].
 
 %%% ============================================================================
-%%% Preparation
+%%% Transformation
 
-file(St = #refst{filename = FileName}) ->
-    {file, File} = ?SYNTAX:file(FileName),
-    St#refst{file = File}.
+%% Creates the new match expression.
+new_match_expr(NewName, Expr) ->
+    CopyOrig = ?ESG:copy(Expr),
+    {value, {_, ExprCopy}} = lists:keysearch(Expr, 1, CopyOrig),
+    NewVar = ?Syn:create(#expr{kind=variable}, [NewName]),
+    ?Syn:create(#expr{kind=match_expr}, [{sub, NewVar}, {sub, ExprCopy}]).
 
-top_expr(St = #refst{file = File,
-                     fpos = FPos,
-                     tpos = TPos}) ->
-    {ok, FToken} = ?LEX:token_by_pos(File, FPos),
-    {ok, TToken} = ?LEX:token_by_pos(File, TPos),
-    case ?SYNTAX:top_node(FToken, TToken) of
-        {expr, TopExpr, _, _} ->
-            St#refst{topexpr = TopExpr};
-        {lex, TopLex, _, _}   ->
-            {_, TopExpr} = ?SYNTAX:single_parent_link(TopLex),
-            St#refst{topexpr = TopExpr};
-        _                     ->
-            throw(no_expr_found())
-    end.
+%% Inserts the new match expression into its new location.
+%% todo Replace the original expression if necessary.
+insert_new_match_expr(MatchExpr, {TopCl, PrevBody}) ->
+    InsFun =
+        fun(Body) ->
+            {PrevBody, Body2} = lists:split(length(PrevBody), Body),
+            PrevBody ++ [MatchExpr|Body2]
+        end,
+    ?Syn:replace(TopCl, body, InsFun).
 
-
-selection_vars(St = #refst{topexpr = TopExpr}) ->
-    Vars    = ?SEMINF:vars(sub, [TopExpr]),
-    AllVars = [ ?ESG:path(Var, [varref, {varref, back}]) || Var <- Vars ],
-    St#refst{vars = Vars, allvars = AllVars}.
-
-
-instances(St = #refst{topexpr = TopExpr, file = File, vars = []}) ->
-    [_ToFile, ToForm|_] = ?SYNTAX:path_from_root(TopExpr),
-    [TopForm]           = ?ESG:path(File, [ToForm]),
-    AllSynNodes         = ?SYNTAX:all_syntax_nodes(TopForm),
-    AllSynDatas         = [{Node, ?ESG:data(Node)} || Node <- AllSynNodes],
-    TopExprData         = ?ESG:data(TopExpr),
-    Insts               = [Inst     ||  {Inst, InstData} <- AllSynDatas,
-                                        InstData == TopExprData,
-                                        is_same_subtree(Inst, TopExpr) ],
-    St#refst{changeinsts = Insts};
-instances(St = #refst{  topexpr = TopExpr,
-                        vars    = [Var1|_],
-                        allvars = [Var1s|_] }) ->
-    {_, _, VarPathToTop, _} = ?SYNTAX:top_node(Var1, TopExpr),
-    MaybeInsts  = [ var_top(Bind, VarPathToTop) || Bind <- Var1s ],
-    Insts       = [ Inst || Inst <- lists:flatten(MaybeInsts),
-                            is_same_subtree(Inst, TopExpr),
-                            is_valid_inst(Inst) ],
-    St#refst{changeinsts = Insts}.
-
-
-inst_parents(St = #refst{changeinsts = Insts}) ->
-    InstParents = [ {Inst, ?SYNTAX:single_parent_link(Inst)} || Inst <- Insts ],
-    St#refst{instparents = InstParents}.
-
-
-match_expr_parent(St = #refst{changeinsts = Insts}) ->
-    case Insts of
-        [OnlyInst] ->
-            {_, ImmediateParent} = ?SYNTAX:single_parent_link(OnlyInst);
-        [Inst1, Inst2|RestInsts] ->
-            ImmediateParent = lists:foldl(fun top_node_fun/2,
-                                          top_node_fun(Inst1, Inst2), RestInsts)
-    end,
-    MatchExprParent = ?SYNTAX:ancestor_with_type(clause, ImmediateParent),
-    St#refst{matchexprparent = MatchExprParent}.
-
-
-
-
-%% Returns the insertion parent and the previous child
-%% (or no_prev, if there is no such child).
-inspoint(St = #refst{matchexprparent = MatchExprParent, allvars = AllVars}) ->
-    RevChildren = lists:reverse(?SYNTAX:children(MatchExprParent)),
-    InsPrev = [ Child || {body, Child} <- RevChildren,
-                         binds_var(Child, AllVars) orelse
-                            not has_any_var(Child, AllVars) ],
-    St#refst{insprev = InsPrev}.
-
+%% Replaces the instance of the expression with a new variable.
+%% todo Remove superfluous parentheses.
+change_instance(NewVarName, Parent, Inst) ->
+    NewVar = ?Syn:create(#expr{kind=variable}, [NewVarName]),
+    ?Syn:replace(Parent, {node, Inst}, [NewVar]).
 
 %%% ============================================================================
 %%% Implementation
 
-%% Tries to follow a parent sequence from a node.
-%% If it yields a node, the node is possibly an instance of the expression.
-var_top(Node, Path) ->
-    BackPath = [ {Link, back} || {Link, _Index} <- Path ],
-    case ?ESG:path(Node, BackPath) of
-        [PossibleInst] -> PossibleInst;
-        _              -> []
-    end.
+%% Returns all instances of the expression.
+%% Includes the original expression as well.
+instances(Expr) ->
+    ExprType = ?Expr:type(Expr),
+    [ E ||  E <- ?Query:exec([Expr], ?Query:seq([   ?Expr:clause(),
+                                                    ?Clause:form(),
+                                                    ?Form:deep_exprs()])),
+            ExprType == ?Expr:type(E),
+            ?Expr:is_same_expr({E, Expr}),
+            [] == instance_disqualifiers(E) ].
+
+%% Returns the list of conditions that disqualify the expression
+%% from being allowed as an instance.
+%% The list is empty if the expression can be allowed as an instance.
+instance_disqualifiers(Expr) ->
+    UpKinds = [?Expr:kind(PathNode)
+                    || {_, PathNode} <- lists:reverse(?Syn:root_path(Expr)),
+                        ?Expr:is_expr(PathNode) ],
+
+    {UpLinks, _} = lists:unzip(?Syn:root_path(Expr)),
+
+    Invalidating    = [ {list_gen,  lists:member(list_gen, UpKinds)},
+                        {guard,     lists:member(guard, UpLinks)},
+                        {pattern,   lists:member(pattern, UpLinks)},
+                        {list_comp, lists:member(list_comp, UpKinds)} ],
+
+    [Invalid || {Invalid, true} <- Invalidating].
+
+%% Determines the insertion point of the new match expression.
+%% Returns the insertion parent clause and the previos elements in its body.
+insertion_location(Insts) ->
+    TopCl             = lowest_clause(common_parent_clause(Insts)),
+    BodyExprs         = ?Query:exec([TopCl], ?Clause:body()),
+    BodyExprsWithInst = body_exprs_with_nodes(Insts, TopCl),
+    OutsideBoundVars  =
+        lists:usort(lists:flatten(
+            [?Query:exec([Inst], ?Expr:variables()) || Inst <- Insts] --
+            [?Query:exec([Inst], ?Expr:varbinds())  || Inst <- Insts])),
+    {BodyBeforeInsts, _BodyInstsPart} =
+        lists:splitwith(
+            fun(BodyExpr) -> not lists:member(BodyExpr, BodyExprsWithInst) end,
+            BodyExprs),
+    {BodyVarMatches, _BodyRest} =
+        var_bound_body_exprs(OutsideBoundVars, BodyBeforeInsts, TopCl),
+    {TopCl, BodyVarMatches}.
 
 
-is_same_subtree(BindNode, Node) ->
-    BindChildren = ?ESG:children(BindNode),
-    Children     = ?ESG:children(Node),
-    if
-        length(BindChildren) == length(Children) ->
-            DiffChildren =
-                [ {diff, BCh, Ch}
-                    ||  {{_, BCh}, {_, Ch}} <- lists:zip(BindChildren, Children),
-                        not is_same_subtree(BCh, Ch) ],
-            is_same_node(BindNode, Node) andalso DiffChildren == [];
-        true ->
-            false
-    end.
+%% Separates the prefix of the body expressions that binds
+%% variables in the given list.
+%% The bindings inside an instance are not included.
+var_bound_body_exprs(Vars, BodyExprs, TopCl) ->
+    Bindings      = [?Query:exec([Var], ?Expr:binding_vars()) || Var <- Vars],
+    UBindings     = lists:usort(lists:flatten(Bindings)),
+    BodyVarExprs  = body_exprs_with_nodes(UBindings, TopCl),
+    var_bound_body_exprs2(BodyVarExprs, [], BodyExprs).
 
-is_same_node(Node1, Node2) ->
-    Data1 = ?ESG:data(Node1),
-    Data2 = ?ESG:data(Node2),
-    case {Data1, Data2} of
-        {#lex{type = T1, data = #token{type = TT1, value = V1}},
-         #lex{type = T2, data = #token{type = TT2, value = V2}}} ->
-            T1 == T2 andalso TT1 == TT2 andalso V1 == V2;
-        {D1, D2} ->
-            D1 == D2
-    end.
+%% Searches the body until all of the bindings are found.
+var_bound_body_exprs2(_, Collected, []) ->
+    {lists:reverse(Collected), []};
+var_bound_body_exprs2([], Collected, BodyExprs) ->
+    {lists:reverse(Collected), BodyExprs};
+var_bound_body_exprs2(BodyVarExprs, Collected, [BodyExpr|BodyExprs]) ->
+    var_bound_body_exprs2(BodyVarExprs -- [BodyExpr], [BodyExpr|Collected], BodyExprs).
 
+%% Expressions immediately below the top clause that contain an instance.
+body_exprs_with_nodes(Nodes, TopCl) ->
+    NodesWithLinks =
+        [ lists:dropwhile(fun({_, PathNode}) -> PathNode /= TopCl end,
+                            ?Syn:root_path(Node))
+            || Node <- Nodes],
+    [ Node  || [{_, _}, {_, Node}|_] <- NodesWithLinks].
 
-%% Returns whether the expression binds the variable.
-%% TODO make it more accurate
-binds_var(Node, Vars) ->
-    VarNodes = lists:usort(lists:flatten(
-                [ ?ESG:path(Var, [varref]) || Var <- lists:flatten(Vars) ])),
-    case ?ESG:data(Node) of
-        #expr{} ->
-            [] /= ?MISC:intersect(?ESG:path(Node, [{varintro, back}]), VarNodes);
-        _ ->
-            false
-    end.
+%% Returns the lowest clause in the path.
+lowest_clause(Path) ->
+    [Cl|_] = [C ||  {_, C} <- lists:reverse(Path),
+                    ?Syn:node_type(C) == clause],
+    Cl.
 
+%% Returns the lowest clause that is ancestor to all of the expressions.
+common_parent_clause([Expr]) ->
+    ?Syn:root_path(Expr);
+common_parent_clause(Exprs) ->
+    [Path1|Paths] = [?Syn:root_path(Expr) || Expr <- Exprs],
+    lists:foldl(fun ?MISC:common_prefix/2, Path1, Paths).
 
-%% Returns whether a node has any of the listed variables.
-has_any_var(Node, Vars) ->
-    ExprVars = ?SEMINF:vars(sub, [Node]),
-    [] == [ has_var || Var <- Vars, lists:member(Var, ExprVars) ].
+has_message_passing(Expr) ->
+    DeepExprs = ?Query:exec(Expr, ?Expr:deep_sub()),
+    [] /= [message_passing  ||  E <- DeepExprs,
+                                #expr{kind = Kind} <- [?ESG:data(E)],
+                                Kind == send_expr orelse Kind == receive_expr].
 
-
-top_node_fun(Node1, Node2) ->
-    {_, Parent, _, _} = ?SYNTAX:top_node(Node1, Node2),
-    Parent.
-
-
-%% Returns whether the node is allowed as an instance.
-is_valid_inst(Node) ->
-    InvalidInst =   over_expr_has_type(Node, list_comp) orelse
-                    over_expr_has_type(Node, list_gen) orelse
-                    sup_expr_has_type(Node, guard) orelse
-                    sup_expr_has_type(Node, pattern),
-    not InvalidInst.
-
-
-%% Returns the expression that contains the clause above the expression.
-%% Throws an error if there is more than one such node.
-%% TODO better throw
-over_expr(Expr) ->
-    case ?ESG:path(Expr, [sup, {body, back}, {exprcl, back}]) of
-        [_,_|_] -> throw(too_many_overexprs());
-        Found   -> Found
-    end.
-
-
-%% Returns whether the expression has the expected type.
-expr_has_type(Expr, ExpectedType) ->
-    #expr{type = Type} = ?ESG:data(Expr),
-    Type == ExpectedType.
-
-%% Returns whether the over-expression has the expected type.
-over_expr_has_type(Expr, ExpectedType) ->
-    case over_expr(Expr) of
-        []         -> false;
-        [OverExpr] -> expr_has_type(OverExpr, ExpectedType)
-    end.
-
-%% Returns whether the super-expression has the expected type.
-sup_expr_has_type(Expr, ExpectedType) ->
-    [SupExpr] = ?ESG:path(Expr, [sup]),
-    expr_has_type(SupExpr, ExpectedType).
-
-
-%%% ============================================================================
-%%% Checks
-
-% TODO check also the following
-% - macros
-% - BIFs
-% - send, receive
-
-%% TODO move it to another module as a more general function
-check_var_name(#refst{newname = Name = [FirstChar|_]}) ->
-    if
-        $A =< FirstChar, FirstChar =< $Z -> ok;
-        true                             -> throw(invalid_var_name(Name))
-    end.
-
-check_replaceable_selection(#refst{topexpr = TopExpr, changeinsts = ChangeInsts}) ->
-    case lists:member(TopExpr, ChangeInsts) of
-        true  -> ok;
-        false -> error_not_replaceable(TopExpr)
-    end.
-
-% TODO NewName is already bound
-check_var_exists(#refst{newname = _NewName}) ->
-    ok.
+has_dirty_fun(Expr) ->
+    lists:any(fun ?Fun:dirty/1, ?Query:exec([Expr], ?Expr:functions())).

@@ -25,102 +25,46 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(referl_tr_expand_funexpr).
--vsn("$Rev: 1971 $").
+-vsn("$Rev: 2599 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/2, is_implicit_fun_expr/1]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
-%% State record
--record(state, {filepath, file, pos, node}).
+-export([prepare/1, error_text/2]).
 
 %%% ============================================================================
 %%% Errors
 
-implicit_not_found() ->
-    throw("No implicit fun expression found.").
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(node(), integer()) -> ok
-%% @doc Expands the implicit fun expression in the specified file on the
-%% specified position, when it exists.
-do(FilePath, Pos) ->
-    ?TRANSFORM:do(?MODULE, {FilePath, Pos}).
+%% @private
+error_text(implicit_not_found, []) ->
+    "Implicit fun expression has to be given".
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FilePath, Pos}) ->
-    #state{filepath = FilePath, pos=Pos}.
-
-%% @private
-steps() ->
-    [fun prepare/1].
-
-%% @private
-transform(#state{file=File, node=Node}) ->
-    ?MANIP:expand_funexpr(Node),
-    ?ESG:close(),
-    {[File], ok}.
-
-
-%%% ============================================================================
-%%% Implementation
-
-prepare(St = #state{filepath=FilePath, pos=Pos}) ->
-    File = ?SYNTAX:get_file(FilePath),
-    Token = ?LEX:get_token(File, Pos),
-    case get_fun_expr(Token) of 
-        not_found ->
-            implicit_not_found();
-        Node ->
-            St#state{file=File, node = Node}
+prepare(Args) ->
+    ArgExpr = ?Args:expression(Args),
+    [Expr] = ?Query:exec(ArgExpr, ?Expr:sup()),
+    case is_implicit_fun_expr(Expr) of
+        false -> throw(?LocalErr0r(implicit_not_found));
+        true ->
+            fun() ->
+                    File = ?Syn:get_file(Expr),
+                    ?Expr:expand_funexpr(Expr),
+                    ?Transform:touch(File)
+            end
     end.
 
-%% @private
-get_fun_expr(Entity) ->
-    case ?ESG:data(Entity) of
-        #expr{kind = implicit_fun} ->
-            Entity;
-        #file{} ->
-            not_found;
-        _ ->
-            [{_, P}|_] = ?ESG:parent(Entity),
-            get_fun_expr(P)
-    end.
-
-%% @private
 is_implicit_fun_expr(Expr) ->
-    ExprKindOk =
-        case ?GRAPH:data(Expr) of
-            #expr{kind=implicit_fun} ->
-                true;
-            _ ->
-                false
-        end,
+    ExprKindOk = ?Expr:kind(Expr) == implicit_fun,
     SubExprKindOk =
-        case ?GRAPH:path(Expr, [sub]) of
-            [] ->
-                false;
-            [SubExpr|_] ->
-                case ?GRAPH:data(SubExpr) of
-                    #expr{kind=infix_expr, value='/'} ->
-                        true;
-                    _ ->
-                        false
+        case ?Query:exec(Expr, ?Expr:children()) of
+            [] -> false;
+            [FunRef|_Arity] ->
+                case ?ESG:data(FunRef) of
+                    #expr{kind=infix_expr, value=':'} -> true;
+                    #expr{kind=atom}                  -> true;
+                    _                                 -> false
                 end
         end,
     ExprKindOk andalso SubExprKindOk.
-

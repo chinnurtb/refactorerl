@@ -37,37 +37,53 @@
 
 %% Common utilities
 -define(MISC,           referl_misc).
+-define(Error,          referl_error).
+-define(GR_UTILS,       referl_graph_utils).
 
+%% Storage layer
+-define(Graph,          referl_graph).
+-define(DRAW_GRAPH,     referl_draw_graph).
+
+%% Semantical layer
+-define(ESG,            referl_esg).
+-define(Syn,            referl_syntax).
+-define(Token,          referl_token).
+-define(FileMan,        referl_fileman).
+-define(PreProc,        referl_preproc).
+
+%% Refactoring library
+-define(Query,          referl_query).
+-define(Args,           referl_args).
+-define(File,           referl_file).
+-define(Form,           referl_form).
+-define(Clause,         referl_clause).
+-define(Expr,           referl_expression).
+-define(Mod,            referl_module).
+-define(Fun,            referl_function).
+-define(Var,            referl_variable).
+-define(Rec,            referl_record).
+-define(Macro,          referl_macro).
+-define(Transform,      referl_transform).
 
 %% External application interfaces
--define(DRAW_GRAPH,     referl_draw_graph).
--define(FILEMAN,        referl_fileman).
 -define(UI,             referl_ui).
--define(TRANSFORM,      referl_transform).
-
-
-%% Middle level graph manipulation
--define(GRAPH,          referl_graph).
--define(ESG,            referl_esg).
-
-
-%% High level graph manipulation interface
--define(MANIP,          referl_manip).
-
-
-%% Query modules
--define(SEMINF,         referl_seminf).
--define(SYNTAX,         referl_syntax).
--define(LEX,            referl_lex).
 
 
 %% Syntax tree construction and information
--define(PREPROC,        referl_preproc).
--define(SCANNER,        referl_syntax_scanner).
--define(PARSER,         referl_syntax_parser).
--define(SYNLEX,         referl_synlex).
--define(NODE_STRUCTURE, referl_syntax_nodes).
+-define(Scanner,        referl_syntax_scanner).
+-define(Parser,         referl_syntax_parser).
+-define(Nodes,          referl_syntax_nodes).
 
+
+%%% ===========================================================================
+
+-define(LocalError(Type, Detail), {?MODULE, Type, Detail}).
+-define(RefError(Type, Detail),   {?Error, Type, Detail}).
+
+-define(Check(Expr, Msg), case Expr of true -> ok; _ -> throw(Msg) end).
+
+-define(LocalErr0r(Type),         ?LocalError(Type, [])).
+-define(RefErr0r(Type),           ?RefError(Type, [])).
 
 %%% ===========================================================================
 %%% Server node
@@ -79,15 +95,14 @@
 %%% ===========================================================================
 %%% Node data records
 
--record(file,     {type, path, eol}).
--record(form,     {type, tag}).
--record(clause,   {type, kind, indent}).
--record(expr,     {type=expr, kind, value, indent}).
+-record(file,     {type, path, eol, lastmod}).
+-record(form,     {type, tag, pp=none}).
+-record(clause,   {type, kind, pp=none}).
+-record(expr,     {type=expr, kind, value, pp=none}).
 -record(lex,      {type, data}).
--record(token,    {type, value, text, indent, prews="", postws=""}).
+-record(token,    {type, value, text, prews="", postws=""}).
 
 -record(module,   {name}).
--record(macro,    {name}).
 -record(record,   {name}).
 -record(field,    {name}).
 -record(func,     {type, name, arity, dirty}).

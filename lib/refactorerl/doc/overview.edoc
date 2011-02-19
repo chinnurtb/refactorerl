@@ -1,0 +1,85 @@
+-*- coding: latin-1 -*-
+@title The RefactorErl application
+@version 0.6
+@copyright 2006-2009 Eötvös Loránd University
+@doc
+== Storage layer ==
+<dl>
+  <dt>{@link referl_graph. `?Graph'}</dt>
+  <dd>Low-level graph manipulation</dd>
+
+  <dt>{@link referl_draw_graph. `?DrawGraph'}</dt>
+  <dd>Produces a drawing of the graph contents</dd>
+</dl>
+
+== Semantical layer ==
+<dl>
+  <dt>{@link referl_esg. `?ESG'}</dt>
+  <dd>Semantical analyser</dd>
+
+  <dt>{@link referl_fileman. `?FileMan'}</dt>
+  <dd>Manage file contents, add and remove complete files</dd>
+
+  <dt>{@link referl_preproc. `?PreProc'}</dt>
+  <dd>Implement Erlang preprocessor rules</dd>
+
+  <dt>{@link referl_syntax_nodes. `?Nodes'}</dt>
+  <dd>Syntactic node type-based information</dd>
+</dl>
+
+== Operation layer ==
+<dl>
+  <dt>{@link referl_syntax. `?Syn'}</dt>
+  <dd>Generic syntactical queries and manipulations</dd>
+
+  <dt>{@link referl_query. `?Query'}</dt>
+  <dd>High-level graph query interface</dd>
+
+  <dt>{@link referl_transform. `?Transform'}</dt>
+  <dd>Refactoring manager framework</dd>
+
+  <dt>{@link referl_file. `?File'}</dt>
+  <dd>File-related queries</dd>
+
+  <dt>{@link referl_form. `?Form'}</dt>
+  <dd>Form-related queries</dd>
+
+  <dt>{@link referl_clause. `?Clause'}</dt>
+  <dd>Clause-related queries</dd>
+
+  <dt>{@link referl_expr. `?Expr'}</dt>
+  <dd>Expression-related queries</dd>
+
+  <dt>{@link referl_module. `?Mod'}</dt>
+  <dd>Module-related queries</dd>
+
+  <dt>{@link referl_function. `?Fun'}</dt>
+  <dd>Function-related queries</dd>
+
+  <dt>{@link referl_variable. `?Var'}</dt>
+  <dd>Variable-related queries</dd>
+
+  <dt>{@link referl_record}</dt>
+  <dd>Record-related queries</dd>
+
+  <dt>{@link referl_macro}</dt>
+  <dd>Macro-related queries</dd>
+
+  <dt>{@link referl_token. `?Token'}</dt>
+  <dd>Token-related queries</dd>
+</dl>
+
+== Refactoring layer ==
+`referl_tr_*'
+
+== User interface ==
+<dl>
+  <dt>{@link referl_ui. `?UI'}</dt>
+  <dd>User interface gateway</dd>
+
+  <dt>{@link referl_args. `?Args'}</dt>
+  <dd>Generic refactoring parameter handler</dd>
+
+  <dt>{@link referl_error. `?Error'}</dt>
+  <dd>Error message formatter</dd>
+</dl>

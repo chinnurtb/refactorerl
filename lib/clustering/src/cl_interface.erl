@@ -23,7 +23,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_interface).
--vsn("$Rev: 1946 $").
+-vsn("$Rev: 2521 $").
 
 -export([run_cluster/0, run_cluster/1, run_cluster_default/0,
          run_cluster_default/1, run_cluster_labels/0, run_cluster_labels/1,
@@ -46,14 +46,27 @@ run_cluster() ->
 %%
 %% Options (every option has a default value):
 %% <ul>
-%%     <li>`alg::(agglom_attr | genetic)': the algorithm to be used.
+%%     <li>`entities::(modules | functions)': it specifies whether modules
+%%         or functions should be clustered. 
+%%         The default is `modules'.</li>
+%%     <li>`alg::(agglom_attr | genetic | kmeans)': the algorithm to be used.
 %%         The default is `agglom_attr'.</li>
-%%     <li>`modules': the list of modules that should be clustered.
+%%     <li>`modules::(undefined | [atom()])': the list of modules that should be
+%%         clustered.
 %%         The default value is `undefined'.</li>
-%%     <li>`skip_modules': the list of modules that should not be clustered.
+%%     <li>`skip_modules::(undefined | [atom()])': the list of modules that
+%%         should not be clustered.
 %%         The default value is `undefined'.
 %%         Either modules or skip_modules or both should be undefined.
 %%         If both are undefined, all modules will be clustered.</li>
+%%     <li>`functions::(undefined | [atom()])': the list of functions that
+%%         should be clustered.
+%%         The default value is `undefined'.</li>
+%%     <li>`skip_functions::(undefined | [fun_attr()])': the list of functions that
+%%         should not be clustered.
+%%         The default value is `undefined'.
+%%         Either functions or skip_functions or both should be undefined.
+%%         If both are undefined, all functions will be clustered.</li>
 %%     <li>`log_output::output_ref()': it specifies where the `cl_out:fwrite'
 %%         messages about the execution should be printed.
 %%         The default is `stdout'.</li>
@@ -64,8 +77,8 @@ run_cluster() ->
 %%         The default is `[{output,null}]'.
 %%         A sensible value is
 %% ```
-%% [{output,
-%%   cl_out:start_section_process(cl_out:file_name_gen("output", ".txt"))}]
+%% [{output, {process, cl_out:start_section_process(
+%%                         cl_out:file_name_gen("output", ".txt"))}}]
 %% '''
 %%         which will write the output into files `"output1.txt"', `output2.txt'
 %%         etc. </li>
@@ -114,6 +127,9 @@ run_cluster() ->
 %%         startup.</li>
 %% </ul>
 %%
+%% Options specific to the `kmeans' algorithm:
+%% See the documentation of `cl_kmeans'.
+%%
 %% Example for `Options':
 %% ```
 %% [{alg, agglom_attr},
@@ -127,8 +143,8 @@ run_cluster(Options) ->
     {W, C} = cl_out:open(get_value(log_output, Opts)),
     Clusterings =
         case get_value(alg, Opts) of
-            agglom_attr ->
-                run_agglom_attr(W, Opts);
+            Alg when Alg == agglom_attr; Alg == kmeans ->
+                run_cluster_alg(W, Opts);
             genetic ->
                 cl_genetic:ga(W, Opts)
         end,
@@ -145,6 +161,8 @@ run_cluster(Options) ->
     cl_out:close(C),
     Clusterings.
 
+
+
 %% @spec run_cluster_default() -> proplist()
 %%
 %% @doc Returns the default options of {@link run_cluster/1}.
@@ -152,7 +170,8 @@ run_cluster_default() ->
     run_cluster_default(alg) ++
     run_cluster_default(all) ++
     run_cluster_default(agglom_attr) ++
-    run_cluster_default(genetic).
+    run_cluster_default(genetic) ++
+    run_cluster_default(kmeans).
 
 %% @spec run_cluster_default(Part::(agglom_attr | genetic | all | alg)) ->
 %%           proplist()
@@ -172,10 +191,13 @@ run_cluster_default(alg) ->
     [{alg, agglom_attr}];
 run_cluster_default(all) ->
     [{modules, undefined},
+     {functions, undefined},
      {log_output, stdout},
-     {print_options, [{output,null}]}];
+     {print_options, [{output,null}]},
+     {entities, modules}];
 run_cluster_default(agglom_attr) ->
-     [{skip_modules, undefined},
+    [{skip_modules, undefined},
+     {skip_functions, undefined},
      {transformfun, undefined},
      {distfun, weight},
      {anti_gravity, 0.5},
@@ -187,7 +209,13 @@ run_cluster_default(genetic) ->
      {crossover_rate, 0.7},
      {elite_count, 2},
      {max_cluster_size, 5},
-     {max_start_cluster_size, 2}].
+     {max_start_cluster_size, 2}];
+run_cluster_default(kmeans) ->
+    [{stoppingcriteria, {unchanged, 10}},
+     {mergefun, smart},
+     {distfun, weight},
+     {anti_gravity, 0},
+     {k, 3}].
 
 %% @spec run_cluster_labels() -> [{atom(),string()}]
 %%
@@ -208,10 +236,12 @@ run_cluster_labels(alg) ->
     [{alg, "Algorithm"}];
 run_cluster_labels(all) ->
     [{modules, "Modules to cluster"},
+     {functions, "Functions to cluster"},
      {log_output, "Log output"},
      {print_options, "Print options"}];
 run_cluster_labels(agglom_attr) ->
-     [{skip_modules, "Modules to skip"},
+    [{skip_modules, "Modules to skip"},
+     {skip_functions, "Functions to skip"},
      {transformfun, "Transform function"},
      {distfun, "Distance function"},
      {anti_gravity, "Antigravity"},
@@ -225,28 +255,45 @@ run_cluster_labels(genetic) ->
      {max_cluster_size, "Maximum cluster size"},
      {max_start_cluster_size, "Maximum start-cluster-size"}].
 
-%% @spec run_agglom_attr(output_ref(), proplist()) -> [[[mod_name()]]]
+%% @spec run_cluster_alg(output_ref(), proplist()) -> [[[mod_name()]]]
 %%
-%% @doc Runs the agglomerative clustering algorithm.
-run_agglom_attr(Output, Options) ->
-    
+%% @doc Runs the given clustering algorithm.
+run_cluster_alg(Output, Options) ->
+   
     {W, C} = cl_out:open(Output),
     cl_out:fwrite(W, "Updating and loading the attribute matrix...~n"),
-    cl_db:update(mod_attr),
-    Attribs = cl_db:load_matrix(mod_attr, mod_attr),
+    Entities = get_value(entities, Options),
+    Attribs =
+        case Entities of
+            modules ->
+                cl_db:update(mod_attr),
+                cl_db:load_matrix(mod_attr, mod_attr);
+            functions ->
+                cl_db:update(fun_attr),
+                cl_db:load_matrix(fun_attr, fun_attr)
+        end,
 
     cl_out:fwrite(W, "Filtering the attribute matrix...~n"),
+    SkipEntities = 
+        case Entities of
+            modules ->
+                skip_modules;
+            functions ->
+                skip_functions
+        end,
+
     EntFilter =
-        case {get_value(modules, Options),
-              get_value(skip_modules, Options)} of
+        case {get_value(Entities, Options),
+              get_value(SkipEntities, Options)} of
             {undefined, undefined} ->
                 [];
-            {Modules, undefined} ->
-                [cl_utils:leave(Modules)];
-            {undefined, SkipModules} ->
-                [cl_utils:ignore(SkipModules)];
+            {EntitiesToCluster, undefined} ->
+                [cl_utils:leave(EntitiesToCluster)];
+            {undefined, EntitiesToSkip} ->
+                [cl_utils:ignore(EntitiesToSkip)];
             {_, _} ->
-                throw("One of 'modules' and 'skip_modules' must be" ++
+                throw("One of '" ++ atom_to_list(Entities) ++ "' and '" ++ 
+                      atom_to_list(SkipEntities) ++ "' must be" ++
                       "undefined, but neither is.")
         end,
     FilteredAttribs = cl_core:filter(Attribs, EntFilter, []),
@@ -266,7 +313,13 @@ run_agglom_attr(Output, Options) ->
         case get_value(distfun, Options) of
             weight -> 
                 AntiGravity = get_value(anti_gravity, Options),
-                cl_distfun:weight_gen(cl_distfun:pow_size_fun_gen(AntiGravity));
+                case Entities of
+                    modules ->
+                        cl_distfun:weight_gen(
+                            cl_distfun:pow_size_fun_gen(AntiGravity));
+                    functions ->
+                        cl_distfun:generate_fun_common_refs(AntiGravity)
+                end;
             call_sum ->
                 fun cl_distfun:call_sum/4;
             Fun when is_function(Fun) ->
@@ -274,20 +327,34 @@ run_agglom_attr(Output, Options) ->
         end,
 
     MergeFun = 
-        case get_value(mergefun, Options) of
-            smart ->
-                fun cl_mergefun:smart/3;
-            Fun2 when is_function(Fun2) ->
-                Fun2
-        end,
+       case get_value(mergefun, Options) of
+           smart ->
+               fun cl_mergefun:smart/3;
+           Fun2 when is_function(Fun2) ->
+               Fun2
+       end,
 
+    Algorithm = get_value(alg, Options),
     cl_out:fwrite(W, "Calculating the clusters...~n"),
-    cl_out:close(C),
-    Result = cl_core:agglom_attr(TransformedAttribs, DistFun, MergeFun),
+    Result = 
+        case Algorithm of
+           agglom_attr ->
+               cl_core:agglom_attr(TransformedAttribs, DistFun, MergeFun);
+            kmeans ->
+                Options2 =
+                    cl_utils:proplist_update(
+                        Options,
+                        [{mergefun, MergeFun},
+                         {entitylist, cl_matrix:rows(TransformedAttribs)},
+                         {distfun, DistFun}]),
+                cl_kmeans:run_cluster(Options2, TransformedAttribs)
+        end,                   
+
     cl_matrix:delete(TransformedAttribs),
+    cl_out:close(C),
     Result.
 
-%% @spec get_libs() -> ok
+%% @spec get_libs() -> [mod_name()]
 %%
 %% @doc Returns modules that are thought to be library modules with the default
 %% options.
@@ -350,8 +417,8 @@ get_libs_labels() ->
 %%         The default is `[]'.
 %%         E.g. if it is `["h.hrl"]', then `"h.hrl"' and "`oh.hrl'" will be, but
 %%         `"ho.hrl"' will not be decomposed.</li>
-%%     <li>`log_output::output_ref()': it specifies where the cl_out:fwrite messages about
-%%         the execution should be printed.
+%%     <li>`log_output::output_ref()': it specifies where the cl_out:fwrite 
+%%          messages about the execution should be printed.
 %%         The default is `stdout'.</li>
 %%     <li>`print_options::proplist()':
 %%         it specifies how the decomposition should be printed.
@@ -422,8 +489,12 @@ cut_libs_labels() ->
 fitness(Options) ->
     Opts = cl_utils:proplist_update(fitness_default(), Options),
     Clusterings = get_value(clusterings, Opts),
-    cl_db:update(deps),
+    %cl_db:update(deps),
     FitnessOptions = get_value(fitness_options, Opts),
+    case get_value(entity_type, FitnessOptions) of 
+        module   -> cl_db:update(deps);
+        function -> cl_db:update(fdg)
+    end,
     [ cl_fitness:fitness(Clustering, FitnessOptions) || 
         Clustering <- Clusterings ].
 
@@ -432,7 +503,7 @@ fitness(Options) ->
 %% @doc Returns the default options for {@link fitness/1}.
 fitness_default() ->
     [{clusterings, no_default},
-     {fitness_options, []}].
+     {fitness_options, cl_fitness:fitness_default()}].
 
 %% @spec fitness_labels() -> [{atom(),string()}]
 %%

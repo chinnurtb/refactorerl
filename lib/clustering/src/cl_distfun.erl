@@ -26,25 +26,57 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_distfun).
--vsn("$Rev: 1895 $").
+-vsn("$Rev: 2322 $").
+
+-include("cluster.hrl").
+
+%% =============================================================================
+%% Exports
 
 -export([euclidian/4, jaccard/4, sorensen_dice/4, sorensen_dice2/4,
          ochiai/4, correlation/4, call_sum/4, call_cnt/4,
          weight_gen/1,weight_distvec/4,
-         call_fun_cnt/4,lexgr_dist/1]).
+         call_fun_cnt/4,call_fun_wgt/1,lexgr_dist/1]).
 -export([pow_size_fun_gen/1]).
+% Distance function with antigravity generator
+-export([generate_antigravity/2]).
+% Function distances
+-export([generate_fun_common_refs/1, fun_common_refs/4]).
+
+
+%% =============================================================================
+%%
+
+-import(proplists,[get_value/2, get_value/3]).
 
 %% For testing.
 -export([used_records/1]).
 
--include("cluster.hrl").
 
-%%% @type dist_fun() = (entity(), [{attr(), value()}],
-%%%                     entity(), [{attr(), value()}]) -> number().
+%% =============================================================================
+%% Types
+
+%% @type entity() = term().
+%% Entity of the clustering.
+
+%% @type attr() = term().
+%% Attribute of the clustering.
+
+%% @type attrLst() = [{attr(), Value::term()}].
+%% Tha attribute value list of an entity.
+
+%%% @type dist_fun() = (Entity1::entity(), AttrLst1::attrLst(),
+%%%                     Entity2::entity(), AttrLst2::attrLst()) -> number().
+%%% Calculate distance of two entity in the same clusterings.
 
 %%% @type size_fun() = (Size1::number(), Size2::number()) -> number().
 %%%
 %%% It is a function that can be used by the {@link weight_gen/1} function.
+
+
+
+%% =============================================================================
+%%
 
 fold2(_,   Acc, [],      _)       -> Acc;
 fold2(_,   Acc, _,       [])      -> Acc;
@@ -160,7 +192,7 @@ modcall_sum(Attr) ->
 call_cnt(Ent1, Attr1, Ent2, Attr2) ->
     calls(Ent1, modcall_cnt(Attr1,1), Ent2, modcall_cnt(Attr2,1)).
 
-%% @spec modcall_cnt([{attr(), value()}], Add::(w | 1)) -> [{mod_name(), value()}]
+%% @spec modcall_cnt(attrLst(), Add::(w | 1)) -> [{mod_name(), value()}]
 %%
 %% @doc Calculates that which module is called how many times by the module
 %% which has the given attributes.
@@ -280,15 +312,112 @@ modcall2_cnt(Modules,ModCall) ->
 %% @doc Distance function based on function call structure and record usage
 %% to be used with function clustering.
 call_fun_cnt(Fun1, Attr1, Fun2, Attr2) ->
-    Call12 = proplists:get_value(Fun1, Attr2, 0),
-    Call21 = proplists:get_value(Fun2, Attr1, 0),
+    Call12 = proplists:get_value(Fun1, Attr2, 0), % Bad: Fun1 column is missing except
+    Call21 = proplists:get_value(Fun2, Attr1, 0), % if Fun1 is function not group/cluster
     Rec1 = used_records(Attr1),
     Rec2 = used_records(Attr2),
     SameRec = length(ordsets:intersection(Rec1, Rec2)),
-    Similar = lists:sum([min(W, proplists:get_value(F, Attr2, 0)) ||
-                            {F, W} <- Attr1]),
-    lexgr_dist([min(Call12, Call21), SameRec, Call12 + Call21, Similar]).
+    %Similar = lists:sum([min(W, proplists:get_value(F, Attr2, 0)) ||
+    %                        {F=#fun_attr{}, W} <- Attr1]),
+    lexgr_dist([min(Call12, Call21), SameRec, Call12 + Call21]). %, Similar]).
 
+%% @spec call_fun_wgt(float()) -> dist_fun()
+call_fun_wgt(Weight) ->
+    SizeFun = pow_size_fun_gen(Weight),
+    fun (F1, Attr1, F2, Attr2) ->
+            Size1 = proplists:get_value(size, Attr1, 1),
+            Size2 = proplists:get_value(size, Attr2, 1),
+            call_fun_cnt(F1, Attr1, F2, Attr2) * SizeFun(Size1,Size2)
+    end.
+
+
+%% @spec generate_antigravity(DistFun::dist_fun(), AntigravityFun::size_fun()) 
+%%           -> NewDistFun::dist_fun()
+%% @doc  Generate a distance function from `DistFun' with the `AntigravityFun' 
+%%       as antigravity factor.
+generate_antigravity(DistFun, SizeFun) ->
+    fun(Fun1, Attr1, Fun2, Attr2) ->
+        Size1 = proplists:get_value(size, Attr1, 1),
+        Size2 = proplists:get_value(size, Attr2, 1),
+        DistFun(Fun1, Attr1, Fun2, Attr2) * SizeFun(Size1,Size2)
+    end.
+
+
+%% @spec generate_fun_common_refs(Weight::float()) -> DistanceFun::dist_fun()
+%% @doc  Generate a distance function from {@link fun_common_refs} with the
+%%       result of `pow_size_fun_gen(Weight)' as antigravity factor.
+%% @see  pow_size_fun_gen/1
+generate_fun_common_refs(Weight) ->
+    generate_antigravity(fun fun_common_refs/4, pow_size_fun_gen(Weight)).
+
+
+%% @spec fun_common_refs(_Fun1::entity(), Attr1::attrLst(), 
+%%                       _Fun2::entity(), Attr2::attrLst()) -> Distance::float()
+%% @doc  Distance of two group/cluster from a clasterings. `Fun1' and `Fun2' are
+%%       identifiers of clusters. `Attr1' and `Attr2' are rows from attribute
+%%       matrix of clustering that belong to the identifiers.
+fun_common_refs(_Fun1, Attr1, _Fun2, Attr2) ->
+    % Entities of groups
+    Entities1 = get_value(entities, Attr1, []),
+    Entities2 = get_value(entities, Attr2, []),
+    % Number of calls from the other group
+    Call1from2 = count_objects_refs(Entities1, Attr2),
+    Call2from1 = count_objects_refs(Entities2, Attr1),
+    % Number of common used records
+    Recs1 = used_records(Attr1),
+    Recs2 = used_records(Attr2),
+    CommonRecCnt = length(Recs1--(Recs1--Recs2)),
+    % Number of common used functions
+    CommonFunCnt = count_objects_refs1([F||{F=#fun_attr{},W}<-Attr1,W>0],Attr2),
+    %CommonFunCnt = [min(W,get_value(F,Attr2,0))||{F=#fun_attr{},W}<-Attr1,W>0],
+    % Number of common used macros
+    % ---
+    % Calc distance with the following priority: 
+    lexgr_dist([min(Call1from2,Call2from1), CommonRecCnt, Call1from2+Call2from1,
+                CommonFunCnt]).
+
+
+%% @spec count_objects_refs(Objects::[Object], 
+%%               RefList::[{Object, UsageCount::integer()}]) ->
+%%           TotalUsageCount::integer()
+%%       Object = term()
+%% @doc  Count usages of the `Objects' in `RefList'. Wrapper function to 
+%%       {@link count_objects_refs/3} with `fun(A,B) -> A+B end' as `AddFun'.
+%% @see  count_objects_refs/3
+count_objects_refs(Objects, RefList) ->
+    count_objects_refs(Objects, RefList, fun(A, B) -> A+B end).
+
+%% @spec count_objects_refs1(Objects::[Object], 
+%%               RefList::[{Object, UsageCount::integer()}]) ->
+%%           DiffObjUsageCount::integer()
+%%       Object = term()
+%% @doc  Count how many different objects from `Objects' are used in 
+%%       `RefList'. Wrapper function to {@link count_objects_refs/3} with 
+%%       `fun(A,0)->A; (A,B) when B<0 -> A-1; (A,B)->A+1 end' as `AddFun'. 
+%%       The number of usage of an object is irrelevant. Every object usage 
+%%       counted as one usage.
+%% @see  count_objects_refs/3
+count_objects_refs1(Objects, RefList) ->
+    count_objects_refs(Objects, RefList, 
+                       fun(A,0)->A; (A,B) when B<0 -> A-1; (A,_B)->A+1 end).
+
+%% @spec count_objects_refs(Objects::[Object], 
+%%               RefList::[{Object, UsageCount::integer()}], AddFun) ->
+%%           TotalUsageCount::integer()
+%%       Object = term()
+%%       AddFun = ((OpLeft::integer(), OpRight::integer()) -> integer())
+%% @doc  Count usages of the `Objects' in `RefList'. `Object' contain several 
+%%       object. The elements in `RefList' describe an how many times an object 
+%%       is used. 
+%%       The `AddFun' summation two integer. If the number of usage is 
+%%       irrelevant than you can use the `fun(A,_) -> A+1 end' function to count
+%%       how many object are used from the `Object'.
+count_objects_refs(Objects, RefList, AddFun) ->
+    lists:foldl(
+        fun(Object, Count) -> AddFun(Count, get_value(Object, RefList, 0)) end,
+        0, Objects).
+
+    
 used_records(Attr) ->
     lists:usort([R || {R=#rec_attr{}, W} <- Attr, W>0]).
 

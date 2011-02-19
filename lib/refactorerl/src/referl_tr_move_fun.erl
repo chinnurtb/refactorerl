@@ -20,328 +20,345 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @doc This module implements the move function refactoring.
-%%% First of all, analyzes the macro and record usage, the
-%%% moving function names and than confronts with the stored information of
-%%% the target module. Checks the result for conflicts, and when the
-%%% result meet all of the conditions, starts performing the function move.
+%%% @doc This module implements the `move functions between modules'
+%%% refactoring.
+%%%
+%%% Conditions of applicability
+%%% <ul>
+%%%   <li>The names of the selected functions should not conflict with
+%%%   other functions in the target module, neither with those
+%%%   imported from another module (overloading). Furthermore, the
+%%%   name should be a legal function name in all modules.</li>
+%%%   <li>Macro name conflicts must not occur in the target module,
+%%%   that is, macro names used in the functions must refer to the
+%%%   same macro definition in the source and in the target
+%%%   module. This applies to macros used in these macros too.</li>
+%%%   <li>Record name conflicts must not occur in the target module,
+%%%   that is, record names used in the functions must refer to the
+%%%   same record definition in the source and in the target module.</li>
+%%% </ul>
+%%%
+%%% Rules of the transformation
+%%% <ol>
+%%%   <li>In the refactoring step the functions to be moved have to be
+%%%   marked either at the definition or in the export list. A list
+%%%   has to be created from the function name and arity
+%%%   pairs. Duplicity should be avoided and only real function names
+%%%   and arities should occur in the list.</li>
+%%%   <li>The new place of the functions, or the target module, has to
+%%%   be asked from the user. If there is no such module in the tool
+%%%   database, it has to be loaded.</li>
+%%%   <li>If the transformation does not disobey the rules, the
+%%%   functions have to be deleted from their original places together
+%%%   with all their clauses.</li>
+%%%   <li>The moved functions have to be placed to the end of the new
+%%%   module.</li>
+%%%   <li>Functions have to be deleted if they appear in the export
+%%%   list of the original module. (If they were exported, they have
+%%%   to be exported in their new place, too.)</li>
+%%%   <li>The functions, which are called in the moved function but
+%%%   remain in the original module, have to be put in an export list
+%%%   in the original module.</li>
+%%%   <li>If the functions to be moved are called in other functions
+%%%   from the original module, they have to be exported in the new
+%%%   module and the calls in the original module have to be changed
+%%%   to qualified calls.</li>
+%%%   <li>If the moved functions are referred to by qualified names,
+%%%   the module names have to be changed to the new module name.</li>
+%%%   <li>After the transformation the module names in the import
+%%%   lists have to be changed to the name of the target module.</li>
+%%%   <li>The moved function in the target module has to be deleted
+%%%   from the import list.</li>
+%%%   <li>Records and macros used in the moved function have to be
+%%%   made visible in the target module, either by moving them into
+%%%   header files (or including the header file if the definition is
+%%%   already in one), or copying their definition.</li>
+%%% </ol>
 %%%
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 
 -module(referl_tr_move_fun).
--vsn("$Rev: 1996 $").
+-vsn("$Rev: 2599 $").
+
 -include("refactorerl.hrl").
+
 -import(lists, [filter/2, usort/1, member/2, flatten/1]).
+-import(?MISC, [intersect/2, flatsort/1]).
+-import(?Query, [seq/1, seq/2, all/1, all/2, any/1, any/2,
+                 exec/1, exec/2, exec1/2, exec1/3]).
+
 
 %%% ============================================================================
 %%% Exports
 
-%% Interface
--export([do/3]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
+-export([prepare/1]).
+-export([error_text/2]).
+
+%% For inline_fun
+-export([prepare_recmac/3, correct_recmac/4]).
+
 
 %%% ============================================================================
-%%% Refactoring state
+%%% Main types
 
-%% State record
--record(state, {from, frommodule, fromfile,
-                fnlist, fnforms, fnnodes,
-                target, targetmodule, targetfile,
+-record(info, {fromfile, frommod, tofile, tomod, fundefs, funobjs}).
 
-                f_existing_names = [],
-                t_existing_names = [],
-                used_nodes_names = [],
-                used_included    = [],
-                clash            = [],
-                recmacinfo       = []}).
+-record(rec_info, {loc_incl, node, form, removable}).
+-record(mac_info, {loc_incl, form, removable}).
 
-%% type: import | export
-%% list: the containing list-expr node
-%% item: the expr
 -record(list_del, {type, list, item}).
--record(list_add, {type, file, module, name, arity}).
+-record(list_add, {type, where, location, name, arity, funobj}).
+-record(list_ren, {form, name}).
+
+-record(modq_add, {expr, module}).
+-record(modq_upd, {expr, module}).
+-record(modq_del, {expr}).
+
+-define(TableName, modifs).
+-define(NOTE(D), ets:insert(?TableName, D)).
 
 %%% ============================================================================
 %%% Errors
 
-throw_target_not_found() ->
-    throw("target module not found").
+%% @private
 
-throw_source_not_found() ->
-    throw("source module not found").
+error_text(fundef_not_found, [FunName]) ->
+    ["Definition of function ", FunName," not found"];
 
-throw_name_conflict(Args) ->
-    throw("name conflict " ++ ?MISC:format("(~p)", [Args])).
+error_text(name_conflict, [ToModName, {Name, Arity}]) ->
+    ["Name conflict with ", ?MISC:fun_text([ToModName, Name, Arity])];
 
-throw_recmac_local_conflict() ->
-    throw("local defined entities conflict in target").
+error_text(recmac_local_conflict, [Clash]) ->
+    ["Records and macros defined in the source file conflict in the target: ",
+     ?MISC:join(Clash)];
 
-throw_unincludables(Args) ->
-    throw("can't include headers in target " ++ ?MISC:format("(~p)", [Args])).
+error_text(unincludables, [Conflicts]) ->
+    ["Cannot include headers in the target module ",
+     ?MISC:format("(~p)", [Conflicts])];
 
-throw_includes_not_match(Arg1, Arg2) ->
-    throw("target includes do not match the requested includes.~n" ++ 
-          "Needed: "   ++ ?MISC:format("~p", [Arg1]) ++ 
-          "~nExists: " ++ ?MISC:format("~p", [Arg2])).
+error_text(include_mismatch, [Clash]) ->
+    ["Different definitions come from includes in the source and target files",
+     "for some records and macros: ",
+     ?MISC:format("(~p)", [Clash])].
 
-%%% ============================================================================
-%%% Interface
 
-%% @spec do(string(), [{atom(), integer()}], string()) -> ok
-%% @doc Moves the specified function definitions from a module
-%% to an another one. The moving is compensated.
-do(From, FnList, Target) ->
-    ?TRANSFORM:do(?MODULE, {From, FnList, Target}).
+%% Returns the name of a record or a macro from its node.
+recmac_name(Node) ->
+    case ?Syn:node_type(Node) of
+        form   -> ["?" | ?Macro:name(Node)];
+        record -> ["#" | atom_to_list(?Rec:name(Node))]
+    end.
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({From, FnList, Target}) -> #state{from=From, fnlist=FnList, target=Target}.
+prepare(Args) ->
 
+    %% ETS table to buffer the required modifications
+    ets:new(?TableName, [named_table, bag]),
 
-%% @private
-steps() ->
-    [
-     fun check_target_module/1,
-     fun check_from_module/1,
-     fun query_fnforms/1,
-     fun query_fnnodes/1,
-     fun check_funnames/1
-    ]
-        ++ steps(record)
-        ++ steps(macro).
+    %% Finding the source and the target module
 
-%% @private
-steps(Tag) ->
-    [fun(St) -> Fun(Tag, St) end || Fun <- recmac_steps()].
+    FromMod = ?Args:module(Args),
+    ToMod   = exec1(?Mod:find(?Args:name(Args)), ?RefErr0r(target_not_found)),
+    ToModName = ?Mod:name(ToMod),
 
-recmac_steps() ->
-    [
-     fun query_existing_names/2,
-     fun query_used_nodes_names/2,
-     fun calc_recmac_clash/2,
-     fun calc_used_included/2,
-     fun check_recmac/2,
-     fun calc_recmac_info/2
-    ].
+    %% Finding the files that belong to the modules
 
+    FromFile = exec1(FromMod, ?Mod:file(), file_not_present),
+    ToFile   = exec1(ToMod, ?Mod:file(), file_not_present),
 
-%% @private
-transform(St = #state{fromfile = FFile, frommodule = FModule,
-                      targetfile = TFile, fnforms = FnForms, fnnodes = FnNodes,
-                      recmacinfo = RecmacInfo}) ->
+    %% Finding function objects and definitions
 
-    ImportedFuns = ?GRAPH:path(FModule, [funimp]),
+    FunObjs = ?Args:functions(Args),
+    FunDefs = [exec1(FunObj, ?Fun:definition(),
+                     ?LocalError(fundef_not_found, [FunName]))
+               || FunObj <- FunObjs,
+                  FunName <- [?Fun:name(FunObj)]],
 
-    RecordInfo = recmac_component(record, RecmacInfo),
-    MacroInfo  = recmac_component(macro,  RecmacInfo),
-    [correct_recmac(record, Info, St) || Info <- RecordInfo],
-    [correct_recmac(macro,  Info, St) || Info <- MacroInfo],
-    CompB = [correct_body(FunForm, ImportedFuns, St) || FunForm <- FnForms],
-    CompR = [correct_refs(FunNode, Expr, St) || FunNode <- FnNodes,
-                                                Expr <- funrefs(FunNode)],
-    
-    ?ESG:close(),
+    %% Checking function name collisions
 
-    {ChangedFiles, AppChanges, ListAdds, ListRemoves} =
-        analyse_changes(flatten(CompB ++ CompR), FFile, TFile),
+    [?Check(exec(ToMod, ?Mod:visible(Name, Arity)) -- FunObjs == [],
+            ?LocalError(name_conflict, [ToModName, {Name, Arity}])) ||
+        FunObj <- FunObjs,
+        Name  <- [?Fun:name(FunObj)],
+        Arity <- [?Fun:arity(FunObj)]],
 
-    [expimp_list_adds(I) || I <- ListAdds],
-    [expimp_list_dels(List, Exprs, FModule, FnForms) ||
-        {List, Exprs} <- format_list_removings(ListRemoves)],
+    %% Collecting record and macro infos, checking collisions
 
-    [?MANIP:move_form(F, FFile, TFile) || F <- FnForms],
+    [?NOTE(I) || I <- prepare_recmac(FunDefs, FromFile, ToFile)],
 
-    [?MANIP:refresh_semantic_links(funref, App) || {app_update, App} <- AppChanges],
+    %% Returning transformation function
 
-    ?ESG:close(),
+    Info = #info{fromfile = FromFile, frommod = FromMod,
+                 tofile = ToFile, tomod = ToMod,
+                 fundefs = FunDefs, funobjs = FunObjs},
 
-    {ChangedFiles, ok}.
+    [fun()   -> transform_1(Info)          end,
+     fun(ok) -> flatten(transform_2(Info)) end].
 
-analyse_changes(Changes, FFile, TFile) ->
-    FileChanges = filterpairs(Changes, file),
-    AppChanges  = filterpairs(Changes, app_update),
+prepare_recmac(FunDefs, FromFile, ToFile) ->
+    Used_Rec = usort(exec(FunDefs, ?Form:records())),
+    Used_Mac = usort(exec(FunDefs, ?Form:macros())),
+    Mac_By_Mac = usort(Used_Mac ++ exec(Used_Mac, ?Macro:macros()) ++
+                       exec(Used_Mac, ?Macro:references())),
+    Rec_By_Mac = usort(Used_Rec ++ exec(Used_Mac, ?Macro:records())),
 
-    ChangedFiles =
-        usort([File || {file, File} <- FileChanges] ++ [FFile, TFile]),
+    RecInfos = rec_mac_infos(record, FromFile, ToFile,
+                             usort(Used_Rec ++ Rec_By_Mac), FunDefs),
+    MacInfos = rec_mac_infos(macro,  FromFile, ToFile,
+                             usort(Used_Mac ++ Mac_By_Mac), FunDefs),
+    RecInfos ++ MacInfos.
 
-    ListChanges = usort(Changes -- FileChanges -- AppChanges),
-    {ListAdds, ListRemoves} =
-        lists:foldl(
-          fun(A = #list_add{}, {As, Rs}) -> {[A|As], Rs};
-             (R = #list_del{}, {As, Rs}) -> {As, [R|Rs]};
-             (_, {As, Rs})               -> {As, Rs}
-          end,
-          {[], []},
-          ListChanges),
-    {ChangedFiles, AppChanges, ListAdds, ListRemoves}.
+rec_mac_infos(Tag, FromFile, ToFile, Used_, FunDefs) ->
+
+    %% Querying defined and used records and macros
+    %%     (F = From,  T = Target)
+    %%     (L = Local, I = Included, A = All)
+
+    {FromFileQuery, GetFileQuery, GetName} =
+        case Tag of
+            record -> {?File:records(), ?Rec:file()  , fun ?Rec:name/1  };
+            macro  -> {?File:macros() , ?Macro:file(), fun ?Macro:name/1}
+        end,
+
+    WithName = fun(List) -> [{Node, GetName(Node)} || Node <- List] end,
+    GetClash = fun(L1, L2) ->
+                       usort([Node || {Node, Name} <- WithName(L1),
+                                      {Node2, Name2} <- WithName(L2),
+                                      Node /= Node2, Name == Name2])
+               end,
+
+    F_L_ = exec(FromFile, FromFileQuery),
+    F_I  = exec(FromFile, ?Query:seq(?File:includes(),
+                                     FromFileQuery)) -- F_L_,
+    T_A_ = exec(ToFile,   ?Query:seq(?File:includes(),
+                                     FromFileQuery)),
+
+    %% Filtering ?MODULE macro
+
+    Filter = fun(Macro) -> GetName(Macro) =/= "MODULE" end,
+    {Used, F_L, T_A} = {filter(Filter, Used_),
+                        filter(Filter, F_L_),
+                        filter(Filter, T_A_)},
+
+    Clash         = GetClash(Used, T_A),
+    Local_Clash   = intersect(Clash, F_L),
+    Used_Included = intersect(F_I, Used),
+
+    case {Clash, Local_Clash} of
+        {[], _} ->
+            % There is no direct name collision, but the inclusion
+            % should not induct any conflicts.
+
+            Conflicts = [Hrl || Entity <- Used_Included,
+                                Hrl <- exec(Entity, GetFileQuery),
+                                not ?File:includable(ToFile, Hrl)],
+            ?Check(Conflicts == [],
+                   ?LocalError(unincludables, [Conflicts]));
+        {_, []} ->
+            % The clashes only come from includes,
+            % hopefully it can be resolved by matching the include entries.
+            % Note: in this case, Clash === Incl_Clash.
+
+            InclClashFiles = usort(exec(Clash, GetFileQuery)),
+            ToIncludes = exec(ToFile, ?File:includes()),
+            ?Check(InclClashFiles -- ToIncludes == [],
+                   ?LocalError(include_mismatch, [Clash]));
+        {_, _}  ->
+            ClashNames = lists:map(fun recmac_name/1, Clash),
+            throw(?LocalError(recmac_local_conflict, [ClashNames]))
+    end,
+    [recmac_info(Node, FunDefs, Used_Included, Tag) || Node <- Used].
+
+recmac_info(Node, FunDefs, UsedIncluded, Tag) ->
+    Removable = usort(exec(Node, recmac_referer_funforms(Tag))) -- FunDefs == [],
+    Loc_Incl = case member(Node, UsedIncluded) of
+                   true  -> include;
+                   false -> localdefine
+               end,
+    case Tag of
+        record ->
+            Form = exec1(Node, ?Rec:form(), recform_not_found),
+            #rec_info{loc_incl = Loc_Incl, node = Node,
+                      form = Form, removable = Removable};
+        macro  ->
+            #mac_info{loc_incl = Loc_Incl, form = Node,
+                      removable = Removable}
+    end.
+
+recmac_referer_funforms(record) ->
+    seq([[{recref, back}], ?Expr:clause(), ?Clause:form()]);
+
+recmac_referer_funforms(macro) ->
+    seq([{mref, back}],
+        all(seq(?Token:clause(), ?Clause:form()),
+            seq([?Token:expr(), ?Expr:clause(), ?Clause:form()]))).
 
 
 %%% ============================================================================
-%%% Implementation
+%%% Transformation
 
-recmac_component(Tag, InfoPair) ->
-    {value, {Tag, Info}} = lists:keysearch(Tag, 1, InfoPair), Info.
-%%    hd([I || {T, I} <- Info, T == Tag]).
+transform_1(I = #info{frommod = FromMod, fromfile = FromFile, tofile = ToFile,
+                      fundefs = FunDefs, funobjs = FunObjs}) ->
 
+    [correct_body(FunDef, exec(FromMod, [funimp]), I)
+     || FunDef <- FunDefs],
+    [correct_refs(FunObj, Expr, I)
+     || FunObj <- FunObjs, Expr <- funrefs(FunObj)],
 
-query_fnforms(St=#state{frommodule = FromModule,
-                        fnlist     = FnList}) ->
-    case ?SYNTAX:function_forms(FromModule, FnList) of
-        {error, Error} -> {error, Error};
-        FnForms        -> St#state{fnforms = FnForms}
-    end.
+    ?Transform:touch(FromFile),
+    ?Transform:touch(ToFile),
 
-query_fnnodes(St = #state{fnforms=FnForms}) ->
-    St#state{
-      fnnodes = [Node || F <- FnForms, Node <- ?GRAPH:path(F, [fundef])]}.
+    [fun() -> init end] ++
+        [fun(_) ->
+                 ?File:del_form(FunDef),
+                 ?File:add_form(ToFile, FunDef)
+         end || FunDef <- FunDefs].
 
+transform_2(#info{frommod = FromMod, fundefs = FunDefs,
+                  fromfile = FromFile, tofile = ToFile}) ->
 
-query_existing_names(Tag, St = #state{fromfile = FromFile,
-                                      targetfile = TargetFile,
-                                      f_existing_names = FE,
-                                      t_existing_names = TE}) ->
-    NFE = FE ++ [{Tag, ?LEX:existing_names(Tag, FromFile)}],
-    NTE = TE ++ [{Tag, ?LEX:existing_names(Tag, TargetFile)}],
-    St#state{f_existing_names = NFE, t_existing_names = NTE}.
+    ListAdds =
+        [Add#list_add{funobj = exec1(Loc, ?Fun:find(Name, Arity), funobj)}
+         || Add <- ets:lookup(?TableName, list_add),
+            #list_add{location=Loc, name=Name, arity=Arity} <- [Add]],
 
-query_used_nodes_names(Tag, St = #state{fnforms = FnForms,
-                                        used_nodes_names = UN}) ->
-    NUN = UN ++ [{Tag, ?LEX:used_nodes_names(Tag, FnForms)}],
-    St#state{used_nodes_names = NUN}.
-
-calc_recmac_clash(Tag, St = #state{f_existing_names = FEN,
-                                   t_existing_names = TEN,
-                                   used_nodes_names = UNN,
-                                   clash = StClash}) ->
-    {LocalInFrom, _, _} = recmac_component(Tag, FEN),
-    {_, _, AllInTarget} = recmac_component(Tag, TEN),
-    {_, UsedNames}      = recmac_component(Tag, UNN),
-    Clash = ?MISC:intersect(AllInTarget, UsedNames),
-    ClashAndLocal = {Clash, ?MISC:intersect(Clash, LocalInFrom)},
-    St#state{clash = StClash ++ [{Tag, ClashAndLocal}]}.
-
-calc_used_included(Tag, St = #state{f_existing_names = FEN,
-                                    used_nodes_names = UNN,
-                                    used_included = StUI}) ->
-    {_, Included, _} = recmac_component(Tag, FEN),
-    {_, UsedNames}   = recmac_component(Tag, UNN),
-    UsedIncluded = ?MISC:intersect(Included, UsedNames),
-    St#state{used_included = StUI ++ [{Tag, UsedIncluded}]}.
-
-
-calc_recmac_info(Tag, St = #state{fnforms = FnForms,
-                                  used_nodes_names = StUN,
-                                  used_included = StUI,
-                                  recmacinfo=StRecmacInfo}) ->
-    {UsedNodes, _} = recmac_component(Tag, StUN),
-    UsedIncluded   = recmac_component(Tag, StUI),
-    RecmacInfo =
-        [recmac_info(Node, FnForms, UsedIncluded, ?LEX:reflink(Tag))
-         || Node <- UsedNodes],
-    St#state{recmacinfo = StRecmacInfo ++ [{Tag, RecmacInfo}]}.
-
-recmac_info(Node, FnForms, UsedIncluded, RefLink) ->
-    {_, Name} = ?GRAPH:data(Node),
-    Removable = recmac_referer_funforms(RefLink, Node) -- FnForms == [],
-    [Form]    = form_of_entity(RefLink, Node, Name),
-    case lists:member(Name, UsedIncluded) of
-        true  -> {    include, Node, Form, Removable};
-        false -> {localdefine, Node, Form, Removable}
-    end.
-
-form_of_entity(recref, Node, _) ->
-    ?GRAPH:path(Node, [{recdef, back}]);
-
-form_of_entity(mref, Node, Name) ->
-    ?GRAPH:path(Node, [{macro, back}] ++ ?SYNTAX:form_def_path(Name)).
-
-recmac_referer_funforms(recref, Node) ->
-    Path1 = [sup, {visib, back}],
-    usort(recmac_referer_funforms(Node, recref, Path1));
-
-recmac_referer_funforms(mref, Node) ->
-    Path1 = [{clex, back}],
-    Path2 = [{elex, back}, sup, {visib, back}],
-    lists:umerge(
-      recmac_referer_funforms(Node, mref, Path1),
-      recmac_referer_funforms(Node, mref, Path2)).
-
-recmac_referer_funforms(Node, Link, Path) ->
-    ?GRAPH:path(Node, [{Link, back}] ++ Path ++ [scope, functx, {funcl, back}]).
-
-%%% ----------------------------------------------------------------------------
-%%% Checks
-
-check_target_module(St=#state{target=Target}) ->
-    case ?SYNTAX:file_by_modulename(Target) of
-        {TMod, TFile} ->  St#state{targetmodule = TMod, targetfile = TFile};
-        error         ->  throw_target_not_found()
-    end.
-
-check_from_module(St=#state{from=From}) ->
-    case ?SYNTAX:file_by_modulename(From) of
-        {FMod, FFile} ->  St#state{frommodule = FMod, fromfile = FFile};
-        error         ->  throw_source_not_found()
-    end.
-
-check_funnames(#state{targetmodule=TargetModule, fnlist=FnList}) ->
-    Clash = [{Name, Arity} || {Name, Arity} <- FnList,
-                                   ?SEMINF:fun_exists(TargetModule, Name, Arity)],
-    case Clash of
-        [] -> ok;
-        _  -> throw_name_conflict(Clash)
-    end.
-
-check_recmac(Tag, St = #state{clash = StClash}) ->
-    {Clash, LocalClash} = recmac_component(Tag, StClash),
-    case Clash of
-        [] ->
-            check_include_conflicts(Tag, St);
-        _ ->
-            case LocalClash of
-                [] ->
-                    check_same_includes(Tag, St);
-                _  ->
-                    throw_recmac_local_conflict()
-            end
-    end.
-
-check_include_conflicts(Tag, #state{fromfile = FromFile,
-                                    targetfile = TargetFile,
-                                    used_included = StUI}) ->
-    UsedIncluded  = recmac_component(Tag, StUI),
-    WithInclFile = [{?LEX:included_from_file(FromFile, Entity, Tag), Entity}
-                    || Entity <- UsedIncluded],
-    Conflicts = [{(?GRAPH:data(InclFile))#file.path, Entity}
-                 || {InclFile, Entity} <- WithInclFile,
-                    not ?LEX:includable(TargetFile, InclFile)],
-    case Conflicts of
-        [] ->
-            ok;
-        _ ->
-            throw_unincludables(Conflicts)
-    end.
-
-check_same_includes(Tag, #state{fromfile = FromFile,
-                                targetfile = TargetFile,
-                                clash = StClash}) ->
-    {Clash, _} = recmac_component(Tag, StClash),
-    InclClashPaths =
-        usort([?LEX:included_from_path(FromFile, Name, Tag) || Name <- Clash]),
-    T_Includes =
-        usort([Path || I <- ?GRAPH:path(TargetFile, [incl]),
-                       #file{path=Path} <- [?GRAPH:data(I)]]),
-    case InclClashPaths -- T_Includes of
-        [] ->
-            ok;
-        _ ->
-            throw_includes_not_match(InclClashPaths, T_Includes)
-    end.
+    R = [fun() -> init end]
+        ++
+        [fun(_) -> ?Expr:add_modq(Expr, ?Mod:name(Module)) end
+         || #modq_add{expr=Expr, module=Module}
+                <- ets:lookup(?TableName, modq_add)]
+        ++
+        [fun(_) -> ?Expr:upd_modq(Expr, ?Mod:name(Module)) end
+         || #modq_upd{expr=Expr, module=Module}
+                <- ets:lookup(?TableName, modq_upd)]
+        ++
+        [fun(_) -> ?Expr:del_modq(Expr) end
+         || #modq_del{expr=Expr} <- ets:lookup(?TableName, modq_del)]
+        ++
+        [fun(_) -> imp_list_rename(Form, Name) end
+         || #list_ren{form=Form, name=Name} <- ets:lookup(?TableName, list_ren)]
+        ++
+        [fun(_) -> expimp_list_adds(A) end || A <- ListAdds]
+        ++
+        [fun(_) -> expimp_list_dels(List, Exprs, FromMod, FunDefs) end
+         || {List, Exprs} <- group_list_dels(ets:lookup(?TableName, list_del))]
+        ++
+        [fun(_) -> correct_recmac(record, {Loc_Incl, Node, Form, Removable},
+                                  FromFile, ToFile) end
+         || #rec_info{loc_incl=Loc_Incl, node=Node, form=Form, removable=Removable}
+                <- ets:lookup(?TableName, rec_info)]
+        ++
+        [fun(_) -> correct_recmac(macro,  {Loc_Incl, Form, Form, Removable},
+                                  FromFile, ToFile) end
+         || #mac_info{loc_incl=Loc_Incl, form=Form, removable=Removable}
+                <- ets:lookup(?TableName, mac_info)],
+    ets:delete(?TableName),
+    R.
 
 
 %%% ============================================================================
@@ -350,221 +367,279 @@ check_same_includes(Tag, #state{fromfile = FromFile,
 %%% ----------------------------------------------------------------------------
 %%% Macro/record
 
-correct_recmac(_, {localdefine, _Node, Form, false}, #state{targetfile=TFile}) ->
+correct_recmac(_, {localdefine, _Node, Form, false}, _, ToFile) ->
     {value, {_, NewForm}} = lists:keysearch(Form, 1, ?ESG:copy(Form)),
-    ?MANIP:insert_form(TFile, NewForm);
+    ?File:add_form(ToFile, NewForm);
 
-correct_recmac(_, {localdefine, _Node, Form, true},
-               #state{fromfile = FFile, targetfile = TFile}) ->
-    ?MANIP:move_form(Form, FFile, TFile);
+correct_recmac(_, {localdefine, _Node, Form, true}, FromFile, ToFile) ->
+    ?File:del_form(FromFile, Form),
+    ?File:add_form(ToFile, Form);
 
-correct_recmac(Tag, {include, Node, _Form, Removable},
-               #state{fromfile=FFile, targetfile=TFile}) ->
-    [IncludeFile]    = ?GRAPH:path(Node, [{Tag, back}]),
-    #file{path=Path} = ?GRAPH:data(IncludeFile),
-    IncludeForm      = ?GRAPH:path(FFile, ?SYNTAX:form_inc_path(Path)),
-    case {IncludeForm, Removable} of
-        {[F], true}  -> ?MANIP:move_include(F, FFile, TFile);
-        {[F], false} -> ?MANIP:copy_include(F, TFile);
-        {_, _}       -> ok
-    end.
+correct_recmac(Tag, {include, Node, _Form, Removable}, FromFile, ToFile) ->
+    GetFileQuery = case Tag of
+                       record -> ?Rec:file();
+                       macro ->  ?Macro:file()
+                   end,
+    IncludeFile = exec1(Node, GetFileQuery, file_not_present),
+    case Removable andalso
+        exec(FromFile, ?File:include_form(IncludeFile)) =/= [] of
+        true ->
+            ?File:del_include(FromFile, IncludeFile);
+        false ->
+            ok
+    end,
+    ?File:add_include(ToFile, IncludeFile).
 
 %%% ----------------------------------------------------------------------------
 %%% Moved function references
 
-correct_refs(Fun, Expr, St = #state{targetfile   = TFile,
-                                    targetmodule = TargetMod}) ->
-    case [?GRAPH:data(A) || A <- ?GRAPH:path(Expr, [sup, {attr, back}])] of
-        [#form{type = attrib, tag = export}] ->
-            correct_export_refs(Expr, Fun, TFile);
-        [#form{type = attrib, tag = import}] ->
-            correct_import_refs(Expr, Fun, TargetMod);
+correct_refs(Fun, Expr, I = #info{tomod = ToMod}) ->
+    case [?Form:type(A) || A <- exec(Expr, ?Expr:attrib_form())] of
+        [export] ->
+            correct_export_refs(Expr, Fun, ToMod);
+        [import] ->
+            correct_import_refs(Expr, Fun, ToMod);
         [] ->
-            correct_module_qualifier(Expr, St)
+            correct_module_qualifier(Expr, I)
     end.
 
-correct_export_refs(Expr, Fun, TFile) ->
-    [ExportForm] = ?GRAPH:path(Expr, [sup, {attr, back}]),
-    [ExportList] = ?GRAPH:path(ExportForm, [attr]),
-    #func{name=Name, arity=Arity} = ?GRAPH:data(Fun),
-    [#list_del{type=export, list=ExportList, item=Expr},
-     #list_add{type=export, file=TFile, name=Name, arity=Arity}].
+correct_export_refs(Expr, Fun, ToMod) ->
+    ExportForm = exec1(Expr, ?Expr:attrib_form(), form_not_found),
+    ExportList = exec1(ExportForm, ?Form:exprs(), list_not_found),
+    ?NOTE(#list_del{type=export, list=ExportList, item=Expr}),
+    ?NOTE(#list_add{type=export, location = ToMod,
+                    name = ?Fun:name(Fun), arity=?Fun:arity(Fun)}).
 
 correct_import_refs(Expr, Fun, TargetMod) ->
-    [ImportForm] = ?GRAPH:path(Expr, [sup, {attr, back}]),
-    [Mod] = ?GRAPH:path(ImportForm, [{form, back}, moddef]),
-    Attrs = ?GRAPH:path(ImportForm, [attr]),
+    ImportForm = exec1(Expr, ?Expr:attrib_form(), form_not_found),
+    Mod = exec1(ImportForm, seq(?Form:file(), ?File:module()), mod_not_found),
+    Attrs = exec(ImportForm, ?Form:exprs()),
     case {Attrs, Mod}  of
         {[_, ImportList], TargetMod} ->
-            #list_del{type=import, list=ImportList, item=Expr};
+            ?NOTE(#list_del{type=import, list=ImportList, item=Expr});
         {[_, ImportList], _} ->
-            [File] = ?GRAPH:path(Mod, [{moddef, back}]),
-            #func{name=Name, arity=Arity} = ?GRAPH:data(Fun),
-                                                %?MANIP:add_import(File, TargetMod, Name, Arity),
-            [{file, File},
-             #list_del{type=import, list=ImportList, item=Expr},
-             #list_add{type=import, file=File, module=TargetMod,
-                       name=Name, arity=Arity}];
+            ?NOTE(#list_del{type=import, list=ImportList, item=Expr}),
+            ?NOTE(#list_add{type=import, where=Mod, location = TargetMod,
+                            name = ?Fun:name(Fun), arity = ?Fun:arity(Fun)});
         {_,TargetMod} ->
-            ?MANIP:remove_form(ImportForm),
-            [];
+            ?File:del_form(ImportForm),
+            ?Transform:touch(exec1(Mod, ?Mod:file(), file_not_found));
         {_, _} ->
-            ?MANIP:rename_import(ImportForm, TargetMod),
-            {file, ?GRAPH:path(Mod, [{moddef, back}])}
+            ?NOTE(#list_ren{form=ImportForm, name=?Mod:name(TargetMod)}),
+            ?Transform:touch(ImportForm)
     end.
 
 
 %%% ----------------------------------------------------------------------------
 %%% Module qualifiers
 
-
-correct_module_qualifier(Expr, #state{frommodule   = FromMod,
-                                                %fromfile     = FFile,
-                                      targetmodule = TargetMod,
-                                      targetfile   = TFile,
-                                      fnnodes      = FnNodes}) ->
-    [File]           = ?GRAPH:path(Expr, [sup, {visib, back}, scope, functx,
-                                          {funcl, back}, {form, back}]),
-    [ModOrigin]      = ?GRAPH:path(File, [moddef]),
-    [Referred]       = ?GRAPH:path(Expr, [funref]),
-    [FunIsReferring] = ?GRAPH:path(Expr, [sup, {body, back}, scope,
-                                          functx, {funcl, back}, fundef]),
-    case {ModOrigin, ?SYNTAX:module_qualifier(Expr)} of
-        {TargetMod, FromMod} ->
-            ?MANIP:remove_module_qualifier(Expr),
-            [{file, File}, {app_update, Expr}];
-        {FromMod, MQ} when MQ == no_module_qualifier orelse MQ == false ->
-            ReferredMoved = lists:member(Referred, FnNodes),
-            RefererMoved  = lists:member(FunIsReferring, FnNodes),
-            #func{name=Name, arity=Arity} = ?GRAPH:data(Referred),
+correct_module_qualifier(Expr, #info{frommod = FromMod, tomod = ToMod,
+                                     funobjs = FunObjs}) ->
+    [File]           = exec(Expr,
+                            seq([?Expr:clause(), ?Clause:form(), ?Form:file()])),
+    [ModOrigin]      = exec(File, ?File:module()),
+    [Referred]       = exec(Expr, ?Expr:function()),
+    [FunIsReferring] = exec(Expr,
+                            seq([?Expr:clause(), ?Clause:form(), ?Form:func()])),
+    MaybeMod         = exec(Expr, seq([?Expr:modq(), ?Expr:child(1), [modref]])),
+    case {ModOrigin, MaybeMod} of
+        {ToMod, [FromMod]} ->
+            ?Transform:touch(File),
+            ?NOTE(#modq_del{expr = Expr});
+        {FromMod, []} ->
+            ReferredMoved = lists:member(Referred, FunObjs),
+            RefererMoved  = lists:member(FunIsReferring, FunObjs),
             case {ReferredMoved, RefererMoved} of
-                {true, true} ->
-                    [#list_add{type=export, file=TFile, name=Name, arity=Arity}];
+                {false, true} ->
+                    ?NOTE(#list_add{type=export, location=ToMod,
+                                    name = ?Fun:name(Referred),
+                                    arity = ?Fun:arity(Referred)});
                 {true, false} ->
-                    ?MANIP:insert_module_qualifier(Expr, TargetMod),
-                    [{file, File}, {app_update, Expr},
-                     #list_add{type=export, file=TFile, name=Name, arity=Arity}];
+                    ?Transform:touch(File),
+                    ?NOTE(#modq_add{expr = Expr, module = ToMod}),
+                    ?NOTE(#list_add{type=export, location=ToMod,
+                                    name = ?Fun:name(Referred),
+                                    arity = ?Fun:arity(Referred)});
                 %%{false, true} ->
                 %%    insert_module_qualifier(Expr, FromMod),
-                %%    [{file, File}, {app_update, Expr},
-                %%     #list_add{type=export, file=FFile, name=Name, arity=Arity}];
+                %%    [#list_add{type=export, file=FFile, name=Name, arity=Arity}];
                 _ ->
-                    []
+                    ok
             end;
-        {_, FromMod} ->
-            ?MANIP:update_module_qualifier(Expr, TargetMod),
-            [{file, File}, {app_update, Expr}];
+        {_, [FromMod]} ->
+            ?Transform:touch(File),
+            ?NOTE(#modq_upd{expr = Expr, module = ToMod});
         {_, _} ->
-            []
+            ok
     end.
 
 
 %%% ----------------------------------------------------------------------------
 %%% Applications in moved bodies
 
-
-correct_body(FunForm, ImportedFuns, St) ->
-    Expressions = ?GRAPH:path(FunForm, path_form_expressions()),
-    flatten([correct_application(Expr, ImportedFuns, St) ||
+correct_body(FunForm, ImportedFuns, I) ->
+    Expressions = exec(FunForm, path_form_expressions()),
+    flatten([correct_application(Expr, ImportedFuns, I) ||
                 Expr <- Expressions]).
 
 
 correct_application(Expr, ImportedFuns,
-                    St=#state{fnnodes=FnNodes, targetmodule=TModule}) ->
-    [ReferredFun] = ?GRAPH:path(Expr, [funref]),
-    ReferredMoved = lists:member(ReferredFun, FnNodes),
-    case {ReferredMoved, ?SYNTAX:module_qualifier(Expr)} of
-        {false, TModule} ->
-            ?MANIP:remove_module_qualifier(Expr),
-            [{app_update, Expr}];
-        {false, no_module_qualifier} ->
-            correct_application_has_no_qualifier(Expr, ReferredFun,
-                                                 ImportedFuns, St);
-        {_, _} ->
-            []
+                    I = #info{funobjs = FunObjs, tomod=ToMod}) ->
+    case exec(Expr, ?Expr:function()) of
+        [ReferredFun] ->
+            ReferredMoved = lists:member(ReferredFun, FunObjs),
+            case {ReferredMoved, exec(Expr, ?Query:seq([?Expr:modq(),
+                                                        ?Expr:child(1),
+                                                        [modref]]))} of
+                {false, [ToMod]} ->
+                    ?Transform:touch(Expr),
+                    ?NOTE(#modq_del{expr = Expr});
+                {false, []} ->
+                    correct_app_noqual(Expr, ReferredFun, ImportedFuns, I);
+                {_, _} ->
+                    ok
+            end;
+        _ ->
+            ok
+            %% Applied function is unknown
+            %% e.g. `Fun(...)', fun name comes from a variable
     end.
 
-%% REM DIAL the tuple [{1, _ImportForm, Module}] never matches now
-correct_application_has_no_qualifier(Application, ReferredFun, ImportedFuns,
-                                     #state{fromfile=FFile, targetfile=TFile, frommodule=FModule}) ->
+correct_app_noqual(Application, ReferredFun, ImportedFuns,
+                   #info{fromfile=FromFile, frommod=FromMod, tomod=ToMod}) ->
     Imported = lists:member(ReferredFun, ImportedFuns),
-    #func{name=Name, arity=Arity} = ?GRAPH:data(ReferredFun),
     case Imported of
         true ->
-            case ?SEMINF:import_list_refs(FFile, ReferredFun) of
-                [{1, _ImportForm, Module}] ->
-                                                %?MANIP:add_import(TFile, Module, Name, Arity),
-                    [#list_add{type=import, file=TFile, module=Module,
-                               name=Name, arity=Arity}];
-                [{2, ImportList, ImpExpr, Module}] ->
-                                                %?MANIP:add_import(TFile, Module, Name, Arity),
-                    [#list_del{type=import, list=ImportList, item=ImpExpr},
-                     #list_add{type=import, file=TFile, module=Module,
-                               name=Name, arity=Arity}];
-                [no_refs] -> []
+            ImportRefsInFrom =
+                filter(
+                  fun(Expr) -> exec(Expr, seq(?Expr:attrib_form(),
+                                              ?Form:file())) == [FromFile]
+                  end,
+                  exec(ReferredFun, ?Fun:imports())),
+            case ImportRefsInFrom of
+                [] -> [];
+                Exprs ->
+                    flatsort(
+                      [begin
+                           Form = exec1(Expr, ?Expr:attrib_form(), form_not_found),
+                           [ModNameExpr, List] = exec(Form, ?Form:exprs()),
+                           Module = exec1(ModNameExpr, [modref], no_modref),
+                           ?NOTE(#list_del{type=import, list=List, item=Expr}),
+                           case Module =:= ToMod of
+                               true -> ok;
+                               _ ->
+                                   ?NOTE(#list_add{type=import, where=ToMod,
+                                                   location=Module,
+                                                   name = ?Fun:name(ReferredFun),
+                                                   arity = ?Fun:arity(ReferredFun)})
+                           end
+                       end || Expr <- Exprs])
             end;
         false ->
-            case ?GRAPH:path(ReferredFun, [{fundef, back}]) of
+            case exec(ReferredFun, ?Fun:definition()) of
                 [] ->
                     %% BIF
-                    [];
+                    ok;
                 _ ->
-                    %% local function in from
-                    ?MANIP:insert_module_qualifier(Application, FModule),
-                    [#list_add{type=export, file=FFile, name=Name, arity=Arity},
-                     {app_update, Application}]
+                    %% local function in `FromMod'
+                    ?Transform:touch(Application),
+                    ?NOTE(#modq_add{expr = Application, module = FromMod}),
+                    ?NOTE(#list_add{type=export, location=FromMod,
+                                    name = ?Fun:name(ReferredFun),
+                                    arity = ?Fun:arity(ReferredFun)})
             end
     end.
+
 
 %%% ----------------------------------------------------------------------------
 %%% Export/import lists
 
+imp_list_rename(ImportForm, NewName) ->
+    [NameExpr|_] = exec(ImportForm, ?Form:exprs()),
+    NewNameExpr  = ?Syn:create(#expr{kind = atom},
+                               NewName),
+    ?Syn:replace(ImportForm, {node, NameExpr}, [NewNameExpr]).
 
-expimp_list_adds(#list_add{type = Type, file = File,module = Module,
-                           name = Name, arity = Arity}) ->
+expimp_list_adds(#list_add{type = Type, where = Module, funobj = FunObj}) ->
     case Type of
-        export -> ?MANIP:add_export(File,  Name, Arity);
-        import -> ?MANIP:add_import(File, Module, Name, Arity)
+        export ->
+            FunDef = exec1(FunObj, ?Fun:definition(), fundef_not_found),
+            ?Transform:touch(FunDef),
+            ?Fun:add_export(FunObj);
+        import ->
+            File = exec1(Module, ?Mod:file(), file_not_found),
+            ?Transform:touch(File),
+            ?Mod:add_import(Module, FunObj)
     end.
 
-expimp_list_dels(List, Exprs, _FModule, FnForms) ->
-    AllApps = apps_funexprs(FnForms),
-    File = ?SEMINF:parent_file(List),
-    Removable = filter_removable_lists(Exprs, File, AllApps),
+expimp_list_dels(ListCons, Exprs, FromMod, FunDefs) ->
+    %% All applications and implicit funs in the moved bodies
+    %% todo: ezt szebben is lehet?
+    AllApps = [App || Form <- FunDefs,
+                      App  <- exec(Form, path_form_expressions()),
+                      Type <- [?Expr:type(App)],
+                      Type == application orelse Type == implicit_fun],
+
+    %% File that defines the list
+    File = exec1(ListCons, seq(?Expr:attrib_form(), ?Form:file()),
+                 file_not_found),
+
+    %% The expr is removable, when only the moved applications refer to it
+    Removable = filter_removable_exprs(Exprs, File, FromMod, AllApps),
+
+    %% Removable expressions in the list
     RemExprs = [E || {_, E} <- Removable],
-    case ?GRAPH:path(List, [sub]) -- RemExprs of
+
+    case exec(ListCons, seq(?Expr:child(1), ?Expr:children())) -- RemExprs of
         [] ->
-            [Form] = ?GRAPH:path(List, [{attr, back}]),
-            ?MANIP:remove_form(Form);
+            [Form] = exec(ListCons, ?Expr:attrib_form()),
+            ?Transform:touch(?Syn:get_file(Form)),
+            ?File:del_form(Form);
         _ ->
-            [?MANIP:remove_expimp(List, Expr) || {_, Expr} <- Removable]
+            [fun() -> init end]
+                ++
+                [fun(_) -> del_expimp(ListCons, Expr) end
+                 || {_, Expr} <- Removable]
+    end.
+
+del_expimp(ListCons, Expr) ->
+    List = exec1(ListCons, ?Expr:child(1), list_not_found),
+    Exprs  = exec(List, ?Expr:children()),
+    case Exprs -- [Expr] of
+        [] ->
+            ?File:del_form(exec1(ListCons, ?Expr:attrib_form(), form_not_found));
+        _ ->
+            ?Syn:replace(List, {node, Expr}, [])
     end.
 
 
-%% @doc We remove that import/export lists, which are removable:
-%%      have no other referers, just the moved applications.
-filter_removable_lists(Exprs, File, AllApps) ->
+%% @doc We remove that import/export lists, which are removable: have
+%% no other referers, just the moved applications.
+filter_removable_exprs(Exprs, File, FromMod, AllApps) ->
     lists:filter(
-      fun
-          ({export, _}) ->
-              true;
-          ({import, Expr}) ->
-              referers(Expr, File) -- AllApps == []
+      fun({export, _})    -> true;
+         ({import, Expr}) ->
+              exec(Expr, seq([?Expr:attrib_form(),
+                              ?Form:file(),
+                              ?File:module()])) =/= [FromMod] orelse
+                  referers(Expr, File) -- AllApps == []
       end,
       Exprs).
 
-%% @doc Which expressions are applying the imported function
-%%      in the source module?
+%% @doc Which expressions are applying the imported function in the
+%% source module?
 referers(ImportExpr, File) ->
     [FunRef ||
-        FunRef <- ?GRAPH:path(ImportExpr, [funref, {funref, back}]),
+        FunRef <- exec(ImportExpr, seq(?Expr:function(), any(?Fun:applications(),
+                                                             ?Fun:implicits()))),
         is_same_module_ref(FunRef, File)].
 
 is_same_module_ref(FunRef, File) ->
-    SameModule = fun() -> ?SEMINF:parent_file(FunRef) == File end,
-    NoQualifier = fun() -> ?SYNTAX:module_qualifier(FunRef) == no_module_qualifier orelse
-                               ?SYNTAX:module_qualifier(FunRef) == false end,
-    case ?GRAPH:data(FunRef) of
+    SameModule = fun() -> exec(FunRef, seq([?Expr:clause(),
+                                            ?Clause:form(),
+                                            ?Form:file()])) =:= [File] end,
+    NoQualifier = fun() -> exec(FunRef, ?Expr:modq()) == [] end,
+    case ?Graph:data(FunRef) of
         #expr{kind=application}  -> SameModule() andalso NoQualifier();
         #expr{kind=implicit_fun} -> SameModule();
         _                        -> false
@@ -574,38 +649,15 @@ is_same_module_ref(FunRef, File) ->
 %%% ----------------------------------------------------------------------------
 %%% Short functions
 
-
-filterpairs(List, Atom) ->
-    lists:usort(lists:filter(
-                  fun(Elem) ->
-                          case Elem of
-                              {Atom, _} -> true;
-                              _ -> false
-                          end
-                  end,
-                  List)).
-
 path_form_expressions() ->
-    [funcl, {functx,back}, 
-     {scope,back}, visib, 
-     {{sup, back}, 
-      {{kind, '==', application}, 'or', 
-       {kind, '==', implicit_fun}
-      }
-     }
-    ].
+    seq([?Form:clauses(), [{functx,back}, {scope,back}], ?Clause:exprs(),
+         [{{sup, back}, {{kind, '==', application}, 'or',
+                         {kind, '==', implicit_fun}}}]]).
 
-apps_funexprs(FnForms) ->
-    [App || Form <- FnForms,
-            App <- ?GRAPH:path(Form, path_form_expressions()),
-            #expr{type=Type} <- [?GRAPH:data(App)],
-            Type == application orelse Type == fun_expr].
+group_list_dels(ListDels) ->
+    [{List, [{Type, Expr}
+             || #list_del{type=Type, item=Expr, list=L} <- ListDels, List == L]}
+     || List <- lists:usort([List || #list_del{list=List} <- ListDels])].
 
-format_list_removings(ListRemoves) ->
-    Lists = lists:usort([List || #list_del{list=List} <- ListRemoves]),
-    [{List,
-      [{Type, Expr} || #list_del{type=Type, item=Expr, list=L} <- ListRemoves,
-                       L == List]}
-     || List <- Lists].
-
-funrefs(Fun) -> ?GRAPH:path(Fun, [{funref, back}]).
+funrefs(Fun) ->
+    exec(Fun, all([?Fun:applications(), ?Fun:implicits(), ?Fun:impexps()])).

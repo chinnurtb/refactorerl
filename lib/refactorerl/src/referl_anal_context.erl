@@ -44,7 +44,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_context).
--vsn("$Rev: 1979 $").
+-vsn("$Rev: 2170 $").
 -behaviour(referl_esg).
 
 %% Callback exports
@@ -61,95 +61,102 @@ init() ->
 
 %% @private
 insert(FunForm, #form{type=func}, funcl, Clause, #clause{}) ->
-    [Mod] = ?GRAPH:path(FunForm, [{form, back}, moddef]),
-    ?GRAPH:mklink(Clause, modctx, Mod),
-    ?GRAPH:mklink(Clause, functx, Clause),
-    ?GRAPH:mklink(Clause, scope, Clause);
+    [Mod] = ?Graph:path(FunForm, [{form, back}, moddef]),
+    ?Graph:mklink(Clause, modctx, Mod),
+    ?Graph:mklink(Clause, functx, Clause),
+    ?Graph:mklink(Clause, scope, Clause);
 
 insert(_, #form{type=attrib}, attr, Expr, #expr{}) ->
-    ?GRAPH:mklink(Expr, sup, Expr);
+    ?Graph:mklink(Expr, sup, Expr);
 
 insert(Clause, #clause{kind=hexpr}, _, Expr, #expr{}) ->
-    ?GRAPH:mklink(Expr, sup, Expr),
-    [Compr] = ?GRAPH:path(Clause, [{exprcl, back}, {exprcl, last}]),
+    ?Graph:mklink(Expr, sup, Expr),
+    [Compr] = ?Graph:path(Clause, [{exprcl, back}, {exprcl, last}]),
     add_cmp_head(Compr, Expr);
 
 insert(Clause, #clause{kind=Kind}, Tag, Expr, #expr{}) ->
-    ?GRAPH:mklink(Expr, sup, Expr),
+    ?Graph:mklink(Expr, sup, Expr),
     if
         Kind == compr ->
-            add_cmp_clause(Clause, Expr);
+            ok;
         Tag /= name ->
             add_visib(Clause, Expr);
         true -> ok
     end;
 
 insert(Expr, #expr{kind=Kind}, _Tag, Clause, #clause{type=scope}) ->
-    [Fun] = ?GRAPH:path(Expr, [sup, {visib, back}, scope, functx]),
-    ?GRAPH:mklink(Clause, functx, Fun),
-    ?GRAPH:mklink(Clause, scope, Clause),
-    add_clause(Expr, Kind, Clause);
+    ?Graph:mklink(Clause, scope, Clause),
+    add_clause(Expr, Kind, Clause),
+    case ?Graph:path(Expr, [sup, {visib, back}, scope, functx]) of
+        [Fun] -> ?Graph:mklink(Clause, functx, Fun);
+        []    -> ok % in attributes, no function context
+    end;
 
 insert(Expr, #expr{kind=Kind}, _Tag, Clause, #clause{}) ->
-    [Scope] = ?GRAPH:path(Expr, [sup, {visib,back}, scope]),
-    ?GRAPH:mklink(Clause, scope, Scope),
-    add_clause(Expr, Kind, Clause);
+    add_clause(Expr, Kind, Clause),
+    case ?Graph:path(Expr, [sup, {visib,back}, scope]) of
+        [Scope] ->
+            ?Graph:mklink(Clause, scope, Scope);
+        []      -> ok % in attributes, no active scope
+    end;
 
 insert(Expr, #expr{}, _, Sub, #expr{}) ->
-    [Sup] = ?GRAPH:path(Expr, [sup]),
-    ?GRAPH:mklink(Sub, sup, Sup);
+    [Sup] = ?Graph:path(Expr, [sup]),
+    ?Graph:mklink(Sub, sup, Sup);
 
 insert(_,_,_,_,_) ->
     ok.
 
 %% @private
 remove(_, #form{type=attrib}, attr, Expr, #expr{}) ->
-    ?GRAPH:rmlink(Expr, sup, Expr);
+    ?Graph:rmlink(Expr, sup, Expr);
 
 remove(_, #expr{}, _, Expr, #expr{}) ->
-    [Sup] = ?GRAPH:path(Expr, [sup]),
-    ?GRAPH:rmlink(Expr, sup, Sup);
+    [Sup] = ?Graph:path(Expr, [sup]),
+    ?Graph:rmlink(Expr, sup, Sup);
 
 remove(Clause, #clause{kind=Kind}, Tag, Expr, #expr{}) ->
-    ?GRAPH:rmlink(Expr, sup, Expr),
+    ?Graph:rmlink(Expr, sup, Expr),
     if
         Kind == hexpr ->
-            case ?GRAPH:path(Expr, [{visib, back}]) of
-                [C] -> ?GRAPH:rmlink(C, visib, Expr);
+            case ?Graph:path(Expr, [{visib, back}]) of
+                [C] -> ?Graph:rmlink(C, visib, Expr);
                 [] -> ok
             end;
         Kind /= compr, Tag /= name ->
-            ?GRAPH:rmlink(Clause, visib, Expr);
+            ?Graph:rmlink(Clause, visib, Expr);
         true ->
             ok
     end;
 
 remove(Expr, #expr{kind=ExKind}, _, Clause, #clause{kind=ClKind}) ->
-    ?GRAPH:rmlink(Expr, clause, Clause),
-    [Scope] = ?GRAPH:path(Clause, [scope]),
-    ?GRAPH:rmlink(Clause, scope, Scope),
-    case ?GRAPH:path(Clause, [functx]) of
-        [Fun] -> ?GRAPH:rmlink(Clause, functx, Fun);
+    case ?Graph:path(Clause, [functx]) of
+        [Fun] -> ?Graph:rmlink(Clause, functx, Fun);
         [] -> ok
     end,
     if
         ClKind == compr ->
-            case ?GRAPH:path(Clause, [visib]) of
+            case ?Graph:path(Clause, [visib]) of
                 [] -> ok;
-                [Head] -> ?GRAPH:rmlink(Clause, visib, Head)
+                [Head] -> ?Graph:rmlink(Clause, visib, Head)
             end;
         ExKind == list_gen; ExKind == binary_gen; ExKind == filter ->
-            [Compr] = ?GRAPH:path(Expr, [{body, back}]),
+            [Compr] = ?Graph:path(Expr, [{body, back}]),
             rem_cmp_clause(Compr, Expr, Clause);
         true ->
             ok
+    end,
+    ?Graph:rmlink(Expr, clause, Clause),
+    case ?Graph:path(Clause, [scope]) of
+        [Scope] -> ?Graph:rmlink(Clause, scope, Scope);
+        []      -> ok % no scope in attributes
     end;
 
 remove(_, #form{}, _, Clause, #clause{}) ->
-    ?GRAPH:rmlink(Clause, scope, Clause),
-    ?GRAPH:rmlink(Clause, functx, Clause),
-    [Mod] = ?GRAPH:path(Clause, [modctx]),
-    ?GRAPH:rmlink(Clause, modctx, Mod);
+    ?Graph:rmlink(Clause, scope, Clause),
+    ?Graph:rmlink(Clause, functx, Clause),
+    [Mod] = ?Graph:path(Clause, [modctx]),
+    ?Graph:rmlink(Clause, modctx, Mod);
 
 remove(_,_,_,_,_) ->
     ok.
@@ -159,29 +166,29 @@ remove(_,_,_,_,_) ->
 %%% Helper functions
 
 add_visib(Clause, Expr) ->
-    Visib = ?GRAPH:path(Clause, [visib]),
-    Content = ?GRAPH:path(Clause, [pattern]) ++
-        ?GRAPH:path(Clause, [tmout]) ++
-        ?GRAPH:path(Clause, [guard]) ++
-        ?GRAPH:path(Clause, [body]),
+    Visib = ?Graph:path(Clause, [visib]),
+    Content = ?Graph:path(Clause, [pattern]) ++
+        ?Graph:path(Clause, [tmout]) ++
+        ?Graph:path(Clause, [guard]) ++
+        ?Graph:path(Clause, [body]),
     add_link(Clause, Expr, Content, Visib, visib).
 
 add_clause(Expr, Kind, Clause) ->
-    Clauses = ?GRAPH:path(Expr, [clause]),
-    Content = ?GRAPH:path(Expr, [headcl]) ++
-        ?GRAPH:path(Expr, [exprcl]) ++
-        ?GRAPH:path(Expr, [catchcl]) ++
-        ?GRAPH:path(Expr, [aftercl]),
+    Clauses = ?Graph:path(Expr, [clause]),
+    Content = ?Graph:path(Expr, [headcl]) ++
+        ?Graph:path(Expr, [exprcl]) ++
+        ?Graph:path(Expr, [catchcl]) ++
+        ?Graph:path(Expr, [aftercl]),
     add_link(Expr, Clause, Content, Clauses, clause),
-    Ind = ?GRAPH:index(Expr, exprcl, Clause),
+    Ind = ?Graph:index(Expr, exprcl, Clause),
     if
         (Kind == list_gen) or (Kind == binary_gen) or (Kind == filter),
         Ind == 1 ->
-            [Compr] = ?GRAPH:path(Expr, [{body, back}]),
+            [Compr] = ?Graph:path(Expr, [{body, back}]),
             add_cmp_clause(Compr, Expr, Clause);
         (Kind == list_comp) or (Kind == binary_comp),
         Ind == 2 ->
-            [Head] = ?GRAPH:path(Expr, [{exprcl, 1}, body]),
+            [Head] = ?Graph:path(Expr, [{exprcl, 1}, body]),
             add_cmp_head(Clause, Head);
         true ->
             ok
@@ -191,24 +198,26 @@ add_link(Parent, Child, Order, Children, Tag) ->
     add_link(Parent, Child, Order, Children, Tag, 1).
 
 add_link(Parent, Child, [OH | _OT], _Children, Tag, Ind) when OH == Child ->
-    ?GRAPH:mklink(Parent, {Tag, Ind}, Child);
+    ?Graph:mklink(Parent, {Tag, Ind}, Child);
 add_link(Parent, Child, [OH | OT],  [CH | CT], Tag, Ind) when OH == CH ->
     add_link(Parent, Child, OT, CT, Tag, Ind+1);
 add_link(Parent, Child, [_OH | OT], Children,  Tag, Ind) ->
     add_link(Parent, Child, OT, Children, Tag, Ind).
 
 
+%% Walk through a comprehension structure
+%% `Fun' is called once for every nesting level of the structure
 fold_compr(Compr, Fun, Acc) ->
-    [Head] = ?GRAPH:path(Compr, [{exprcl, back}, {exprcl,1}, body]),
+    [Head] = ?Graph:path(Compr, [{exprcl, back}, {exprcl,1}, body]),
     fold_compr(Compr, Head, Compr, Fun, Acc).
 
 fold_compr(Compr, Head, Clause, Fun, Acc) ->
     {Next, Ind} =
-        case ?GRAPH:path(Clause, [{visib, last}]) of
+        case ?Graph:path(Clause, [{visib, last}]) of
             [] -> {none, last}; 
             [Head] -> {Head, last};
             [Expr] ->
-                case ?GRAPH:index(Compr, body, Expr) of
+                case ?Graph:index(Compr, body, Expr) of
                     none -> {none, last}; 
                     I -> {Expr, I}
                 end
@@ -217,36 +226,35 @@ fold_compr(Compr, Head, Clause, Fun, Acc) ->
         {stop, Acc1} -> Acc1; 
         {next, Acc1} when Ind == last -> Acc1;
         {next, Acc1} ->
-            [NCl] = ?GRAPH:path(Next, [{exprcl, 1}]),
+            [NCl] = ?Graph:path(Next, [{exprcl, 1}]),
             fold_compr(Compr, Head, NCl, Fun, Acc1);
         _ -> ok
     end.
 
+
+%% Insert the head of a comprehension into the comprehension structure
 add_cmp_head(Compr, Head) ->
     fold_compr(Compr, fun add_cmp_head/4, Head).
 
 add_cmp_head(Clause, none, last, Head) ->
-    ?GRAPH:mklink(Clause, visib, Head),
+    ?Graph:mklink(Clause, visib, Head),
     stop;
 add_cmp_head(_Clause, Head, last, Head) ->
     stop;
 add_cmp_head(Clause, Expr, last, Head) ->
     error_logger:warning_msg("Overriding comprehension head: ~p->~p~n",
                              [Expr, Head]),
-    ?GRAPH:rmlink(Clause, visib, Expr),
-    ?GRAPH:mklink(Clause, visib, Head),
+    ?Graph:rmlink(Clause, visib, Expr),
+    ?Graph:mklink(Clause, visib, Head),
     stop;
 add_cmp_head(_, _, _, Head) ->
     {next, Head}.
 
 
-add_cmp_clause(Compr, Expr) ->
-    [Clause] = ?GRAPH:path(Expr, [{exprcl,1}]),
-    add_cmp_clause(Compr, Expr, Clause).
-
+%% Insert a comprehension element into a comprehension structure
 add_cmp_clause(Compr, Expr, Clause) ->
     fold_compr(Compr, fun add_cmp_clause/4,
-               {Expr, ?GRAPH:index(Compr, body, Expr), Clause}).
+               {Expr, ?Graph:index(Compr, body, Expr), Clause}).
 
 add_cmp_clause(PrevCl, NextEx, NextInd, {Expr, Ind, Cl}=Acc) ->
     if
@@ -255,26 +263,71 @@ add_cmp_clause(PrevCl, NextEx, NextInd, {Expr, Ind, Cl}=Acc) ->
         NextInd /= last, NextInd < Ind ->
             {next, Acc};
         NextEx == none ->
-            ?GRAPH:mklink(PrevCl, visib, Expr),
+            ?Graph:mklink(PrevCl, visib, Expr),
             stop;
         true ->
-            ?GRAPH:rmlink(PrevCl, visib, NextEx),
-            ?GRAPH:mklink(PrevCl, visib, Expr),
-            ?GRAPH:mklink(Cl, visib, NextEx),
+            ?Graph:rmlink(PrevCl, visib, NextEx),
+            case ?Graph:path(PrevCl, [scope]) of
+                [PrevScope] ->
+                    case ?Graph:path(Cl, [scope]) of
+                        []   -> ?Graph:mklink(Cl, scope, PrevScope);
+                        [Cl] -> ok
+                    end;
+                [] ->
+                    PrevScope = none
+            end,
+            ?Graph:mklink(PrevCl, visib, Expr),
+            ?Graph:mklink(Cl, visib, NextEx),
+            adjust_scope(NextEx, PrevScope),
             stop
     end.
 
+%% Remove a comprehension element from a comprehension structure
 rem_cmp_clause(Compr, Expr, Clause) ->
     fold_compr(Compr, fun rem_cmp_clause/4, {Expr, Clause}).
 
 rem_cmp_clause(PrevCl, NextEx, _, {NextEx, Clause}) ->
-    ?GRAPH:rmlink(PrevCl, visib, NextEx),
+    ?Graph:rmlink(PrevCl, visib, NextEx),
     {next, {PrevCl, Clause}};
 rem_cmp_clause(_, none, _, _) ->
     stop;
 rem_cmp_clause(Clause, NextEx, _, {PrevCl, Clause}) ->
-    ?GRAPH:rmlink(Clause, visib, NextEx),
-    ?GRAPH:mklink(PrevCl, visib, NextEx),
+    ?Graph:rmlink(Clause, visib, NextEx),
+    [OldScope] = ?Graph:path(Clause, [scope]),
+    ?Graph:mklink(PrevCl, visib, NextEx),
+    adjust_scope(NextEx, OldScope),
     stop;
 rem_cmp_clause(_, _, _, Acc) ->
     {next, Acc}.
+
+%% Update clauses below `Expr' to belong to their proper scope
+adjust_scope(Expr, Old) ->
+    case ?Graph:path(Expr, [{visib, back}, scope]) of
+        []      -> ok;
+        [Old]   -> ok;
+        [Scope] -> adjust_scope(?Graph:path(Expr, [clause]), Old, Scope)
+    end.
+
+adjust_scope(Clauses, Old, New) ->
+    lists:foreach(
+      fun(Cl) ->
+              Cont =
+                  case ?Graph:path(Cl, [scope]) of
+                      [Old] ->
+                          ?Graph:rmlink(Cl, scope, Old),
+                          ?Graph:mklink(Cl, scope, New),
+                          true;
+                      [] ->
+                          ?Graph:mklink(Cl, scope, New),
+                          true;
+                      _ ->
+                          false
+                  end,
+              if
+                  Cont ->
+                      [adjust_scope(?Graph:path(E, [clause]), Old, New) ||
+                          E <- ?Graph:path(Cl, [visib])];
+                  not Cont -> ok
+              end
+      end,
+      Clauses).

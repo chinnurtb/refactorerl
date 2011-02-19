@@ -22,7 +22,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(referl_wrangler).
--vsn("$Rev: 1990 $").
+-vsn("$Rev: 2146 $").
 
 -export([rename_function/5]).
 
@@ -66,6 +66,7 @@ rename_function(FileName, {Line, Col}, NewFunName, Dirs, Output) ->
     {W, C} = cl_out:open(Output),
     RenamerFun = 
         fun() -> 
+                application:start(wrangler_app),
                 refac_rename_fun:rename_fun(
                     FileName, Line, Col, atom_to_list(NewFunName), Dirs)
         end,

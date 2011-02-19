@@ -38,7 +38,8 @@
 %%% begins with a {@link remove/3} or {@link insert/3} call, and it must be
 %%% explicitly closed with a {@link close/0} call. When a batch is active,
 %%% no read operations are permitted, because graph consistency is only
-%%% guaranteed after closing the batch.
+%%% guaranteed after closing the batch. An exception from this is {@link
+%%% data/1}, which can be called during a batch.
 %%%
 %%% Nodes can be created at any time regardless of the batch state. The
 %%% module provides garbage collection for nodes: every node that is created
@@ -116,13 +117,13 @@
 
 
 -module(referl_esg).
--vsn("$Rev: 1740 $").
+-vsn("$Rev: 2550 $").
 -behaviour(gen_fsm).
 
 %% Client exports
 -export([create/1, insert/3, remove/3, update/2, close/0,
          root/0, data/1, links/1, path/2, index/3]).
--export([parent/1, children/1, copy/1]).
+-export([copy/1]).
 
 %% Enviromental exports
 -export([start_link/0, behaviour_info/1]).
@@ -198,40 +199,40 @@ close() ->
 %% @doc Returns the root node.
 %% @see referl_graph:root/0
 root() ->
-    ?GRAPH:root().
+    ?Graph:root().
 
 %% @doc Returns the attributes of a node.
 %% @see referl_graph:data/1
 data(Node) ->
-    query_op(fun() -> ?GRAPH:data(Node) end).
+    gen_fsm:sync_send_all_state_event(?ESG_SERVER, {data, Node}, ?TIMEOUT).
 
 %% @doc Returns the links starting from a node.
 %% @see referl_graph:links/1
 links(From) ->
-    query_op(fun() -> ?GRAPH:links(From) end).
+    query_op(fun() -> ?Graph:links(From) end).
 
 %% @doc Evaluates a path expression.
 %% @see referl_graph:path/2
 path(From, Path) ->
-    query_op(fun() -> ?GRAPH:path(From, Path) end).
+    query_op(fun() -> ?Graph:path(From, Path) end).
 
 %% @doc Returns the index of a link.
 %% @see referl_graph:index/3
 index(From, Tag, To) ->
-    query_op(fun() -> ?GRAPH:index(From, Tag, To) end).
+    query_op(fun() -> ?Graph:index(From, Tag, To) end).
 
-%% @spec parent(node()) -> [{atom(), node()}]
-%% @doc Returns the parents of a node in the syntax tree. Note that there may
+%% spec parent(node()) -> [{atom(), node()}]
+%% doc Returns the parents of a node in the syntax tree. Note that there may
 %% be more than one parents for a node.
-parent(Node) ->
-    gen_fsm:sync_send_all_state_event(?ESG_SERVER, {parent,Node}, ?TIMEOUT).
+%%parent(Node) ->
+%%    gen_fsm:sync_send_all_state_event(?ESG_SERVER, {parent, Node}, ?TIMEOUT).
 
-%% @spec children(node()) -> [{atom(),node()}]
-%% @doc Returns the children of a node in the syntax tree. The returned list
+%% spec children(node()) -> [{atom(),node()}]
+%% doc Returns the children of a node in the syntax tree. The returned list
 %% contains link tags grouped together, and nodes in the same order as they
 %% appear in the graph.
-children(Node) ->
-    gen_fsm:sync_send_all_state_event(?ESG_SERVER, {children, Node}, ?TIMEOUT).
+%%children(Node) ->
+%%    gen_fsm:sync_send_all_state_event(?ESG_SERVER, {children, Node}, ?TIMEOUT).
 
 
 modif_event(Event) ->
@@ -278,7 +279,7 @@ init([]) ->
                 ],
     Schema = lists:foldl(fun add_schema/2, ?SYNTAX_SCHEMA,
                          ?LEXICAL_SCHEMA ++ SchemaParts ++ EnvSchema),
-    ?GRAPH:schema(Schema),
+    ?Graph:schema(Schema),
     case mnesia:create_table(tree_link,
                              [{attributes, record_info(fields, tree_link)},
                               {disc_copies, [node()]},
@@ -293,12 +294,12 @@ init([]) ->
             ok =
                 mnesia:dirty_write(#tree_link{parent=root,
                                               tag=root,
-                                              child=?GRAPH:root()}),
-            ?GRAPH:mklink(?GRAPH:root(), env,
-                          ?GRAPH:create(#env{name=appbase,
+                                              child=?Graph:root()}),
+            ?Graph:mklink(?Graph:root(), env,
+                          ?Graph:create(#env{name=appbase,
                                              value=code:lib_dir()})),
-            ?GRAPH:mklink(?GRAPH:root(), env,
-                          ?GRAPH:create(#env{name=output,
+            ?Graph:mklink(?Graph:root(), env,
+                          ?Graph:create(#env{name=output,
                                              value=original}));
         {aborted, {already_exists, _}} ->
             ok = mnesia:wait_for_tables([tree_link], infinity)
@@ -318,7 +319,7 @@ add_schema({Class, Links}, Schema) ->
 no_batch(close, _From, State) ->
     {reply, ok, no_batch, State};
 no_batch({update, {N, D}}, _From, State) ->
-    ?GRAPH:update(N, D),
+    ?Graph:update(N, D),
     {reply, ok, no_batch, State};
 no_batch({copy, Node}, _From, State) ->
     {Reply, S1} = handle_copy(Node, State),
@@ -347,19 +348,21 @@ handle_close(#state{mods=Mods, ins=Ins, upd=Upd, rm=Rm, cre=Cre}) ->
     %% Remove
     Removed = lists:flatmap(fun do_remove/1, Rm),
     run_callbacks(lists:reverse(Mods), remove, lists:reverse(Removed)),
-    lists:foreach(fun({P, T, C}) -> ?GRAPH:rmlink(P, T, C) end, Rm),
+    lists:foreach(fun({P, T, C}) -> ?Graph:rmlink(P, T, C) end, Rm),
 
     %% Update
-    lists:foreach(fun do_update/1, Upd),
+    lists:foreach(fun do_update/1, lists:reverse(Upd)),
 
     %% Insert
     RevIns = lists:reverse(Ins),
-    lists:foreach(fun({P, T, C}) -> ?GRAPH:mklink(P, T, C) end, RevIns),
+    lists:foreach(fun({P, T, C}) -> ?Graph:mklink(P, T, C) end, RevIns),
     Inserted = lists:flatmap(fun do_insert/1, RevIns),
-    run_callbacks(Mods, insert, Inserted),
 
     %% Collect garbage
     remove_garbage(Cre),
+
+    %% Run insertion analysers
+    run_callbacks(Mods, insert, Inserted),
 
     {ok, #state{mods=Mods}}.
 
@@ -389,7 +392,7 @@ do_remove({Parent, Tag, Child}) ->
     end.
 
 do_update({Node, Data}) ->
-    ?GRAPH:update(Node, Data).
+    ?Graph:update(Node, Data).
 
 do_insert({Parent, TagSpec, Child}) ->
     Tag = bare_tag(TagSpec),
@@ -440,7 +443,7 @@ referred(Node) ->
 
 
 remove_garbage(Created) ->
-    lists:foreach(fun ?GRAPH:delete/1, Created),
+    lists:foreach(fun ?Graph:delete/1, Created),
     remove_garbage().
 
 remove_garbage() ->
@@ -452,7 +455,7 @@ remove_garbage() ->
               fun
                   (#tree_temp{child=C}) ->
                       case referred(C) of
-                          false -> ?GRAPH:delete(C);
+                          false -> ?Graph:delete(C);
                           true  -> ok
                       end
               end,
@@ -471,7 +474,7 @@ run_callback(Mod, Fun, Nodes) ->
 
 run_one_callback(Mod, Fun, {Parent, Tag, Child}) ->
     try
-        Mod:Fun(Parent, ?GRAPH:data(Parent), Tag, Child, ?GRAPH:data(Child))
+        Mod:Fun(Parent, ?Graph:data(Parent), Tag, Child, ?Graph:data(Child))
     catch
         error:Reason ->
             error_logger:error_msg("Analyser error in module ~s:~n"
@@ -493,7 +496,7 @@ handle_copy(Root, #state{rm=Rm, ins=Ins} = St) ->
         ets:foldl(fun check_parents/2, {Tree, Root}, Tree),
         Mapping = ets:foldl(
                     fun({Node, Chld}, Lst) ->
-                            N = ?GRAPH:create(?GRAPH:data(Node)),
+                            N = ?Graph:create(?Graph:data(Node)),
                             ets:insert(Tree, {Node, Chld, N}),
                             [{Node, N} | Lst]
                     end,
@@ -551,13 +554,20 @@ check_parents({Node, _}, Arg={Tree,_}) ->
 handle_sync_event(batch, _From, SN, State) ->
     {reply, SN =:= batch, SN, State};
 handle_sync_event({create, Data}, _From, SN, #state{cre=Cre} = St) ->
-    Node = ?GRAPH:create(Data),
+    Node = ?Graph:create(Data),
     {reply, Node, SN, St#state{cre = [Node | Cre]}};
+handle_sync_event({data, Node}, _From, SN, State) ->
+    {reply, handle_data(Node, State), SN, State};
 handle_sync_event({parent, Node}, _From, SN, State) ->
     {reply, handle_parent(Node), SN, State};
 handle_sync_event({children, Node}, _From, SN, State) ->
     {reply, handle_children(Node), SN, State}.
 
+handle_data(Node, #state{upd=Upd}) ->
+    case lists:keysearch(Node, 1, Upd) of
+        {value, {_, Data}} -> Data;
+        false -> ?Graph:data(Node)
+    end.
 
 handle_parent(Node) ->
     Links = mnesia:dirty_index_read(tree_link, Node, #tree_link.child),
@@ -572,8 +582,8 @@ handle_children(Parent) ->
 link_order(Parent) ->
     fun
         ({Tag, Node1}, {Tag, Node2}) ->
-            ?GRAPH:index(Parent, Tag, Node1) <
-                ?GRAPH:index(Parent, Tag, Node2);
+            ?Graph:index(Parent, Tag, Node1) <
+                ?Graph:index(Parent, Tag, Node2);
         ({Tag1, _}, {Tag2, _}) ->
             Tag1 < Tag2
     end.

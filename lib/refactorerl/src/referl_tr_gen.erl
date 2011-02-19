@@ -28,638 +28,524 @@
 %%% and the actual parameter at all call site becomes the selected part
 %%% with the corresponing compensation.
 %%%
+%%%
+%%% Conditions of applicability
+%%% <ul>
+%%%   <li>The name of the function with its arity increased by one should not
+%%%   conflict with another function, either defined in the same module,
+%%%   imported from another module, or being an auto-imported built-in function.
+%%%   </li>
+%%%   <li> The new variable name does not exist in the scope of the selected
+%%%   expression(s) and must be a legal variable name .</li>
+%%%   <li> The starting and ending positions should delimit an expression
+%%%   or a sequence of expressions.</li>
+%%%   <li> The selected expressions do not bind variables that are used outside
+%%%   the selection.</li>
+%%%   <li> Variable names bound by the expressions do not exist in the scopes of
+%%%   the generalized function calls.</li>
+%%%   <li> The expressions to generalize are not patterns and
+%%%   they do not call their containing function.</li>
+%%%   <li> If the selection is part of a list comprehension, it must be a single
+%%%   expression and must not be the generator of the comprehension.</li>
+%%%   <li> The extracted sequence of expressions are not part of a macro
+%%%   definition, and are not part of macro application parameters.</li>
+%%% </ul>
+%%%
+%%% Rules of the transformation
+%%% <ol>
+%%%   <li>If the selected expression does not contain any variables:
+%%%     <ul>
+%%%       <li> Give an extra argument (a simple variable) to the function.
+%%%       The name of this argument is the name given as a parameter
+%%%       of the transformation. </li>
+%%%       <li> Replace the expression with a variable expression.</li>
+%%%       <li> Add the selected expression to the argument list of
+%%%      every call of the function.</li>
+%%%     </ul>
+%%%   </li>
+%%%   <li> If the selected expression contains variable(s) or contains more
+%%%   than one expression or has a side-effect:
+%%%     <ul>
+%%%       <li> Add a new argument (a simple variable) to the function
+%%%       definition with the given variable name.</li>
+%%%       <li> Replace the expression with an application. The name of the
+%%%       application is the given variable name, the arguments of the
+%%%       application are the contained variables.</li>
+%%%       <li> Add a fun expression to the argument list of every call of the
+%%%       function. The parameters of the fun expression are the contained
+%%%       variables and the body is the selected expression.</li>
+%%%     </ul>
+%%%   </li>
+%%%   <li> If the selected expression is part of a guard expression:
+%%%     <ul>
+%%%       <li> Give an extra argument (a simple variable) to the function.
+%%%       The name of this argument is the name given as a parameter
+%%%       of the transformation.</li>
+%%%       <li> Replace the guard expression with a variable expression
+%%%       with that new name. </li>
+%%%       <li> Add the selected expression to the argument list of the
+%%%       function calls.</li>
+%%%       <li> If the selected expression contains a formal parameter, replace
+%%%       this with the actual parameter.</li>
+%%%       <li> If the selected guard is a conjunction or a disjunction,
+%%%       create an andalso or an orelse expression and add this to the
+%%%       argument list of the function call. </li>
+%%%     </ul>
+%%%   </li>
+%%%   <li> If the generalized function is recursive, than  instead of add
+%%%   the selection to the argument list of the function calls in the body,
+%%%   add the new parameter to the argument list.</li>
+%%%   <li> If the generalized function is exported from the module,
+%%%   add a new function definition to the current module with the same
+%%%   parameters and guard. The body of this function is a call of
+%%%   the generalized function.</li>
+%%%   <li> If the selection contains macro application/record expression
+%%%   move the definition of the macro/record before the first
+%%%   call of function.</li>
+%%% </ol>
+%%%
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_tr_gen).
--vsn("$Rev: 1941 $").
+-vsn("$Rev: 2663 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/4]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst, {filename, varname, frompos, topos,
-                file, module, module_name, fromtoken, totoken,
-                fromexpr, toexpr, topexpr, ref_case,
-                expressions, fun_clause, function,
-                function_obj, function_name, arity,
-                used_vars, all_vars, patterns, ref_type,
-                side_effect, guard, macro, record, fun_calls,
-                rec_fun_calls, rec_fun_cl, exported, bound_vars,
-                used_var_names}).
+-export([prepare/1, error_text/2]).
 
 %%% ============================================================================
 %%% Errors
 
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), string(), integer(), integer()) -> ok
-%%
-%% @doc Generalize a function definition by selecting the expression(s) between
-%% the positions `Begin' and `End' in the source `File'.
-%% The new pattern name is `VarName'.
-do(File, VarName, Begin, End) ->
-    ?TRANSFORM:do(?MODULE, {File, VarName, Begin, End}).
-
+%% @private
+%% @todo Print (a relevant portion of) the code with the side effect as well.
+error_text(side_eff, []) ->
+    "Generalizing would duplicate code with side effects";
+error_text(guard_var, []) ->
+    "It is impossible to macth against the formal and actual parameters" ++
+    " (compound data structures)".
 %%% ============================================================================
 %%% Callbacks
 
-%% @private
-init({FileName, VarName, FromPos, ToPos}) ->
-    #refst{ filename = FileName,
-            varname  = VarName,
-            frompos  = FromPos,
-            topos    = ToPos }.
-
-%% @private
-steps() ->
-    [
-        fun file_node/1,
-        fun module_node/1,
-        fun from_token/1,
-        fun to_token/1,
-        fun from_expr/1,
-        fun to_expr/1,
-        fun top_expr/1,
-        fun check_is_pattern/1,
-        fun check_is_var_name/1,
-        fun refac_case/1,
-        fun find_funclause/1,
-        fun find_function/1,
-        fun selected_exprs/1,
-        fun check_whole_expr_is_selected/1,
-        fun check_listgen/1,
-        fun function_data/1,
-        fun check_recursive_calls/1,
-        fun check_fun_name/1,
-        fun get_variable_data/1,
-        fun check_new_var_name/1,
-        fun refac_type/1,
-        fun check_local_vars/1,
-        fun side_effect/1,
-        fun guard_expression/1,
-        fun get_fun_calls/1,
-        fun check_bound_var_name/1,
-        fun is_exported/1
-    ].
-
-%% @private
-transform(#refst{file = File, ref_case = RCase, varname = VName,
-                 expressions = Exprs, fun_calls = FunCalls, function = Fun,
-                 ref_type = RType, side_effect = SideEffect,
-                 used_var_names = UVars, exported = Export,
-                 rec_fun_calls = RecCalls, arity = Arity,
-                 function_obj = FunObj, fun_clause = FunCl,
-                 rec_fun_cl = RecFunCl})->
-    Data = ?ESG:data(FunObj),
-    FunCallData  = [get_app_data(App, Exprs)|| App <- FunCalls],
-    RecCallData  = [get_app_data(App, Exprs)|| App <- RecCalls],
-    [{_,Parent}] = ?ESG:parent(hd(Exprs)),
-%%TODO: Guard esetet kulon lekezelni
-    Type =
-        case {RType, SideEffect, length(Exprs)>1} of
-            {_ , _, true}         -> funexpr;
-            {_, true,_}           -> funexpr;
-            {without_vars,_,_}    -> variable;
-            {with_params, _,_}    -> funexpr;
-            {with_local_vars,_,_} -> funexpr
-        end,
-    case {RCase, Type} of
-        {subexpr, variable} ->
-            replace_subexpression(Parent,VName,hd(Exprs), var, []),
-            insert_app_arg(FunCallData, var, UVars),
-            insert_rec_app_arg(RecCallData, VName),
-            insert_old_fun(File, Fun, Exprs, var, UVars, Export);
-        {subexpr, funexpr}  ->
-            replace_subexpression(Parent,VName,hd(Exprs),funexp,UVars),
-            insert_app_arg(FunCallData, funexp, UVars),
-            insert_rec_app_arg(RecCallData, VName),
-            insert_old_fun(File, Fun, Exprs, funexp, UVars, Export);
-        {_     , variable}  ->
-            replace_expressions(Parent, VName, Exprs, var, []),
-            insert_app_arg(FunCallData, var, UVars),
-            insert_rec_app_arg(RecCallData, VName),
-            insert_old_fun(File, Fun, Exprs, var, UVars, Export);
-        {_, _}              ->
-            replace_expressions(Parent, VName, Exprs, funexp, UVars),
-            insert_app_arg(FunCallData, funexp, UVars),
-            insert_rec_app_arg(RecCallData, VName),
-            insert_old_fun(File, Fun, Exprs, funexp, UVars, Export)
-    end,
-    insert_fun_pattern(Fun, VName, FunCl, RecFunCl),
-    ?ESG:update(FunObj, Data#func{arity = Arity + 1}),
-    ?ESG:close(),
-    {[File], ok}.
-
-get_app_data(AppNode, Exprs)->
-    Args = tl(?ESG:path(AppNode, [sub])),
-    {Args, Exprs, AppNode}.
-
-%%% ============================================================================
-%%% Implementation
-
-file_node(St = #refst{filename = FileName}) ->
-    case ?SYNTAX:file(FileName) of
-        {file, File} -> 
-            St#refst{file = File};
-        not_found -> 
-            throw({"The file does not exist in the database!", FileName})
-    end.
-
-
-module_node(St = #refst{file = File}) ->
-    case ?ESG:path(File, [moddef]) of
-        [ModuleNode] -> 
-            St#refst{module = ModuleNode, 
-                     module_name =(?ESG:data(ModuleNode))#module.name};
-        _ -> 
-            throw("The module node does not exist in the graph!")
-    end.
-
-
-from_token(St = #refst{file = File, frompos = FromPos}) ->
-    case  ?LEX:token_by_pos(File, FromPos) of
-        {ok, FromToken} -> 
-            St#refst{fromtoken = FromToken};
-        _ -> 
-            throw("There is not any lexical element in the selected position!")
-    end.
-
-
-to_token(St = #refst{file = File, topos = ToPos}) ->
-    case  ?LEX:token_by_pos(File, ToPos) of
-        {ok, ToToken} -> 
-            St#refst{totoken = ToToken};
-        _ -> 
-            throw("There is not any lexical element in the selected position!")
-    end.
-
-
-from_expr(St = #refst{fromtoken = FromToken}) ->
-    [{_,FromExpr}] = ?ESG:parent(FromToken),
-    case ?ESG:data(FromExpr) of
-        #expr{} -> St#refst{fromexpr = FromExpr};
-        _       ->  throw("The selected part is not a legal sequence!")
-    end.
-
-
-to_expr(St = #refst{totoken = ToToken}) ->
-    [{_,ToExpr}] = ?ESG:parent(ToToken),
-    case ?ESG:data(ToExpr) of
-        #expr{} -> St#refst{toexpr = ToExpr};
-        _ -> throw("The selected part is not a legal sequence!!")
-    end.
-
-top_expr(St = #refst{fromexpr = FromExpr, toexpr = ToExpr}) ->
-    case ?SYNTAX:top_node(FromExpr, ToExpr) of
-        {expr, TopExpr, _, _}   -> St#refst{topexpr = TopExpr};
-        {clause, TopExpr, _, _} -> St#refst{topexpr = TopExpr};
-        _  -> throw("The selected part is not a legal sequence!")
-    end.
-
-
-refac_case(St = #refst{topexpr = TopExpr}) ->
-    case {?ESG:data(TopExpr), ?ESG:data(element(2,hd(?ESG:parent(TopExpr))))} of
-        {#expr{}, #expr{}}   -> St#refst{ref_case = subexpr};
-        {#expr{}, #clause{}} -> St#refst{ref_case = expr};
-        {#clause{}, _}       -> St#refst{ref_case = body};
-        {_, _} -> throw("The selected part is not a legal sequence!")
-    end.
-
-
-selected_exprs(St = #refst{ref_case = body, fromexpr = FromExpr,
-                           toexpr = ToExpr, fun_clause = ClauseNode}) ->
-    BodyExprs = ?ESG:path(ClauseNode,[body]),
-    case BodyExprs of
-        [] -> throw("The selected part is not a legal sequence!");
-        _  -> ok
-    end,
-    [From]    = ?ESG:path(FromExpr, [sup]),
-    [To]      = ?ESG:path(ToExpr, [sup]),
-    Exprs     = ?MISC:separate_interval(BodyExprs, From, To),
-    case Exprs of
-        [] -> throw("The selected part is not a legal sequence!");
-        _  -> St#refst{expressions = Exprs}
-    end;
-
-selected_exprs(St = #refst{topexpr = TopExpr}) ->
-    St#refst{expressions = [TopExpr]}.
-
-
-find_funclause(St = #refst{fromexpr = FromExpr})->
-    [FunCl] = ?ESG:path(FromExpr, [sup, {visib, back}, scope, functx]),
-    St#refst{fun_clause = FunCl}.
-
-
-find_function(St = #refst{fun_clause = Clause})->
-    [Function] = ?ESG:path(Clause, [{funcl, back}]),
-    St#refst{function = Function}.
-
-
-function_data(St = #refst{function = Function})->
-    [FunObject] = ?ESG:path(Function, [fundef]),
-    #func{name = Name, arity = Arity} = ?ESG:data(FunObject),
-    St#refst{function_obj = FunObject, function_name = Name, arity = Arity}.
-
-
-get_variable_data(St = #refst{expressions = Exprs, fun_clause = Clause,
-                              function = Function})->
-    AllClauses  = ?ESG:path(Function, [funcl]),
-    UsedVars    = ?SEMINF:vars(sub, Exprs),
-    AllVars     = ?SEMINF:vars(clause, AllClauses),
-    Patterns    = ?ESG:path(Clause, [pattern]),
-    PatternVars = ?SEMINF:vars(sub, Patterns),
-    St#refst{used_vars = UsedVars, all_vars = AllVars, patterns = PatternVars}.
-
-
-refac_type(St = #refst{used_vars = UsedVars, patterns = Patterns})->
-    UsedVarObjs      = lists:usort(?SEMINF:varrefs(UsedVars) ++ 
-                                   ?SEMINF:varbinds(UsedVars)),
-    PatternObj       = lists:usort(?SEMINF:varbinds(Patterns)),
-    UsedBindings     = ?SEMINF:varbinds_back(UsedVarObjs),
-    InsideBoundVars  = ?MISC:intersect(UsedBindings, UsedVars),
-    case {UsedVars, UsedVarObjs -- PatternObj, InsideBoundVars} of
-        {[],  _,  _} -> St#refst{ref_type = without_vars};
-        { _, [],  _} -> St#refst{ref_type = with_params};
-        { _,  _, []} -> St#refst{ref_type = with_local_vars};
-        { _,  _,  _} -> St#refst{ref_type = with_bound_vars} 
-    end.
-
-
-side_effect(St = #refst{expressions = Exprs})->
-    Children  = get_all_children(Exprs),
-    SideEffs  = [Node || Node <- Children,
-                         ((?ESG:data(Node) == #expr{kind = send_expr}) or
-                          (?ESG:data(Node) == #expr{kind = receive_expr}))],
-    Apps      = [Node || Node <- Children,
-                         ?ESG:data(Node) == #expr{kind = application}],
-    DirtyFunc = lists:flatten([?ESG:path(App, [{funref, {dirty, '==', true}}])
-                               || App <- Apps]),
-    UnKnown   = lists:flatten([?ESG:path(App, [{funref,{dirty,'==',unknown}}])
-                               || App <- Apps]),
-    case {length(SideEffs) /= 0, length(UnKnown) /=0, length(DirtyFunc) /= 0} of
-        {true, _, _} -> St#refst{side_effect = true};
-        {_, true, _} -> St#refst{side_effect = true};
-%% egyenlore ha nem tudjuk eldonteni, hogy van-e mellekhatasa, akkor ugy
-%% tekintunk ra mintha lenne, kesobb esetleg meg lehet kerdezni a felhasznalaot
-%% hogy szerinte van-e
-        {_, _, true} -> St#refst{side_effect = true};
-        {_, _,    _} -> St#refst{side_effect = false}
-    end.
-
-get_all_children([])->
-    [];
-get_all_children(Exprs)->
-    Children = [Node || {_, Node} <-
-               lists:flatten([?SYNTAX:children(Expr) || Expr <- Exprs])],
-    Exprs ++ get_all_children(Children).
-
-
-
-guard_expression( St = #refst{expressions = Exprs})->
-    #expr{type = Type1} = ?ESG:data(hd(Exprs)),
-    #expr{type = Type2} = ?ESG:data(lists:last(Exprs)),
-    case {Type1, Type2} of
-        {guard, guard} -> 
-            %%St#refst{guard = true},
-            throw("Sorry, it does not work yet!");
-        {guard, _} -> throw("The selected part is not a legal sequence!");
-        {_, guard} -> throw("The selected part is not a legal sequence!");
-        _          -> St#refst{guard = false}
-    end.
-
-
-get_fun_calls(St = #refst{function_obj = FunctionObj, file = File,
-                          function = Function})->
-    FunCalls    = ?ESG:path(FunctionObj,[{{funref, back},
-                                      {kind, '==', application}}]),
-    RecCalls    = [FunCall ||FunCall <- FunCalls, [Function] == ?ESG:path(
-                    FunCall, [sup,{visib,back},scope,functx,{funcl,back}])],
-    ModFunCalls = [FunCall || FunCall <- (FunCalls -- RecCalls), 
-                              File == get_file_from_expr(FunCall)],
-    RecCls      = [hd(?ESG:path(Call, [sup,{visib,back},scope,functx])) || 
-                   Call <- RecCalls],
-    St#refst{fun_calls = ModFunCalls, rec_fun_calls = RecCalls, 
-             rec_fun_cl = RecCls}.
-
-get_file_from_expr(Expr)->
-    [File] = ?ESG:path(Expr, [sup, {visib, back}, scope, functx,
-                              {funcl, back}, {form, back}]),
-    File.
-
-
-is_exported(St = #refst{function_obj = FunObj})->
-    Exported = ?ESG:path(FunObj, [{funexp, back}]),
-    case Exported of
-        [] -> St#refst{exported = false};
-        _  -> St#refst{exported = true}
-    end.
-
-%%% ----------------------------------------------------------------------------
-%%% Checks
-
-
-check_bound_var_name(_St = #refst{bound_vars = Vars, fun_calls = FunCalls,
-                                  ref_type = with_bound_vars})->
-    Names  = [(?ESG:data(Var))#expr.value || Var <- Vars],
-    lists:map(
-        fun(App)->
-%% TODO: Ezt meg finomitani...
-            [FunCl] = ?ESG:path(App, [sup, {visib, back}, scope, functx]),
-            VisibVars = ?ESG:path(FunCl, [varvis]),
-            VisibNames = [(?ESG:data(Var))#variable.name || Var <- VisibVars],
-            Clashes = ?MISC:intersect(Names, VisibNames),
-            case length(Clashes)<2 of
-                true ->
-                    ErrMsg = "The new variable " ++  var_io(Clashes) 
-                    ++ " is already exist in the scope of a function call!";
-                false ->
-                    ErrMsg = "The new variables " ++  var_io(Clashes) 
-                    ++ " are already exist in the scope of a function call!"
+%%% @private
+prepare(Args) ->
+    Exprs   = ?Args:expr_range(Args),
+    {Link, Parent} = check_expr_link(Exprs),
+    VarName = ?Args:varname(Args),
+    Module = ?Args:module(Args),
+    lists:foreach(fun check_expr/1, Exprs),
+    Form = ?Query:exec1(hd(Exprs), ?Query:seq(?Expr:clause(), ?Clause:form()),
+                        ?RefErr0r(parent_not_form)),
+    check_new_var_name(Form, VarName),
+    Fun = ?Query:exec1(Form, ?Form:func(), ?RefErr0r(parent_not_form)),
+    FunName = ?Fun:name(Fun),
+    Arity = ?Fun:arity(Fun),
+    check_recursive_calls(Exprs, Fun),
+    check_fun(Module, FunName, Arity + 1),
+    [File] = ?Query:exec(Form, ?Form:file()),
+    SideE = lists:member(true, [?Expr:side_effect(Expr) || Expr <- Exprs]),
+    GuardE = ?Expr:type(hd(Exprs)) == guard,
+    {TApps, TImps, RecApps, RecImps, RecCls} = get_fun_calls(Exprs, Fun, File),
+    check_se_when_guard(TApps ++ RecApps, GuardE),
+    {Bound, NotBound} = vars(Exprs),
+    check_var(Bound,Exprs),
+    check_bound_var_name(TApps, Bound),
+    AppForms = ?Query:exec(TApps, ?Query:seq([?Expr:clause(),
+                                              ?Clause:funcl(),
+                                              ?Clause:form()])),
+    Index  = ?Syn:index(File, form, Form),
+    {Moves, AppInd} = check_record_macro(AppForms, Index, Exprs),
+    UsedVarNames = lists:usort([?Var:name(Var) || Var <- NotBound]),
+    Export = ?Fun:exported(Fun) orelse (TImps /= []) orelse (RecImps /= []),
+%% TODO: Should we trasform the implicit funs???
+    FunCl  = ?Query:exec(hd(Exprs),
+                         ?Query:seq(?Expr:clause(), ?Clause:funcl())),
+    Pairs = get_pairs_for_guard_tr(Exprs, FunCl, TApps, GuardE),
+    FunCls = ?Query:exec(Form, ?Form:clauses()),
+    ClData = [{?Query:exec(Cl, ?Clause:name()),
+               ?Query:exec(Cl, ?Clause:patterns()),
+               ?Query:exec(Cl, ?Clause:guard()),
+               Cl} || Cl <- FunCls],
+    ?Transform:touch(File),
+    Comments = ?Syn:get_comments(Exprs),
+    [fun() ->
+        {Type, NewExprs} =
+            case {Bound, NotBound, SideE, length(Exprs)>1, GuardE} of
+                { _, _,    _,    _, true} -> {guard, separate_guard(hd(Exprs))};
+                { _, _,    _, true,    _} -> {funexp, Exprs};
+                { _, _, true,    _,    _} -> {funexp, Exprs};
+                {[], [],   _,    _,    _} -> {var,    Exprs};
+                { _, _,    _,    _,    _} -> {funexp, Exprs}
             end,
-            ?MISC:error_on_difference(Clashes, [], ErrMsg)
-        end, FunCalls),
-    ok;
-
-check_bound_var_name(_) -> ok.
-
-var_io([])->
-    "";
-var_io([Head])->
-    Head;
-var_io([Head|Tail]) ->
-    Head ++ ", " ++ var_io(Tail).    
-
-
-check_recursive_calls(#refst{expressions = Expressions, module_name = MName,
-                             function_name = Name, arity = Arity})->
-    Apps = ?SEMINF:apps(sub, Expressions),
-    Clashes = [error || App <- Apps, (({local, Name, Arity} == app_data(App)) 
-                        or ({MName, Name, Arity} == app_data(App)))],
-    ?MISC:error_on_difference(Clashes, [], 
-                              "The selection cointains a resursive call").
-
-app_data(App)->
-    [Name1] = ?ESG:path(App, [{sub, 1}]),
-    case ?ESG:data(Name1) of
-        #expr{value = ':'} -> 
-            Name = (?ESG:data(hd(?ESG:path(Name1, [{sub, 2}]))))#expr.value,
-            Mod  = (?ESG:data(hd(?ESG:path(Name1, [{sub, 1}]))))#expr.value;
-        _ ->
-            Name = (?ESG:data(Name1))#expr.value,
-            Mod = local
-    end,
-    Arity = length(?ESG:path(App, [sub]))-1,
-    {Mod, Name, Arity}.
-            
-    
-
-check_is_var_name(_St = #refst{varname = Name})->
-    case ?LEX:is_valid_name(variable, Name) of
-        false -> 
-            Message = ?MISC:format("The given name ~p is not a legal " ++ 
-                      "variable name!", [Name]),
-            throw(Message);
-        true  -> ok
-    end.
-
-
-check_whole_expr_is_selected(#refst{fromtoken=FromToken, totoken=ToToken,
-                                    expressions = Exprs}) ->
-     First = ?LEX:first_token(hd(Exprs)),
-     Last  = ?LEX:last_token(lists:last(Exprs)),
-      if
-         First/= FromToken -> 
-             throw("The selected part is not a legal sequence!");
-         Last /= ToToken -> 
-             throw("The selected part is not a legal sequence!");
-         true -> 
-             ok
-      end.
-
-
-check_listgen(#refst{topexpr = TopExpr})->
-    case ?ESG:data(TopExpr) of
-        #expr{kind = list_gen} ->
-            throw("The selected expression  is a list generator!");
-        _                      -> ok
-    end,
-    [{_,Parent}] = ?ESG:parent(TopExpr),
-    case ?ESG:data(Parent) of
-        #expr{kind = list_gen} ->
-            Sub1 = ?ESG:path(Parent, [{sub,1}]),
-            case Sub1 == [TopExpr] of
-                true ->throw("The selected expression is in a list generator!");
-                _    ->ok
-            end;
-        _ -> ok
-    end.
-
-
-check_is_pattern(St = #refst{fromexpr = FromExpr, toexpr = ToExpr})->
-    case {?ESG:data(FromExpr), ?ESG:data(ToExpr)} of
-        {#expr{type = pattern}, #expr{type = pattern}} -> 
-            throw("The selected expression is a pattern!");
-        {#expr{}, #expr{}} -> 
-            St;
-        _ ->
-           throw("The selected part is not a legal sequence!")
-    end.
-
-
-check_fun_name(St)->
-    check_fun_autoimported(St),
-    check_fun_used(St).
- 
-
-check_fun_used(#refst{module=Module, function_name=Name, arity=Arity,
-                      function_obj = FunObject})->
-    FuncObjects = (?ESG:path(Module, [func]) ++
-                   ?ESG:path(Module, [funimp])) -- [FunObject],
-    FunRec      = [?ESG:data(Obj)|| Obj <- FuncObjects],
-    Clashes     = [clash || #func{name=FName,arity=FArity} <- FunRec,
-                            Name  == FName, Arity+1 == FArity],
-    ErrMsg = ?MISC:format("The given function ~p/~p is already in use.",
-                            [Name, Arity+1]),
-    ?MISC:error_on_difference(Clashes, [], ErrMsg).
-
-
-check_fun_autoimported(#refst{function_name=Name, arity=Arity}) ->
-    Clashes = [erl_internal:bif(Name, Arity+1)],
-    ErrMsg = ?MISC:format(
-                "The given function ~p/~p is autoimported", [Name, Arity+1]),
-    ?MISC:error_on_difference(Clashes, [false], ErrMsg).
-
-
-check_new_var_name(_St = #refst{all_vars = Variables, varname = NewName})->
-    VarNames  = ?SEMINF:var_names(Variables),
-    Clashes   = [clash || VarName <- VarNames, NewName  == VarName],
-    ErrMsg = ?MISC:format("The given variable ~p already exists.", [NewName]),
-    ?MISC:error_on_difference(Clashes, [], ErrMsg).
-
-
-check_local_vars(St = #refst{ref_type = with_bound_vars, used_vars = VarNodes, 
-                             fun_clause = FunCl})->
-    VarObjs     = ?SEMINF:varrefs(VarNodes) ++ ?SEMINF:varbinds(VarNodes),
-    BoundVars   = ?SEMINF:inside_bound_vars(VarNodes, VarObjs),
-    AllVarNodes = ?SEMINF:vars(clause, [FunCl]),
-    AllVarObjs  = ?SEMINF:varrefs(AllVarNodes)++ ?SEMINF:varbinds(AllVarNodes),
-    OutVarObjs  = AllVarObjs -- VarObjs,
-    OutVarNodes = ?SEMINF:varbinds_back(OutVarObjs),
-    BadList     = ?MISC:intersect(OutVarNodes, BoundVars),
-    ErrNames    = [(?ESG:data(Bad))#expr.value|| Bad <- BadList],
-    ErrMsg      = 
-        "The following variables are bound inside the selection, " ++
-        "but are used outside: " ++ var_io(ErrNames),
-    ?MISC:error_on_difference(BadList, [], ErrMsg),
-    VarNames    = lists:usort([(?ESG:data(Var))#expr.value|| Var <- VarNodes]),
-    BoundNames  = lists:usort([(?ESG:data(Var))#expr.value|| Var <-BoundVars]),
-    Names       = lists:usort(VarNames -- BoundNames),
-    St#refst{used_var_names = Names, bound_vars = BoundVars};
-
-check_local_vars(St = #refst{used_vars = VarNodes}) ->
-    VarNames    = [(?ESG:data(Var))#expr.value|| Var <- VarNodes],
-    St#refst{used_var_names = lists:usort(VarNames)}.
+        FunAppData  = [get_app_data(App, NewExprs)|| App <- TApps],
+        RecAppData  = [get_app_data(App, NewExprs)|| App <- RecApps],
+        R = replace_expressions(Parent,VarName,Exprs, Type, UsedVarNames, Link),
+        NewApps = insert_app_arg(FunAppData, Type, UsedVarNames),
+        insert_rec_app_arg(RecAppData, VarName),
+        insert_old_fun(File, ClData, NewExprs,Type,UsedVarNames, Index, Export),
+        insert_fun_pattern(VarName, FunCl, RecCls, ClData),
+        move_macros_records(Moves, AppInd),
+        {R, NewApps}
+     end,
+     fun(Tuple) ->
+        Transform = prepare_guard(Pairs),
+        transform_guard(Transform),
+        Tuple
+     end,
+     fun({R, NewApps}) ->
+        case length(Exprs) of
+            1 -> ?Syn:put_comments([R], Comments);
+            _ -> [?Syn:put_comments(NewExprs, Comments) || 
+                  NewExprs <- NewApps]
+        end
+     end].
 
 
 %%% ===========================================================================
-%%% Transformations from referl_create
+%%% Checks
+
+check_expr_link(Exprs)->
+    case ?Syn:parent(hd(Exprs)) of
+        [{body, Par}] ->
+            ?Check(length(Exprs)=:=1 orelse ?Expr:kind(hd(Exprs)) =/= 'filter',
+                   ?RefError(bad_kind, filter)),
+            {body, Par};
+        [{sub, Par}]  ->
+            ?Check(length(Exprs) =:= 1, ?RefErr0r(bad_range)),
+            {sub, Par};
+        [{pattern, _Par}] -> throw(?RefError(bad_kind, pattern));
+        [{guard, Par}] -> {guard, Par};
+        _ ->  throw(?RefErr0r(bad_kind))
+    end.
+
+
+check_expr(Expr) ->
+    Type = ?Expr:type(Expr),
+    Kind = ?Expr:kind(Expr),
+    ?Check(Type =:= expr orelse Type =:= guard,
+           ?RefError(bad_kind, Type)),
+    ?Check(Kind =/= compr andalso
+           Kind =/= list_gen,
+           ?RefError(bad_kind, list_comp)),
+    ?Check(Kind =/= binary_gen andalso
+           Kind =/= binary_field andalso
+           Kind =/= prefix_bit_expr andalso
+           Kind =/= bit_size_expr andalso
+           Kind =/= size_qualifier,
+           ?RefError(bad_kind, binary)),
+    case ?Query:exec(Expr, ?Expr:parent()) of
+        []        -> ok;
+        [Parent]  ->
+            ParKind = ?Expr:kind(Parent),
+            ?Check(ParKind =/= binary_field andalso
+                   ParKind =/= prefix_bit_expr andalso
+                   ParKind =/= bit_size_expr andalso
+                   ParKind =/= size_qualifier,
+                   ?RefError(bad_kind, binary))
+    end.
+
+
+check_fun(Module, NewName, Arity) ->
+    ModName = ?Mod:name(Module),
+    ?Check(?Query:exec(Module, ?Mod:local(NewName, Arity)) =:= [],
+           ?RefError(fun_exists, [ModName, NewName, Arity])),
+    ?Check(?Query:exec(Module, ?Mod:imported(NewName, Arity)) =:= [],
+           ?RefError(imported_fun_exists, [ModName, [NewName, Arity]])),
+    ?Check(?Fun:autoimported(NewName, Arity) =:= false,
+           ?RefError(autoimported_fun_exists, [NewName, Arity])).
+
+check_var(BoundVars, Exprs)->
+    Occurrences  = lists:flatten([?Query:exec(BoundVars,
+                                              ?Var:occurrences(Expr)) ||
+                                  Expr <- Exprs]),
+    AllVarOccurs = ?Query:exec(BoundVars, ?Var:occurrences()),
+    Clash = lists:usort([list_to_atom(?Expr:value(Var)) ||
+                         Var <- (AllVarOccurs -- Occurrences)]),
+    ?Check( Clash =:= [],
+           ?RefError(outside_used_vars, Clash)).
+
+
+check_new_var_name(Form, VarName) ->
+    Clauses = ?Query:exec(Form, ?Form:clauses()),
+    Vars    = ?Query:exec(Clauses, ?Clause:variables()),
+    [?Check(?Var:name(Var) =/= VarName, ?RefError(var_exists, VarName))
+     || Var <- Vars].
+
+check_recursive_calls(Exprs, Fun)->
+    RecApps = [?Query:exec(Fun, ?Fun:applications(Expr)) || Expr <- Exprs],
+    RecImps = [?Query:exec(Fun, ?Fun:implicits(Expr)) || Expr <- Exprs],
+    ?Check(lists:flatten(RecApps) =:= [] andalso
+           lists:flatten(RecImps) =:= [],
+           ?RefErr0r(recursive_subexpr)).
+
+check_bound_var_name([],  _) -> ok;
+check_bound_var_name( _, []) -> ok;
+check_bound_var_name(Apps, Bound) ->
+    Names  = [?Var:name(Var) || Var <- Bound],
+    FunCls = ?Query:exec(Apps, ?Query:seq(?Expr:clause(), ?Clause:funcl())),
+    VisibVars = ?Query:exec(FunCls, ?Clause:variables()),
+    VisibNames = [?Var:name(Var) || Var <- VisibVars],
+    Clash = lists:usort([ list_to_atom(Name) ||
+                          Name <- ?MISC:intersect(Names, VisibNames)]),
+    ?Check(Clash =:= [],
+           ?RefError(var_exists_app, Clash)),
+    Forms  = lists:usort(?Query:exec(FunCls, ?Clause:form())),
+    lists:min(get_form_index(Forms)).
+
+
+check_se_when_guard([H|Tail], true) ->
+    Params = ?Query:exec(H, ?Expr:children()),
+    ?Check(lists:member(true, [?Expr:side_effect(Expr) || Expr <- tl(Params)])
+           =:= false,
+           ?LocalError(side_eff, [])),
+    check_se_when_guard(Tail, true);
+check_se_when_guard(_, _) ->
+    ok.
+
+get_form_index(Forms) when is_list(Forms)->
+    [begin
+        File = ?Query:exec1(Form, ?Form:file(), bad_file),
+        ?Syn:index(File, form, Form)
+    end || Form <- Forms];
+get_form_index(Form) ->
+    File = ?Query:exec1(Form, ?Form:file(), bad_fil),
+    {File, ?Syn:index(File, form, Form)}.
+
+check_record_macro([], FunInd, _Exprs)  -> {no_move, FunInd};
+check_record_macro(AppForms, FunInd, Exprs)->
+    AppInd = lists:min(get_form_index(AppForms)),
+    case AppInd >= FunInd of
+        true -> {no_move, FunInd};
+        false ->
+            Records = lists:usort(?Query:exec(Exprs, ?Query:seq(?Expr:records(),
+                                                                ?Rec:form()))),
+            Macros = lists:usort(?Query:exec(Exprs, ?Expr:macros())),
+            Pairs = [{Elem, get_form_index(Elem)} || Elem <- Records ++ Macros],
+            {lists:usort([{Ind,Elem,File} || {Elem,{File, Ind}} <- Pairs,
+                                            Ind > AppInd]), AppInd}
+    end.
+
+
+get_pairs_for_guard_tr(_, _, _, false) ->
+    no_pair;
+get_pairs_for_guard_tr(Exprs, Cl, Apps, true) ->
+    Vars = [Var || Var <- ?Query:exec(Exprs, ?Expr:deep_sub()),
+                   ?Expr:kind(Var) == 'variable'],
+    Pats = ?Query:exec(Cl, ?Clause:patterns()),
+    Clash = [Pat || Pat <- Pats, ?Expr:kind(Pat) =/= 'variable'],
+    ?Check(length(Clash) =:= 0, ?LocalError(guard_var, [])),
+    VarPairs = [{?Var:name(hd(?Query:exec(Var, ?Expr:variables()))),
+                 ?Syn:index(hd(Cl), pattern, Pat)} || Pat <- Pats, Var <- Vars,
+                 ?MISC:intersect(?Query:exec(Pat, ?Expr:varbinds()),
+                 ?Query:exec(Var, ?Expr:varrefs())) /= []],
+    [{App, lists:usort([{Var, ?Query:exec1(App, ?Expr:child(I+1),bad_app)}
+             ||{Var, I} <- VarPairs])} || App <- Apps].
+
+
+vars(Exprs) ->
+    VarBinds = ?Query:exec(Exprs, ?Expr:varbinds()),
+    VarRefs  = ?Query:exec(Exprs, ?Expr:varrefs()),
+    {VarBinds, VarRefs -- VarBinds}.
+
+get_fun_calls(Exprs, Fun, File)->
+    Apps    = ?Query:exec(Fun, ?Fun:applications()),
+    Imps    = ?Query:exec(Fun, ?Fun:implicits()),
+    Body    = ?Query:exec(Fun, ?Query:seq([?Fun:definition(),
+                                           ?Form:clauses(),
+                                           ?Clause:body()])),
+    RecApps = lists:flatten([?Query:exec(Fun, ?Fun:applications(Expr))
+                              || Expr <- Body]),
+    RecImps = lists:flatten([?Query:exec(Fun, ?Fun:implicits(Expr))
+                              || Expr <- Exprs]),
+    ModApps = [App || App <- (Apps -- RecApps),
+                      [File] == ?Query:exec(App, ?Query:seq([?Expr:clause(),
+                                                             ?Clause:form(),
+                                                             ?Form:file()]))],
+    ModImps = [App || App <- (Imps -- RecImps),
+                      [File] == ?Query:exec(App,?Query:seq([?Expr:clause(),
+                                                            ?Clause:form(),
+                                                            ?Form:file()]))],
+    RecCls      = [hd(?Query:exec(App,
+                                  ?Query:seq(?Expr:clause(), ?Clause:funcl())))
+                   || App <- RecApps],
+    {ModApps, ModImps, RecApps, RecImps, RecCls}.
+
+
+get_app_data(AppNode, Exprs)->
+    Args = tl(?Query:exec(AppNode, ?Expr:children())),
+    {Args, Exprs, AppNode}.
+
+
+separate_guard(Expr)->
+    case ?Expr:value(Expr) of
+        ',' ->
+            [Left, Right] = ?Query:exec(Expr, ?Expr:children()),
+            [separate_guard(Left), conjunction, separate_guard(Right)];
+        ';' ->
+            [Left, Right] = ?Query:exec(Expr, ?Expr:children()),
+            [separate_guard(Left), disjunction, separate_guard(Right)];
+        _   -> Expr
+    end.
+
+%%% ===========================================================================
+%%% Transformation part
 
 insert_app_arg(FunCallData, Type, ParNames) ->
-    lists:foreach(
+    lists:map(
         fun({AppArgs, Exprs, App})->
-            CExprsList = [{?ESG:copy(Expr), Expr}||Expr<-Exprs],
-            CExprs     = find_copy_expr(CExprsList),
-            Pars = [?SYNTAX:create(#expr{kind = variable}, [Par]) 
+            Pars = [?Syn:create(#expr{kind = variable}, [Par])
                     || Par <- ParNames],
-            case Type of 
-                var    -> [NewArg] = CExprs;
-                funexp -> 
-                    Cl     = ?SYNTAX:create(#clause{kind=funexpr},
+            case Type of
+                var    ->
+                    CExprsList = [{?Syn:copy(Expr), Expr}||Expr<-Exprs],
+                    CExprs     = find_copy_expr(CExprsList),
+                    [NewArg] = CExprs;
+                funexp ->
+                    CExprsList = [{?Syn:copy(Expr), Expr}||Expr<-Exprs],
+                    CExprs     = find_copy_expr(CExprsList),
+                    Cl     = ?Syn:create(#clause{kind=funexpr},
                                         [{pattern, Pars},{body,CExprs}]),
-                    NewArg = ?SYNTAX:create(#expr{kind=fun_expr},[{exprcl,Cl}])
-            end,     
-            case length(AppArgs) of
-                0 -> Children = ?SYNTAX:children(App),
-                     Tag = {before, element(2,lists:last(Children))};
-                _ -> Tag = {next_to,lists:last(AppArgs)}
+                    NewArg = ?Syn:create(#expr{kind=fun_expr},[{exprcl,Cl}]);
+                guard  ->
+                    NewArg = create_condition(Exprs),
+                    CExprs = [NewArg]
             end,
-            ?SYNTAX:replace(App, Tag, [{sub,NewArg}])
+            ?Syn:replace(App, {sub, length(AppArgs) + 2, 0}, [NewArg]),
+            CExprs
         end, FunCallData).
+
+create_condition([Left, Type, Right])->
+    case Type of
+        conjunction -> Value = 'andalso';
+        disjunction -> Value = 'orelse'
+    end,
+    CondL = create_condition(Left),
+    CondR = create_condition(Right),
+    ?Syn:create(#expr{kind = infix_expr, value = Value},
+         [{exprcl, [?Syn:create(#clause{kind = expr}, [{body, [CondL]}])]
+           ++ [?Syn:create(#clause{kind = expr}, [{body, [CondR]}])]}]);
+create_condition(Node) ->
+    CNode = ?Syn:copy(Node),
+    hd(find_copy_expr([{CNode, Node}])).
 
 insert_rec_app_arg(RecCallData, VarName)->
     lists:foreach(
         fun({AppArgs, _Exprs, App})->
-            VarNode = ?SYNTAX:create(#expr{kind = variable}, [VarName]),
-            case length(AppArgs) of
-                0 -> Children = ?SYNTAX:children(App),
-                     Tag = {before, element(2,lists:last(Children))};
-                _ -> Tag = {next_to,lists:last(AppArgs)}
-            end,
-            ?SYNTAX:replace(App, Tag, [{sub,VarNode}])
+            VarNode = ?Syn:create(#expr{kind = variable}, [VarName]),
+            ?Syn:replace(App, {sub, length(AppArgs) + 2, 0}, [VarNode])
         end, RecCallData).
 
-insert_fun_pattern(Function, VarName, OrCl, RecFunCl)->
-    FunCl  = ?GRAPH:path(Function, [funcl]),
-    ClData = [{?GRAPH:path(Cl, [pattern]), Cl} || Cl <- FunCl],
+insert_fun_pattern(VarName, OrCl, RecFunCl, ClData)->
     lists:foreach(
-        fun({Pats, Cl})->
-            case lists:member(Cl, [OrCl] ++ RecFunCl) of
-                true -> 
-                    New = ?SYNTAX:create(#expr{kind=variable},[VarName]);
-                false -> 
-                    New = ?SYNTAX:create(#expr{kind=variable},["_" ++ VarName])
+        fun({_, Pats, _, Cl})->
+            case lists:member(Cl, OrCl ++ RecFunCl) of
+                true ->
+                    New = ?Syn:create(#expr{kind=variable},[VarName]);
+                false ->
+                    New = ?Syn:create(#expr{kind=variable},["_" ++ VarName])
             end,
-            case length(Pats) of
-                0 -> Tag = {pattern, 1, 1};
-                _ -> Tag = {next_to,lists:last(Pats)}
-            end,
-            ?SYNTAX:replace(Cl, Tag, [{pattern,New}])
-        end, ClData). 
+            ?Syn:replace(Cl, {pattern, length(Pats) + 1, 0}, [New])
+        end, ClData).
 
 
-replace_expressions(Parent, VarName, DelExprs, Type, ArgNames)->
-    VarNode = ?SYNTAX:create(#expr{kind = variable}, [VarName]),
-    case Type of 
-        var    -> Node = VarNode;
-        funexp -> 
-            Args = [?SYNTAX:create(#expr{kind = variable}, [Arg]) 
+replace_expressions(Parent, VarName, DelExprs, Type, ArgNames, Link)->
+    VarNode = ?Syn:create(#expr{kind = variable}, [VarName]),
+    case Type of
+        funexp ->
+            Args = [?Syn:create(#expr{kind = variable}, [Arg])
                     || Arg <- ArgNames],
-            Node        = ?SYNTAX:create(#expr{kind=application},
-                                              [{sub,VarNode}, {sub, Args}])
+            Node        = ?Syn:create(#expr{kind=application},
+                                              [{sub,VarNode}, {sub, Args}]);
+        _      ->  Node = VarNode
     end,
-    Delete = {hd(DelExprs), lists:last(DelExprs)},
-    ?SYNTAX:replace(Parent,Delete,[{body, Node}]).
-
-
-replace_subexpression(Parent, VarName, DelExpr, Type,ArgNames)->
-    NewVar  = ?SYNTAX:create(#expr{kind = variable}, [VarName]),
-    case Type of 
-          var    -> New = NewVar;
-          funexp -> 
-            Args = [?SYNTAX:create(#expr{kind = variable}, [Arg]) 
-                    || Arg <- ArgNames],
-            New         = ?SYNTAX:create(#expr{kind=application},
-                                              [{sub,NewVar}, {sub, Args}])
+    case Link of
+        body  -> ?Syn:replace(Parent,
+                              {range, hd(DelExprs), lists:last(DelExprs)},
+                              [Node]);
+        _     -> ?Syn:replace(Parent,{node, hd(DelExprs)},[Node])
     end,
-    ?SYNTAX:replace(Parent,{node, DelExpr},[{sub, New}]).
+    Node.
 
-
-insert_old_fun(_, _, _, _, _, false)->
+insert_old_fun(_, _, _, _, _, _, false)->
     ok;
-insert_old_fun(File, Fun, Exprs, Type, ArgNames, true)->
-    FunCl  = ?GRAPH:path(Fun, [funcl]),
-    ClData = [{?GRAPH:path(Cl, [name]), ?GRAPH:path(Cl, [pattern]),
-               ?GRAPH:path(Cl, [guard])} || Cl <- FunCl],
-    FunCls = 
+insert_old_fun(File, ClData, Exprs, Type, ArgNames, Index, true)->
+    FunCls =
         lists:map(
-            fun({[Name], Pats, Guard})->
-                CGuardList = [{?ESG:copy(Expr), Expr}||Expr<-Guard],
+            fun({[Name], Pats, Guard, _})->
+                CGuardList = [{?Syn:copy(Expr), Expr}||Expr<-Guard],
                 CGuard     = find_copy_expr(CGuardList),
-                CPatsList1 = [{?ESG:copy(Expr), Expr}||Expr<-Pats],
+                CPatsList1 = [{?Syn:copy(Expr), Expr}||Expr<-Pats],
                 CPats1     = find_copy_expr(CPatsList1),
-                CNameList1 = ?ESG:copy(Name),
+                CNameList1 = ?Syn:copy(Name),
                 CName1     = find_copy_expr([{CNameList1, Name}]),
-                CPatsList2 = [{?ESG:copy(Expr), Expr}||Expr<-Pats],
+                CPatsList2 = [{?Syn:copy(Expr), Expr}||Expr<-Pats],
                 CPats2     = find_copy_expr(CPatsList2),
-                CNameList2 = ?ESG:copy(Name),
+                CNameList2 = ?Syn:copy(Name),
                 CName2     = find_copy_expr([{CNameList2, Name}]),
-                CExprsList = [{?ESG:copy(Expr), Expr}||Expr<-Exprs],
-                CExprs     = find_copy_expr(CExprsList),
-                Args = [?SYNTAX:create(#expr{kind = variable}, [Arg]) 
+                Args = [?Syn:create(#expr{kind = variable}, [Arg])
                         || Arg <- ArgNames],
-                case Type of 
-                    var    -> NewArg = CExprs;
-                    funexp -> 
-                         Clause = ?SYNTAX:create(#clause{kind=funexpr},
-                                        [{pattern, Args},{body,CExprs}]),
-                         NewArg = [?SYNTAX:create(#expr{kind=fun_expr},
-                                                       [{exprcl,Clause}])]
+                case Type of
+                    var    ->
+                        CExprsList = [{?Syn:copy(Expr), Expr}||Expr<-Exprs],
+                        CExprs     = find_copy_expr(CExprsList),
+                        NewArg = CExprs;
+                    funexp ->
+                        CExprsList = [{?Syn:copy(Expr), Expr}||Expr<-Exprs],
+                        CExprs     = find_copy_expr(CExprsList),
+                        Clause = ?Syn:create(#clause{kind=funexpr},
+                                      [{pattern, Args},{body,CExprs}]),
+                        NewArg = [?Syn:create(#expr{kind=fun_expr},
+                                                       [{exprcl,Clause}])];
+                    guard  -> NewArg = [create_condition(Exprs)]
                 end,
-                NewApp = ?SYNTAX:create(#expr{kind = application}, 
-                                       [{sub, CName2},{sub, CPats2++NewArg}]),
-                ?SYNTAX:create(#clause{kind = fundef}, [{name, CName1},
-                                                        {pattern, CPats1}, 
-                                                        {guard, CGuard}, 
+                NewApp = ?Syn:create(#expr{kind = application},
+                                     [{sub, CName2++CPats2++NewArg}]),
+                case Type of
+                    guard ->
+                        ?Syn:create(#clause{kind = fundef}, [{name, CName1},
+                                                        {pattern, CPats1},
+                                                        {body,  [NewApp]}]);
+                    _ ->
+                       ?Syn:create(#clause{kind = fundef}, [{name, CName1},
+                                                        {pattern, CPats1},
+                                                        {guard, CGuard},
                                                         {body,  [NewApp]}])
+                end
             end, ClData),
-    OldFun = ?SYNTAX:create(#form{type = func}, [{funcl, FunCls}]),
-    Index  = ?GRAPH:index(File, form, Fun),
-    ?ESG:insert(File, {form, Index}, OldFun).
+    OldFun = ?Syn:create(#form{type = func}, [{funcl, FunCls}]),
+    ?File:add_form(File, Index, OldFun).
 
 find_copy_expr(CExprsList)->
     lists:map(
-        fun({List, Expr}) -> 
+        fun({List, Expr}) ->
             {value, {Expr, CExpr}} = lists:keysearch(Expr, 1, List),
-            CExpr 
-        end, CExprsList).  
+            CExpr
+        end, CExprsList).
+
+move_macros_records(no_move, _) -> ok;
+move_macros_records([], _) -> ok;
+move_macros_records([{_Ind, Form, File} | Moves], AppInd) ->
+    ?File:del_form(File, Form),
+    ?File:add_form(File, AppInd, Form),
+    move_macros_records(Moves, AppInd+1).
+
+prepare_guard(no_pair) ->
+    [];
+prepare_guard([{App, Pair} | Pairs]) ->
+    TrGuard = lists:last(?Query:exec(App, ?Expr:children())),
+    TrVars  = [{?Expr:value(Var), Var, ?Syn:parent(Var)} ||
+                Var <- ?Query:exec(TrGuard, ?Expr:deep_sub()),
+                ?Expr:kind(Var) == 'variable'],
+    Transform = [{Var, Parent, NewVar} || {Name1, Var, [{_,Parent}]} <- TrVars,
+                                          {Name2, NewVar} <- Pair,
+                                           Name1 == Name2],
+    Transform ++ prepare_guard(Pairs);
+prepare_guard([]) ->
+    [].
+
+transform_guard([]) ->
+    ok;
+transform_guard([{Var, Parent, NewVar} | Tail]) ->
+    CNode = ?Syn:copy(NewVar),
+    New = find_copy_expr([{CNode, NewVar}]),
+    ?Syn:replace(Parent, {node, Var}, New),
+    transform_guard(Tail).

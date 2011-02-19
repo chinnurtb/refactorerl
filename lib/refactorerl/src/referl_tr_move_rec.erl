@@ -20,180 +20,231 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
+%%% @doc This module implements the `Move records between files'
+%%% transformation
 %%%
-%%% @doc Move record transformation module
+%%% Side conditions
+%%%
+%%% <ul>
+%%%   <li>The names of the records to be moved do not clash with
+%%%   existing record names
+%%%     <ul>
+%%%       <li>in the target file</li>
+%%%       <li>in files that are included in target</li>
+%%%       <li>and in files where the target file is included</li>
+%%%     </ul>
+%%%   </li>
+%%%   <li>Moving records from a header file to a module file is only
+%%%   permitted if no other modules include the header file and use
+%%%   some of the records to be moved</li>
+%%%   <li>If a file inclusion has to be introduced during the
+%%%   transformation, this inclusion must not cause inconsistency at
+%%%   the place of the inclusion.</li>
+%%% </ul>
+%%%
+%%% Transformation steps and compensations
+%%%
+%%% <ol>
+%%%   <li>The record definitions are removed from the source file</li>
+%%%   <li>If the target is a header file that does not exist, the file
+%%%   is created</li>
+%%%   <li>The record definitions are placed at the end of the target
+%%%   header file, or before the first function of the target module
+%%%   file</li>
+%%%   <li>If a record is moved into a header file, then every module
+%%%   that uses the record is changed to include the target header
+%%%   file. This is not an issue when the target is a module
+%%%   file.</li>
+%%% </ol>
+%%%
+%%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(referl_tr_move_rec).
--vsn("$Rev: 1973 $").
+-vsn("$Rev: 2662 $").
 -include("refactorerl.hrl").
+
 
 %%% ============================================================================
 %%% Exports
 
-%% Interface
--export([do/3]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
+-export([prepare/1]).
+-export([error_text/2]).
+
 
 %%% ============================================================================
-%%% Refactoring state
+%%% Main types
 
--record(state, {from, fromfile,
-                target, targetfile,
-                fromheader, toheader,
-                infos, names, nodes, forms, files}).
+-record(recinfo, {name, form, files}).
+-record(info, {fromfile, tofile, fromheader, toheader,
+               names, nodes, forms, files}).
 
--record(info, {name, form, node, files}).
 
 %%% ============================================================================
 %%% Errors
 
-throw_name_collision(ErrArg) ->
-    throw("record with specified name already exists in target " ++ ErrArg).
+%% @private
+error_text(name_collision, [Clash]) ->
+    ["Record with given name already exists in target ",
+     ?MISC:format("~p", [Clash])];
 
-msg_not_only_in_target() ->
-    "can't move record from header, it is used not only in target".
+error_text(not_only_in_target, [OtherUseNames]) ->
+    ["Cannot remove record from header, included in other files: ",
+     ?MISC:join(OtherUseNames)];
 
-msg_unincludable() ->
-    "can't include the target hrl in some files, " ++
-        "which include the from-file header".
+error_text(unincludable, [FileName, ToFileName]) ->
+    ["Cannot include ", FileName, " in ", ToFileName];
+%    "Cannot include the target header in some files, " ++
+%        "where the from-file header is included";
 
-msg_not_movable() ->
-    "can't move to header, because there's name " ++
-        "conflict with a record in a file, " ++
-        "which includes the target hrl".
+error_text(not_movable, [FileName, Name]) ->
+    ["File ", FileName, " also includes the target file ",
+     "and causes name collision with record ", atom_to_list(Name)];
+%    "Cannot move to header, because there's name " ++
+%        "collision (mediately) with a record in a file, " ++
+%        "which includes the target header";
 
-msg_delete() ->
-    "can't delete record from source file".
+error_text(delete, []) ->
+    "Cannot delete record from the source file as it is being used".
 
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), [atom()], string()) -> ok
-%% @doc Moves the definiton of the given records from one file to another one.
-do(FromFile, Names, TargetFile) ->
-    ?TRANSFORM:do(?MODULE, {FromFile, Names, TargetFile}).
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FromFile, Names, TargetFile}) ->
-    Infos = [#info{name = Name} || Name <- Names],
-    #state{from = FromFile, target = TargetFile, infos = Infos}.
+prepare(Args) ->
+    FromFile = ?Args:file(Args),
+    FromPath = ?File:path(FromFile),
+    ToName   = ?Args:filename(Args),
+    ToPath   = target_path(ToName, FromPath),
+    ToFile   = ?Query:exec1(?File:find(ToPath), ?RefErr0r(target_not_found)),
+    Records  = ?Args:records(Args),
 
-%% @private
-steps() ->
-    [fun check_source_target/1,
-     fun query_filetypes/1,
-     fun query_records/1,
-     fun check_name_conflicts/1,
-     fun check_unincludable/1,
-     fun check_movable_to_header/1,
-     fun check_used_only_in_target/1,
-     fun check_no_using/1].
+    {Names, Forms, Files} =
+        lists:foldl(
+          fun(#recinfo{name=Name, form=Form, files=Files},
+              {Na, Fo, Fi}) ->
+                  {[Name|Na], [Form|Fo], lists:usort(lists:flatten([Files|Fi]))}
+          end,
+          {[], [], []},
+          [info(Node) || Node <- Records]),
 
-%% @private
-transform(St = #state{fromfile=FFile, targetfile=TFile, nodes=Nodes,
-                      forms=Forms, toheader=ToHeader, files=Files}) ->
-    TPath = (?GRAPH:data(TFile))#file.path,
+    check_name_conflicts(FromFile, ToFile, Names),
 
-    %% Must be before the form movings!
-    [?GRAPH:rmlink(FFile, record, Node) || Node <- Nodes],
-    [?GRAPH:mklink(TFile, record, Node) || Node <- Nodes],
+    Info = #info{fromfile = FromFile, tofile = ToFile,
+                 fromheader = ?File:type(FromFile) == header,
+                 toheader   = ?File:type(ToFile)   == header,
+                 names = Names, forms = Forms, files = Files},
 
-    [?MANIP:move_form(Form, FFile, TFile)    || Form <- Forms],
-    [?MANIP:add_include(File, TPath) || File <- Files, ToHeader],
-    ?ESG:close(),
-    {changed_files(St), ok}.
+    check_unincludable(Info),
+    check_movable_to_header(Info),
+    check_used_only_in_target(Info),
+    check_no_using(Info),
 
-changed_files(#state{toheader=false, fromfile=FFile, targetfile=TFile}) ->
-    [FFile, TFile];
-changed_files(#state{toheader=true, files=Files, fromfile=FFile, targetfile=TFile}) ->
-    lists:usort([FFile, TFile] ++ Files).
+    fun() -> transform(Info) end.
 
 
 %%% ============================================================================
 %%% Implementation
 
-query_filetypes(St = #state{fromfile=FFile, targetfile=TFile}) ->
-    St#state{fromheader = ?LEX:is_header_file(FFile),
-             toheader =   ?LEX:is_header_file(TFile)}.
+info(Node) ->
+    Form = ?Query:exec1(Node, ?Rec:form(), recform_not_found),
+    Refs = ?Query:exec(Node,
+                       ?Query:seq([[{recref, back}], ?Expr:clause(),
+                                   ?Clause:form(), ?Form:file()])),
+    #recinfo{name=?Rec:name(Node), form=Form, files=lists:usort(Refs)}.
 
-query_records(St = #state{fromfile=FFile, infos=Infos}) ->
-    NewInfos = [info(FFile, Name) || #info{name=Name} <- Infos],
-    {Names, Nodes, Forms, Files} =
-        lists:foldl(
-          fun(#info{name=Name, node=Node, form=Form, files=Files}, {Na, No, Fo, Fi}) ->
-                  {[Name|Na], [Node|No], [Form|Fo], lists:usort(lists:flatten([Files|Fi]))}
-          end,
-          {[], [], [], []},
-          NewInfos),
-    St#state{infos=NewInfos, names=Names, nodes=Nodes, files=Files, forms=Forms}.
+transform(#info{fromfile=FFile, tofile=TFile, forms=Forms,
+                toheader=ToHeader, files=Files}) ->
+    %% Must be before the form movings! ?? Analysers??!!
+    %[?Graph:rmlink(FFile, record, Node) || Node <- Nodes],
+    %[?Graph:mklink(TFile, record, Node) || Node <- Nodes],
+    [?Transform:touch(File) || File <- lists:usort([FFile, TFile] ++ Files)],
+    [fun() -> init end]
+        ++
+        [fun(_) ->
+                 ?File:add_include(File, TFile)
+         end
+         || File <- Files, ToHeader]
+        ++
+        [fun(_) ->
+                 ?File:del_form(Form),
+                 ?File:add_form(TFile, Form)
+         end
+         || Form <- Forms].
 
-info(FFile, N) ->
-    Name = ?MISC:to_atom(N),
-    [Node] = ?GRAPH:path(FFile, [{record, {name, '==', N}}]),
-    [Form] = ?GRAPH:path(Node, [{recdef, back}]),
-    Refs = ?GRAPH:path(Node, [{recref, back}, sup, {visib, back},
-                              scope, {funcl, back}]),
-    Files = ?LEX:containing_files(Refs),
-    #info{name=Name, node=Node, form=Form, files=Files}.
+
 
 %%% ----------------------------------------------------------------------------
 %%% Checks
 
-check_source_target(St = #state{from=From, target=Target}) ->
-    FFile = ?SYNTAX:get_file(From),
-    TFile = ?SYNTAX:get_file(Target),
-    St#state{fromfile = FFile, targetfile=TFile}.
+check_name_conflicts(FromFile, ToFile, Names) ->
+    Includes =
+        fun(File) ->
+                lists:usort(?Query:exec(File, ?File:includes())) -- [FromFile]
+        end,
+    Exists =
+        fun(File, Name) ->
+                ?Query:exec(File,
+                            ?Query:seq([Includes, ?File:record(Name)])) =/= []
+        end,
+    io:format("..... includes ~p~n", [Includes(ToFile)]),
+%    [begin
+%         io:format(".... ~p~n", [])
+%     end || Name <- Names],
+    Clash = [Name || Name <- Names, Exists(ToFile, Name)],
+    ?Check(Clash == [], ?LocalError(name_collision, [Clash])).
 
-check_name_conflicts(#state{targetfile=TFile, names=Names}) ->
-    Clash = [Name || Name <- Names, ?LEX:exists(TFile, Name, record)],
-    ErrArg = ?MISC:format("(~p).", [Clash]),
-    case Clash of
-        [] ->
-            ok;
-        _ ->
-            throw_name_collision(ErrArg)
-    end.
-
-%% From Header, To Source
-%% Movable only, when names used only in target module
-check_used_only_in_target(#state{fromheader=true, toheader=false,
-                                 files=Files, targetfile=TFile}) ->
-    if 
-        Files == [] -> ok;
-        true ->
-            ?MISC:error_on_difference(Files, [TFile], msg_not_only_in_target()),
-            ok
-    end;
+%% header -> module
+%% (Are the records used only in target module?)
+check_used_only_in_target(#info{fromheader=true, toheader=false,
+                                files=Files, tofile=TFile}) ->
+    OtherUses = Files -- [TFile],
+    OtherUseNames = lists:map(fun ?File:path/1, OtherUses),
+    ?Check(OtherUses == [], ?LocalError(not_only_in_target, [OtherUseNames]));
 check_used_only_in_target(_) -> ok.
 
-%% From Header, To Header
-%% Error, when we can't include the target somewhere
-check_unincludable(#state{fromheader=true, toheader=true,
-                          targetfile=TFile, files=Files}) ->
-    Ok = lists:all(fun(File) -> ?LEX:includable(File, TFile) end, Files),
-    ?MISC:error_on_difference(Ok, true, msg_unincludable()),
-    ok;
+%% module -> module
+%% (Are the records used?)
+check_no_using(#info{fromheader=false, toheader=false, files=Files}) ->
+    ?Check(Files == [], ?LocalErr0r(delete)); %% todo: correct?
+check_no_using(_) -> ok.
+
+%% header -> header
+%% (Error, when we cannot include the target header somewhere.)
+check_unincludable(#info{fromheader=true, toheader=true,
+                         tofile=ToFile, files=Files}) ->
+    ToFileName = ?File:path(ToFile),
+    [?Check(?File:includable(File, ToFile),
+            ?LocalError(unincludable, [FileName, ToFileName]))
+     || File <- Files,
+        FileName <- [?File:path(File)]];
 check_unincludable(_) -> ok.
 
-%% To Header
-%% Moving will make no name conflicts
-check_movable_to_header(#state{toheader=true, names=Names,
-                               fromfile=FFile, targetfile=TFile}) ->
-    [?MISC:error_on_difference(
-        ?LEX:movable_to_header(record, Name, FFile, TFile), true, msg_not_movable()) ||
-        Name <- Names],
-    ok;
+
+%% _ -> header
+%% (Moving should not make name conflicts.)
+check_movable_to_header(#info{toheader=true, names=Names,
+                              fromfile=FFile, tofile=TFile}) ->
+    TargetIncluders = ?Query:exec(TFile, ?File:included()) -- [FFile, TFile],
+    [?Check(?Query:exec(File, ?File:record(Name)) == [],
+            ?LocalError(not_movable, [FileName, Name]))
+     || Name <- Names,
+        File <- TargetIncluders,
+        FileName <- [?File:path(File)]];
 check_movable_to_header(_) -> ok.
 
-%% From Source, To Source
-%% Movable only when the record is not used
-check_no_using(#state{fromheader=false, toheader=false, files=Files}) ->
-    ?MISC:error_on_difference(Files, [], msg_delete()),
-    ok;
-check_no_using(_) -> ok.
+
+%%% ----------------------------------------------------------------------------
+
+target_path(ToName, FromPath) ->
+    case filename:pathtype(ToName) of
+        absolute ->
+            ToName;
+        relative ->
+%%            SourceDir = filename:dirname(filename:absname(FromPath)),
+            SourceDir = filename:dirname(FromPath),
+            filename:absname(ToName, SourceDir);
+        volumerelative ->
+            todo
+    end.

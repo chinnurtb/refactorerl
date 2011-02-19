@@ -17,9 +17,72 @@
 %%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
 %%% Loránd University. All Rights Reserved.
 
-%%% @doc This module contains the functionality which should be available to
-%%% a user interface. Operations are asynchronous, results are returned by a
-%%% gen_event manager.
+%%% @doc This module provides a bridge between user interfaces and system
+%%% functionality. A user interface requests operations and receives results
+%%% through this module. Requests are asychronously handled, the results are
+%%% returned through a `gen_event' event manager. Events can occur
+%%% independently of operations, a user interface probably wants to handle
+%%% these as well.
+%%%
+%%% Operations requests are sent using the exported functions of this module.
+%%% See the description of the functions below.
+%%%
+%%% == Message types ==
+%%%
+%%% To receive event messages, a standard `gen_event' callback module must be
+%%% registered by calling {@link add_msg_handler/2}. The following event
+%%% messages may be sent to the callback modules:
+%%%
+%%% <dl>
+%%%
+%%% <dt>{@type {status, Message::string()@}}</dt> <dd>A textual message that
+%%% informs the user of the tool's status.</dd>
+%%%
+%%% <dt>{@type {error, Message::string()@}}</dt> <dd>A textual error message
+%%% that describes an internal error situation of the tool.</dd>
+%%%
+%%% <dt>{@type {add, Path::path()@}}</dt> <dd>The file specified by `Path' is
+%%% added (or maybe re-added) to the database.</dd>
+%%%
+%%% <dt>{@type {drop, Path::path()@}}</dt> <dd>The file specified by `Path' is
+%%% removed from the database.</dd>
+%%%
+%%% <dt>{@type {invalid, Path::path()@}}</dt> <dd>The file specified by `Path'
+%%% is added to the database, but it is invalid (contains errors).</dd>
+%%%
+%%% <dt>{@type {reload, Path::path()@}}</dt> <dd>The file specified by `Path'
+%%% is modified by the tool (and should be reloaded from disk by the UI).</dd>
+%%%
+%%% <dt>{@type {rename, {From::path(), To::path()@}@}}</dt> <dd>The file
+%%% `From' is changed to have the name `To' (and this changes should be
+%%% followed by the UI).</dd>
+%%%
+%%% <dt>{@type {showconfig, Config::[{Key::atom(), Value@}]@}}</dt> <dd>This
+%%% message describes the currect runtime configuration of the tool. Currently
+%%% used key values are `appbase', `include', and `output'. See also {@link
+%%% saveconfig/3}.</dd>
+%%%
+%%% <dt>{@type {filelist, Files::[path()]@}}</dt> <dd>This message contains
+%%% the files that are currently stored in the database. There is a special
+%%% notation: when the first character of a filename is an exclamation mark
+%%% (`!'), it is not part of the filename, it means that the file has some
+%%% errors. <small>TODO: This representation should be improved.</small></dd>
+%%%
+%%% <dt>{@type {funlist, Functions::[{Name::atom(),
+%%% Arity::integer()@}]@}}</dt> <dd>This message contains a list of functions.
+%%% <small>TODO: This is rather specific to the move function refactoring, and
+%%% should be improved.</small></dd>
+%%%
+%%% <dt>{@type {recordlist, Records::[Name::atom()]@}}</dt> <dd>This message
+%%% contains a list of records. <small>TODO: this is rather specific to the
+%%% move record refactoring, ans shuold be improved.</small></dd>
+%%%
+%%% <dt>{@type {question, {Id::integer(), Details::proplist()@}@}}</dt>
+%%% <dd>Contains a question that must be answered by {@link reply/2} or
+%%% cancelled by {@link cancel/1}. <small>TODO: `Details' are to be
+%%% specified.</small></dd>
+%%%
+%%% </dl>
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
@@ -31,19 +94,8 @@
 -export([stop/0, status/1, add/1, drop/1, draw/2,
          showconfig/0, saveconfig/3, filelist/0, reset/0]).
 
-%%% Transformations
--export([extract/4, inline/2]).
-
--export([merge/4]).
-
--export([funexpr/2, reorder/3, generalize/4, elimvar/2, tuplefunpar/3]).
-
--export([funlist/1, movefun/3]).
-
--export([recordlist/1, moverec/3]).
-
-%% Renamings
--export([renamemod/3,renamefun/3, renamevar/3, renamerec/3, renamefield/3]).
+-export([transform/2, reply/2, cancel/1]).
+-export([funlist/1, recordlist/1]).
 
 %%% Undo/redo
 -export([backup/0, undo/1, clean/0]).
@@ -63,170 +115,110 @@
 
 -include("refactorerl.hrl").
 
+%%% @type path() = string(). The absolute path of a file.
 
 %% @spec stop() -> ok
 %% @doc Stops the RefactorErl server.
 stop() -> cast({stop}).
 
-%% @spec status(string()) -> ok
-%%
-%% @doc Sends a message about the status of the file.
-%% The type of the message contains the status: it can be `add', `invalid' or
-%% `drop'. The text of the message is the name of the file.
+%% @spec status(path()) -> ok
+%% @doc Requests information about the status of `File'. The result is a
+%% message of type `add', `invalid', or `drop'.
 status(File) -> cast({status, File}).
 
-%% @spec add(string()) -> ok
-%%
-%% @doc Adds the given file to the database.
+%% @spec add(path()) -> ok
+%% @doc Adds `File' to the database.
 add(File) -> cast({add, File}).
 
-%% @spec drop(string()) -> ok
-%%
-%% @doc Drops the given file from the database.
+%% @spec drop(path()) -> ok
+%% @doc Drops `File' from the database.
 drop(File) -> cast({drop, File}).
 
-%% @spec draw(string(), integer()) -> ok
-%%
-%% @doc Draws the graph of the given file.
-%% The type of the graph is specified in the `Type' argument.
-draw(File, Type) -> cast({draw, File, Type}).
+%% @spec draw(path(), integer()) -> ok
+%% @doc Creates a `.dot' drawing of the graph in the database, and saves it in
+%% `File'. The contents of the graph are filtered according to `Filter'; the
+%% value `1' means no filtering, then different numbers select different
+%% filters.
+draw(File, Filter) -> cast({draw, File, Filter}).
 
 %% @spec showconfig() -> ok
-%%
-%% @doc Sends a message that contains the configuration of the server.
+%% @doc Requests configuration information. The result is sent in a message of
+%% type `showconfig'.
 showconfig() -> cast({showconfig}).
 
-%% @spec saveconfig([string()], [string()], string() | original) -> ok
-%%
-%% @doc Sets the server's saving configuration.
+%% @spec saveconfig([path()], [path()], path() | original) -> ok
+%% @doc Modifies the runtime configuration of the tool.
+%% <ul>
+%% <li>`App' is a list of directories that are searched for applications for
+%%   `include_lib' directives</li>
+%% <li>`Inc' is a list of directories that are searched for `include'
+%%   directives</li>
+%% <li>`Out' is the output directory of the tool. Its value can be `original',
+%%   which means files should be overwritten, or a name of a directory, which
+%%   means modified files should be saved there.</li>
+%% </ul>
 saveconfig(App, Inc, Out) -> cast({saveconfig, App, Inc, Out}).
 
 %% @spec filelist() -> ok
-%%
-%% @doc Sends a message about each file that is stored in the database.
-%% The type of the messages will be `filelist'.
+%% @doc Requests a list of the files in the database. The result is sent in a
+%% message of type `filelist'.
 filelist() -> cast({filelist}).
 
 %% @spec reset() -> ok
-%%
 %% @doc Resets the database.
 reset() -> cast({reset}).
 
-%% @spec extract(File::string(), Begin::integer(), End::integer(),
-%%               Name::string()) -> ok
-%%
-%% @doc Calls the extract function refactoring.
-extract(File, Begin, End, Name) -> cast({extract, File, Begin, End, Name}).
+%% @spec transform(atom(), proplist()) -> ok
+%% @doc Initiates a transformation. `Mod' is a transformation module name,
+%% `Args' is a proplist that contains the arguments of the transformation.
+%% @see referl_transform
+%% @see referl_args
+transform(Mod, Args) -> cast({transform, Mod, Args}).
 
-%% @spec merge(File::string(), Begin::integer(), End::integer(),
-%%             Name::string()) -> ok
-%%
-%% @doc Calls the merge expression refactoring.
-merge(File, Begin, End, Name) -> cast({merge, File, Begin, End, Name}).
+%% @spec reply(integer(), term()) -> ok
+%% @doc Provides a reply to a previously asked question.
+%% @see referl_transform:reply/2
+reply(Id, Reply) -> cast({reply, Id, Reply}).
 
-%% @spec inline(File::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the inline function refactoring.
-inline(File, Pos) -> cast({inline, File, Pos}).
+%% @spec cancel(integer()) -> ok
+%% @doc Cancels a previously asked question.
+%% @see referl_transform:cancel/1
+cancel(Id) -> cast({cancel, Id}).
 
-%% @spec funexpr(File::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the expand fun expression refactoring.
-funexpr(File, Pos ) -> cast({funexpr, File, Pos}).
-
-%% @spec generalize(File::string(), Begin::integer(), End::integer(),
-%%                  Name::string()) -> ok
-%%
-%% @doc Calls the generalize function refactoring.
-generalize(File, Begin, End, Name) ->
-    cast({generalize, File, Begin, End, Name}).
-
-%% @spec elimvar(File::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the eliminate variable refactoring.
-elimvar(File, Pos) -> cast({elimvar, File, Pos}).
-
-%% @spec tuplefunpar(File::string(), Begin::integer(), End::integer()) -> ok
-%%
-%% @doc Calls the tuple function arguments refactoring.
-tuplefunpar(File, Begin, End) -> cast({tuplefunpar, File, Begin, End}).
-
-%% @spec reorder(File::string(), Pos::integer(), Order::[integer()]) -> ok
-%%
-%% @doc Calls the reorder function arguments refactoring.
-reorder(File, Pos, Order) -> cast({reorder, File, Pos, Order}).
-
-%% @spec renamefun(File::string(), Name::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the rename function refactoring.
-renamefun(File, Name, Pos) -> cast({renamefun, File, Name, Pos}).
-
-%% @spec renamevar(File::string(), Name::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the rename variable refactoring.
-renamevar(File, Name, Pos) -> cast({renamevar, File, Name, Pos}).
-
-%% @spec renamemod(File::string(), Name::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the rename module refactoring.
-renamemod(File, Name, Pos) -> cast({renamemod, File, Name, Pos}).
-
-%% @spec renamerec(File::string(), Name::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the rename record refactoring.
-renamerec(File, Name, Pos) -> cast({renamerec, File, Name, Pos}).
-
-%% @spec renamefield(File::string(), Name::string(), Pos::integer()) -> ok
-%%
-%% @doc Calls the rename record field refactoring.
-renamefield(File, Name, Pos) -> cast({renamefield, File, Name, Pos}).
-
-%% @private
+%% @spec funlist(path()) -> ok
+%% @doc Requests the list of functions defined in `File'. The result is
+%% returned in a message of type `funlist'.
 funlist(File) -> cast({funlist, File}).
 
-%% @spec movefun(Source::string(), Target::string(), Funs::[string()]) -> ok
-%%
-%% @doc Calls the move function refactoring.
-movefun(Source, Target, Funs)     -> cast({movefun, Source, Target, Funs}).
-
-%% @private
-recordlist(File)             -> cast({recordlist, File}).
-
-%% @spec moverec(Source::string(), Target::string(), Funs::[string()]) -> ok
-%%
-%% @doc Calls the move record refactoring.
-moverec(Source, Target, Recs)     -> cast({moverec, Source, Target, Recs}).
+%% @spec recordlist(path()) -> ok
+%% @doc Requests the list of records defined in `File'. The result is
+%% returned in a message of type `recordlist'.
+recordlist(File) -> cast({recordlist, File}).
 
 %% @spec run_cl(proplist(), atom(), atom()) -> ok
-%%
 %% @doc Invokes {@link cl_ui:run/1}. See the options there.
-run_cl(Opt, Alg, Create)     -> cast({run_cl, Opt, Alg, Create}).
+run_cl(Opt, Alg, Create) -> cast({run_cl, Opt, Alg, Create}).
 
 %% @spec cl_options(atom()) -> ok
-%%
-%% @doc Sends a message with the options of the given clustering algorithm.
-cl_options(Alg)              -> cast({cl_options, Alg}).
+%% @doc Requests the options of the given clustering algorithm.
+cl_options(Alg) -> cast({cl_options, Alg}).
 
 %% @spec cl_refresh() -> ok
-%%
 %% @doc Refreshes the Emacs clustering interface.
-cl_refresh()                 -> cast({cl_refresh}).
+cl_refresh() -> cast({cl_refresh}).
 
 %% @spec backup() -> ok
-%%
 %% @doc Backups tables of Refactorerl database.
-backup()                  -> cast({backup}).
+backup() -> cast({backup}).
 
 %% @spec undo(string()) -> ok
-%%
 %% @doc Steps backward on the Refactorerl database.
-undo(RFile)               -> cast({undo, RFile}).
+undo(RFile) -> cast({undo, RFile}).
 
 %% @spec clean() -> ok
-%%
 %% @doc Clean backup files from the Refactorerl database.
-clean()                   -> cast({clean}).
-%redo(RFile)               -> cast({redo, RFile}).
+clean() -> cast({clean}).
+%redo(RFile) -> cast({redo, RFile}).
 
 cast(Data) -> gen_server:cast({?MODULE, ?REFERL_NODE}, Data).
 
@@ -245,7 +237,8 @@ message(Type, Format, Args) ->
                      {Type, ?MISC:format(Format, Args)}).
 
 %% @spec add_msg_handler(atom(), term()) -> ok | term()
-%% @doc Registers a new user interface message handler.
+%% @doc Registers a new user interface message handler (which must be a
+%% `gen_event' callback module).
 add_msg_handler(Handler, Args) ->
     gen_event:add_sup_handler({?UI_MSG_SERVER, ?REFERL_NODE}, Handler, Args).
 
@@ -277,26 +270,13 @@ handle_cast(Cmd, S) when is_tuple(Cmd) ->
                   reset       -> fun handle_reset/0;
                   echo        -> fun handle_echo/2;
 
-                  extract     -> fun handle_extract/4;
-                  merge       -> fun handle_merge/4;
-                  inline      -> fun handle_inline/2;
-                  funexpr     -> fun handle_funexpr/2;
-                  generalize  -> fun handle_generalize/4;
-                  elimvar     -> fun handle_elimvar/2;
-                  tuplefunpar -> fun handle_tuplefunpar/3;
-                  reorder     -> fun handle_reorder/3;
-
-                  renamefun   -> fun handle_renamefun/3;
-                  renamevar   -> fun handle_renamevar/3;
-                  renamemod   -> fun handle_renamemod/3;
-                  renamerec   -> fun handle_renamerec/3;
-                  renamefield -> fun handle_renamefield/3;
+                  transform   -> fun handle_transform/2;
+                  reply       -> fun handle_reply/2;
+                  cancel      -> fun handle_cancel/1;
 
                   filelist    -> fun handle_filelist/0;
                   funlist     -> fun handle_funlist/1;
-                  movefun     -> fun handle_movefun/3;
                   recordlist  -> fun handle_recordlist/1;
-                  moverec     -> fun handle_moverec/3;
 
                   backup      -> fun handle_backup/0;
                   undo        -> fun handle_undo/1;
@@ -343,44 +323,44 @@ handle_stop() ->
     init:stop().
 
 handle_status(File) when is_list(File) ->
-    case ?SYNTAX:file(File) of
-        {file, F} ->
-            case ?GRAPH:path(F, [{form, {type,'==',error}}]) of
+    case ?Query:exec(?File:find(File)) of
+        [F] ->
+            case ?Graph:path(F, [{form, {type,'==',error}}]) of
                 [] -> message(add, "~s", [File]);
                 _  -> message(invalid, "~s", [File])
             end;
-        not_found  -> message(drop, "~s", [File])
+        []  -> message(drop, "~s", [File])
     end.
 
 handle_add(Name) when is_list(Name) ->
-    case ?SYNTAX:file(Name) of
-        {file, F} ->
-            Drop = [(?GRAPH:data(FN))#file.path ||
-                       FN <- ?GRAPH:path(F, [{incl, back}])],
-            ?FILEMAN:drop_file(F);
-        _ ->
+    case ?Query:exec(?File:find(Name)) of
+        [F] ->
+            Drop = [(?Graph:data(FN))#file.path ||
+                       FN <- ?Graph:path(F, [{incl, back}])],
+            ?FileMan:drop_file(F);
+        [] ->
             Drop = []
     end,
-    case ?FILEMAN:add_file(Name) of
+    case ?FileMan:add_file(Name) of
         {error, Reason} ->
             [message(drop, "~s", [DF]) || DF <- Drop],
             message(invalid, "~s", [Name]),
             message(status, "<~s> ~s", [Name, error_message(Reason)]);
         {file, File} ->
-            Add = [(?GRAPH:data(FN))#file.path ||
-                      FN <- ?GRAPH:path(File, [incl])],
+            Add = [(?Graph:data(FN))#file.path ||
+                      FN <- ?Graph:path(File, [incl])],
             [message(drop, "~s", [DF]) || DF <- Drop],
             [message(add, "~s", [AF]) || AF <- Add]
     end.
 
 handle_drop(File) when is_list(File) ->
-    case ?SYNTAX:file(File) of
-        {file, F} ->
-            Drop = [(?GRAPH:data(FN))#file.path ||
-                       FN <- ?GRAPH:path(F, [{incl, back}])],
-            ?FILEMAN:drop_file(F),
+    case ?Query:exec(?File:find(File)) of
+        [F] ->
+            Drop = [(?Graph:data(FN))#file.path ||
+                       FN <- ?Graph:path(F, [{incl, back}])],
+            ?FileMan:drop_file(F),
             [message(drop, "~s", [DF]) || DF <- Drop];
-        not_found ->
+        [] ->
             message(status, "Already dropped", [])
     end.
 
@@ -401,31 +381,31 @@ handle_draw(File, Type) ->
 handle_showconfig() ->
     message(showconfig,
             [{Name, Value} ||
-                Env <- ?GRAPH:path(?GRAPH:root(), [env]),
-                #env{name=Name, value=Value} <- [?GRAPH:data(Env)]]).
+                Env <- ?Graph:path(?Graph:root(), [env]),
+                #env{name=Name, value=Value} <- [?Graph:data(Env)]]).
 
 handle_saveconfig(AppDirs, IncDirs, OutDir) ->
-    [?GRAPH:delete(Env) || Env <- ?GRAPH:path(?GRAPH:root(), [env])],
-    [?GRAPH:mklink(?GRAPH:root(), env,
-                   ?GRAPH:create(#env{name=appbase, value=Dir})) ||
+    [?Graph:delete(Env) || Env <- ?Graph:path(?Graph:root(), [env])],
+    [?Graph:mklink(?Graph:root(), env,
+                   ?Graph:create(#env{name=appbase, value=Dir})) ||
                       Dir <- AppDirs],
-    [?GRAPH:mklink(?GRAPH:root(), env,
-                   ?GRAPH:create(#env{name=include, value=Dir})) ||
+    [?Graph:mklink(?Graph:root(), env,
+                   ?Graph:create(#env{name=include, value=Dir})) ||
                       Dir <- IncDirs],
-    ?GRAPH:mklink(?GRAPH:root(), env,
-                  ?GRAPH:create(#env{name=output, value=OutDir})),
+    ?Graph:mklink(?Graph:root(), env,
+                  ?Graph:create(#env{name=output, value=OutDir})),
     message(status, "Configuration saved.", []).
 
 handle_filelist() ->
-    Files = [ {(?GRAPH:data(F))#file.path, F} ||
-                F <- ?GRAPH:path(?GRAPH:root(), [file])],
-    St = fun(N) -> case ?GRAPH:path(N, [{form, {type,'==',error}}]) of
+    Files = [ {(?Graph:data(F))#file.path, F} ||
+                F <- ?Graph:path(?Graph:root(), [file])],
+    St = fun(N) -> case ?Graph:path(N, [{form, {type,'==',error}}]) of
                        [] -> ""; _ -> "!" end
          end,
     [message(filelist, "~s~s",[St(N),F]) || {F,N}<-lists:sort(Files)].
 
 handle_reset() ->
-    ?GRAPH:reset_schema(),
+    ?Graph:reset_schema(),
     message(status, "Database clear started.", []).
 
 handle_echo(Type, String) ->
@@ -440,122 +420,34 @@ error_message(Error) ->
 %%% ============================================================================
 %%% Transformation interface
 
-transform_with_backup(TrModName, Args) ->
-    try ?GRAPH:backup(),
-        ?TRANSFORM:do(TrModName, Args)
-    catch
-        throw:Msg ->
-            message(error, "Error: ~p", [Msg])
-    end.
+handle_transform(Mod, Args) ->
+    ?Graph:backup(),
+    ?Transform:do(Mod, Args).
 
-handle_extract(File, Beg, End, NewName) ->
-    transform_with_backup(referl_tr_extract_fun, {File, NewName, Beg, End-1}).
+handle_reply(Id, Reply) ->
+    ?Transform:reply(Id, Reply).
 
-handle_merge(File, Beg, End, NewName) ->
-    transform_with_backup(referl_tr_merge, {File, Beg, End-1, NewName}).
+handle_cancel(Id) ->
+    ?Transform:cancel(Id).
 
-handle_tuplefunpar(File, Beg, End) ->
-    transform_with_backup(referl_tr_tuple_funpar,{file_pos,File, Beg, End-1}).
-
-handle_reorder(ModName, Pos, Order)->
-    transform_with_backup(referl_tr_reorder_funpar, {ModName, Pos, Order}).
-
-handle_inline(File, Pos) ->
-    transform_with_backup(referl_tr_inline_fun, {File, Pos}).
-
-handle_funexpr(File, Pos) ->
-    transform_with_backup(referl_tr_expand_funexpr, {File, Pos}).
-
-handle_generalize(File, Beg, End, NewName) ->
-    transform_with_backup(referl_tr_gen, {File, NewName, Beg, End-1}).
-
-handle_elimvar(File, Pos) ->
-    transform_with_backup(referl_tr_elim_var, {File, Pos}).
-
-%%% ----------------------------------------------------------------------------
-%%% Renamings
-
-handle_renamemod(File, Name, Pos) ->
-    try ?TRANSFORM:do(referl_tr_rename_mod,{File, Name, Pos}) of
-        {ok, FileNodes} ->
-            FilePath = (?GRAPH:data(hd(FileNodes)))#file.path,
-            message(setbuffer, "~s", [FilePath]),
-            message(reload, "~s", [FilePath]);
-        _ ->
-            ok %%message(status, "Unsuccessful", [])
-    catch
-        throw:Msg ->
-            message(error, "Error: ~p", [Msg])
-    end.
-
-handle_renamefun(File, NewName, Pos) ->
-    transform_with_backup(referl_tr_rename_fun, {pos, {File, Pos, NewName}}).
-
-handle_renamevar(File, NewName, Pos) ->
-    transform_with_backup(referl_tr_rename_var, {File, NewName, Pos}).
-
-handle_renamerec(File, NewName, Pos) ->
-    transform_with_backup(referl_tr_rename_rec, {pos, File, Pos, NewName}).
-
-handle_renamefield(File, NewName, Pos) ->
-    transform_with_backup(referl_tr_rename_recfield, {pos, File, Pos, NewName}).
 
 %%% ----------------------------------------------------------------------------
 %%% Movings
 
 handle_funlist(File) ->
-    case ?SYNTAX:file(File) of
-        not_found ->
-            message(funlist, []),
-            message(status, "File not found (~s)", [File]);
-        {file, F} ->
-            message(funlist,
-                    [{Name, Arity} ||
-                        Fun <- ?GRAPH:path(F, [{form, {type, '==', func}},
-                                               fundef]),
-                        #func{name=Name, arity=Arity} <- [?GRAPH:data(Fun)]])
-    end.
-
-handle_movefun(Source, Target, Funs) ->
-    case ?SYNTAX:file(Source) of
-        not_found ->
-            message(status, "File not found (~s)", [Source]);
-        {file, File} ->
-            case ?GRAPH:path(File, [moddef]) of
-                [] ->
-                    message(status, "The source file is not a module", []);
-                [Mod] ->
-                    transform_with_backup(
-                        referl_tr_move_fun,
-                        {(?GRAPH:data(Mod))#module.name, Funs, Target})
-            end
-    end.
+    message(funlist,
+            [{?Fun:name(F), ?Fun:arity(F)} ||
+                F <- ?Query:exec(
+                        ?Query:seq([?File:find(File),
+                                    ?File:module(),
+                                    ?Mod:locals()]))]).
 
 handle_recordlist(File) ->
-    case ?SYNTAX:file(File) of
-        not_found ->
-            message(recordlist, []),
-            message(status, "File not found (~s)", [File]);
-        {file, F} ->
-            message(recordlist,
-                    [Name ||
-                        Record <- ?GRAPH:path(F, [record]),
-                        #record{name=Name} <- [?GRAPH:data(Record)]])
-    end.
-
-handle_moverec(Source, Target, Records) ->
-    TargetFile = 
-        case filename:pathtype(Target) of
-            absolute ->
-                Target;
-            relative ->
-                SourceDir = filename:dirname(filename:absname(Source)),
-                %%filename:absname_join(SourceDir, Target);
-                filename:absname(Target, SourceDir);
-            volumerelative ->
-                todo
-        end,
-    transform_with_backup(referl_tr_move_rec, {Source, Records, TargetFile}).
+    message(recordlist,
+            [?Rec:name(R) ||
+                R <- ?Query:exec(
+                        ?Query:seq(?File:find(File),
+                                    ?File:records()))]).
 
 %%% ============================================================================
 %%% Clustering
@@ -582,7 +474,7 @@ handle_run_cl(Opt, Alg, Create)->
 %%% Backup
 
 handle_backup() ->
-   try ?GRAPH:backup() of
+   try ?Graph:backup() of
       {ok, Name} ->
           message(status, "Done ~s", [Name]);
       _ ->
@@ -593,7 +485,7 @@ handle_backup() ->
    end.
 
 handle_clean() ->
-   try ?GRAPH:clean() of
+   try ?Graph:clean() of
       {ok, backups_deleted} ->
           message(status, "Backup storage is cleaned", []);
       _ ->
@@ -603,16 +495,30 @@ handle_clean() ->
           message(error, "Error: ~p", [Msg])
    end.
 
-handle_undo(RFile) ->
-    try ?GRAPH:undo() of
-       undo_is_ok  ->
-           {file, SFile} = ?SYNTAX:file(RFile),
-           ?FILEMAN:save_file(SFile),
-           ?GRAPH:clean(),
-           message(reload, "~s", [RFile]);
-       _ ->
-           message(status, "Need a backup to do it", [])
+handle_undo(_RFile) ->
+    %% TODO: RFile is unnecessary, clean it up
+    FilesBefore = files_with_lastmod(),
+    try ?Graph:undo() of
+        undo_is_ok  ->
+            FilesAfter = files_with_lastmod(),
+            [begin
+                 case lists:keysearch(File, 1, FilesBefore) =:= LastMod of
+                     true ->
+                         ok;
+                     false ->
+                         ?FileMan:save_file(File),
+                         message(reload, "~s", [?File:path(File)])
+                 end
+             end || {File, LastMod} <- FilesAfter],
+            ?Graph:clean();
+        _ ->
+            message(status, "Need a backup to do it", [])
     catch
-      throw:Msg ->
-           message(error, "Error: ~p", [Msg])
+        throw:Msg ->
+            message(error, "Error: ~p", [Msg])
     end.
+
+files_with_lastmod() ->
+    [{File, LastMod}
+     || File <- ?Query:exec([file]),
+        LastMod <- [(?ESG:data(File))#file.lastmod]].

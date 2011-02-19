@@ -45,7 +45,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_var).
--vsn("$Rev: 1978 $").
+-vsn("$Rev: 2170 $").
 -behaviour(referl_esg).
 
 %% Callback exports
@@ -76,15 +76,15 @@ insert(_,_,_,_, #expr{kind=variable, value="_"}) ->
 
 insert(_,_,_,Expr, #expr{kind=variable, type=pattern, value=Name}) ->
     ?TRACE("----------------------ins------------------------"),
-    [Scope] = ?GRAPH:path(Expr, [sup, {visib, back}, scope]),
+    [Scope] = ?Graph:path(Expr, [sup, {visib, back}, scope]),
     scope(Scope, Name, visible_var(Scope, Name), add);
 
 insert(_,_,_,Expr, #expr{kind=variable, value=Name}) ->
     ?TRACE("----------------------ins------------------------"),
-    case ?GRAPH:path(Expr, [varref]) of
+    case ?Graph:path(Expr, [varref]) of
         [_Var] -> ok;
         [] ->
-            case ?GRAPH:path(Expr, [sup,
+            case ?Graph:path(Expr, [sup,
                                     {visib, back},
                                     {varvis, {name,'==',Name}}]) of
                 [] ->
@@ -94,7 +94,7 @@ insert(_,_,_,Expr, #expr{kind=variable, value=Name}) ->
                     case visible(Expr, Var) of
                         true  ->
                             ?TRACE(["visible",?VAR(Expr),?VAR(Name)]),
-                            ?GRAPH:mklink(Expr, varref, Var);
+                            ?Graph:mklink(Expr, varref, Var);
                         false ->
                             ?TRACE(["not visible",?VAR(Expr),?VAR(Name)]),
                             ok
@@ -104,12 +104,12 @@ insert(_,_,_,Expr, #expr{kind=variable, value=Name}) ->
 
 insert(Expr, #expr{}, _, Clause, #clause{}) ->
     %% TODO: branch insertion may hide variables
-    Vars = ?GRAPH:path(Expr, [sup, {visib, back}, varvis]),
-    [?GRAPH:mklink(Clause, varvis, Var) ||
+    Vars = ?Graph:path(Expr, [sup, {visib, back}, varvis]),
+    [?Graph:mklink(Clause, varvis, Var) ||
         Var <- Vars,
-        [] == ?GRAPH:path(
+        [] == ?Graph:path(
                  Clause,
-                 [{varvis, {name,'==', (?GRAPH:data(Var))#variable.name}}]),
+                 [{varvis, {name,'==', (?Graph:data(Var))#variable.name}}]),
         visible(Expr, Var)];
 
 insert(_,_,_,_,_) ->
@@ -117,7 +117,7 @@ insert(_,_,_,_,_) ->
 
 %% @private
 remove(_,_,_,Expr, #expr{kind=variable, type=Type, value=Name}) ->
-    case {?GRAPH:path(Expr, [varbind]), ?GRAPH:path(Expr, [varref])} of
+    case {?Graph:path(Expr, [varbind]), ?Graph:path(Expr, [varref])} of
         {[B],[]} -> unlink_var(Expr, varbind, B);
         {[],[R]} -> unlink_var(Expr, varref, R);
         {[],[]} -> ok
@@ -125,7 +125,7 @@ remove(_,_,_,Expr, #expr{kind=variable, type=Type, value=Name}) ->
     if
         Type == pattern ->
             ?TRACE("-----------------------rem-----------------------"),
-            [Scope] = ?GRAPH:path(Expr, [sup, {visib, back}, scope]),
+            [Scope] = ?Graph:path(Expr, [sup, {visib, back}, scope]),
             scope(Scope, Name, visible_var(Scope, Name), del);
         true ->
             ok
@@ -133,10 +133,10 @@ remove(_,_,_,Expr, #expr{kind=variable, type=Type, value=Name}) ->
 
 remove(_, _, _, Clause, #clause{}) ->
     %% TODO: branch removal may bind variables
-    [?GRAPH:rmlink(Clause, varvis, Var) || Var <- ?GRAPH:path(Clause,[varvis])],
-    [?GRAPH:rmlink(Var, varintro, Top) ||
-        Top <- ?GRAPH:path(Clause, [visib]),
-        Var <- ?GRAPH:path(Top,[{varintro, back}])];
+    [?Graph:rmlink(Clause, varvis, Var) || Var <- ?Graph:path(Clause,[varvis])],
+    [?Graph:rmlink(Var, varintro, Top) ||
+        Top <- ?Graph:path(Clause, [visib]),
+        Var <- ?Graph:path(Top,[{varintro, back}])];
 
 remove(_,_,_,_,_) ->
     ok.
@@ -145,23 +145,23 @@ remove(_,_,_,_,_) ->
 %%% Variable object handling
 
 variable(Expr, Name) ->
-    [Scope] = ?GRAPH:path(Expr, [sup, {visib, back}, scope]),
-    case ?GRAPH:path(Scope, [{vardef, {name,'==',Name}}]) of
+    [Scope] = ?Graph:path(Expr, [sup, {visib, back}, scope]),
+    case ?Graph:path(Scope, [{vardef, {name,'==',Name}}]) of
         [Var] -> Var; 
         [] ->
-            Var = ?GRAPH:create(#variable{name=Name}),
-            ?GRAPH:mklink(Scope, vardef, Var),
+            Var = ?Graph:create(#variable{name=Name}),
+            ?Graph:mklink(Scope, vardef, Var),
             Var
     end.
 
 
 unlink_var(Expr, Link, Var) ->
-    ?GRAPH:rmlink(Expr, Link, Var),
+    ?Graph:rmlink(Expr, Link, Var),
     unuse(Var).
 
 unuse(Var) ->
-    case ?GRAPH:path(Var,[{varref,back}])++?GRAPH:path(Var,[{varbind,back}]) of
-        [] -> ?GRAPH:delete(Var);
+    case ?Graph:path(Var,[{varref,back}])++?Graph:path(Var,[{varbind,back}]) of
+        [] -> ?Graph:delete(Var);
         _  -> ok
     end.
 
@@ -170,10 +170,10 @@ unuse(Var) ->
 %%% Visibility-related queries
 
 visible_var(Clause, Name) ->
-    case ?GRAPH:path(Clause, [{clause, back}, sup]) of
+    case ?Graph:path(Clause, [{clause, back}, sup]) of
         [] -> undef; % top-level function clause
         [Top] ->
-            case ?GRAPH:path(Top, [{visib, back}, {varvis,{name,'==',Name}}]) of
+            case ?Graph:path(Top, [{visib, back}, {varvis,{name,'==',Name}}]) of
                 [] -> undef; % variable not present at all
                 [Var] ->
                     case visible(Top, Var) of
@@ -184,12 +184,12 @@ visible_var(Clause, Name) ->
     end.
 
 visible(Expr, Var) ->
-    [Top] = ?GRAPH:path(Expr, [sup]),
-    [Clause] = ?GRAPH:path(Top, [{visib, back}]),
-    case ?GRAPH:path(Clause, [visib, {intersect, Var, varintro}]) of
+    [Top] = ?Graph:path(Expr, [sup]),
+    [Clause] = ?Graph:path(Top, [{visib, back}]),
+    case ?Graph:path(Clause, [visib, {intersect, Var, varintro}]) of
         [Intro] ->
-            ?GRAPH:index(Clause, visib, Intro) <
-                ?GRAPH:index(Clause, visib, Top);
+            ?Graph:index(Clause, visib, Intro) <
+                ?Graph:index(Clause, visib, Top);
         [] -> true
     end.
 
@@ -200,7 +200,7 @@ visible(Expr, Var) ->
 
 %% Hide variable when it is bound by a pattern of the scope clause
 scope(Scope, Name, Var, Mode) ->
-    Shd = ?GRAPH:path(Scope, shadow_path(Mode, Name)),
+    Shd = ?Graph:path(Scope, shadow_path(Mode, Name)),
     ?TRACE(["scope", ?VAR(Scope), ?VAR(Name), ?VAR(Mode), ?VAR(Shd)]),
     case Shd of
         [] -> clause(Scope, Name, Var, Mode);
@@ -220,33 +220,33 @@ shadow_path(del, Name) ->
 %% non-inherited variable.
 clause(Clause, Name, Var, Mode) ->
     ?TRACE(["clause", ?VAR(Clause), ?VAR(Var)]),
-    case ?GRAPH:path(Clause, [{varvis, {name, '==', Name}}]) of
+    case ?Graph:path(Clause, [{varvis, {name, '==', Name}}]) of
         [] when is_tuple(Var), Mode /= del ->
             %% `Mode == del' is not possible in theory (no new inheritance is
             %% possible when a variable binding is removed), the condition is
             %% just for safety.
-            ?GRAPH:mklink(Clause, varvis, Var);
+            ?Graph:mklink(Clause, varvis, Var);
         []    -> ok;
         [Var] -> ok;
         [OV]  ->
             ?TRACE(["  clear", ?VAR(OV)]),
-            ?GRAPH:rmlink(Clause, varvis, OV),
+            ?Graph:rmlink(Clause, varvis, OV),
             if
                 is_tuple(Var) ->
-                    ?GRAPH:mklink(Clause, varvis, Var);
+                    ?Graph:mklink(Clause, varvis, Var);
                 true -> ok
             end
     end,
     lists:foldl(
       fun (Expr, V) -> topexpr(Clause, Expr, Name, V, Mode) end,
       Var,
-      ?GRAPH:path(Clause, [visib])).
+      ?Graph:path(Clause, [visib])).
 
 %% Process subexpressions; add varintro+varvis for variable introduced here
 topexpr(Clause, Top, Name, Var, Mode) ->
     ?TRACE(["topexpr", ?VAR(Top), ?VAR(Var)]),
     Vars = [expr(Expr, Name, Var, Mode) ||
-               Expr <- ?GRAPH:path(Top, [{sup, back}])],
+               Expr <- ?Graph:path(Top, [{sup, back}])],
     [NewVar | _] = lists:sort(fun (A,B) -> ord(A) < ord(B) end, Vars),
     ?TRACE(["after top", ?VAR(NewVar)]),
     if
@@ -265,26 +265,26 @@ ord(_)                  -> 4.
 %% called when turning a reference into a binding.
 intro(Clause, Top, Var, _Mode) ->
     ?TRACE(["intro", ?VAR(Clause), ?VAR(Top)]),
-    ?GRAPH:mklink(Clause, varvis, Var),
-    case ?GRAPH:path(Clause, [visib, {intersect, Var, varintro}]) of
+    ?Graph:mklink(Clause, varvis, Var),
+    case ?Graph:path(Clause, [visib, {intersect, Var, varintro}]) of
         [Top] -> ok;
         [Intro] ->
-            ?GRAPH:rmlink(Var, varintro, Intro),
-            ?GRAPH:mklink(Var, varintro, Top);
+            ?Graph:rmlink(Var, varintro, Intro),
+            ?Graph:mklink(Var, varintro, Top);
         [] ->
-            ?GRAPH:mklink(Var, varintro, Top)
+            ?Graph:mklink(Var, varintro, Top)
     end.
 
 %% Delegate based on expression structure
 expr(Expr, Name, Var, Mode) ->
-    case ?GRAPH:path(Expr, [clause]) of
+    case ?Graph:path(Expr, [clause]) of
         [] -> simple(Expr, Name, Var, Mode);
         Cls -> compound(Cls, Name, Var, Mode)
     end.
 
 %% Handle variable expressions
 simple(Expr, Name, Var, Mode) ->
-    case ?GRAPH:data(Expr) of
+    case ?Graph:data(Expr) of
         #expr{kind=variable, type=Type, value=Name} ->
             ?TRACE(["varexpr", ?VAR(Expr), ?VAR(Type), ?VAR(Var)]),
             varexpr(Expr, Name, Mode, Type, Var);
@@ -309,7 +309,7 @@ varexpr(Expr, _Name, Mode, _Type, Var) when is_tuple(Var) ->
     update(Expr, varref, Var, Mode);
 
 varexpr(Expr, _Name, _Mode, _Type, Var) when Var == undef; Var == hidden ->
-    case {?GRAPH:path(Expr, [varbind]), ?GRAPH:path(Expr, [varref])} of
+    case {?Graph:path(Expr, [varbind]), ?Graph:path(Expr, [varref])} of
         {[B], []} -> unlink_var(Expr, varbind, B);
         {[], [R]} -> unlink_var(Expr, varref, R);
         {[], []} -> ok
@@ -320,7 +320,7 @@ varexpr(Expr, _Name, _Mode, _Type, Var) when Var == undef; Var == hidden ->
 %% Modify expression links to have a link with tag `Link' to `Var'.
 update(Expr, Link, Var, Mode) ->
     ?TRACE(["update", ?VAR(Expr), ?VAR(Link), ?VAR(Var)]),
-    case {?GRAPH:path(Expr, [varbind]), ?GRAPH:path(Expr, [varref])} of
+    case {?Graph:path(Expr, [varbind]), ?Graph:path(Expr, [varref])} of
         %% In `del' mode, no new links are created -- expressions without
         %% links are probably not in the syntax tree
         {[], []} when Mode == add -> varlink(Expr, Link, Var);
@@ -342,7 +342,7 @@ update(Expr, Link, Var, Mode) ->
     end.
 
 varlink(Expr, Link, Var) when is_tuple(Var) ->
-    ?GRAPH:mklink(Expr, Link, Var),
+    ?Graph:mklink(Expr, Link, Var),
     Var;
 varlink(_Expr, _Link, Var) when Var == undef; Var == hidden ->
     Var.
@@ -360,7 +360,7 @@ compound(Clauses, Name, Var, Mode) ->
               ({Type, Cl}, V) -> {{Type, clause(Cl, Name, V, Mode)}, V}
           end,
           Var,
-          [{(?GRAPH:data(Cl))#clause.type, Cl} || Cl <- Clauses]),
+          [{(?Graph:data(Cl))#clause.type, Cl} || Cl <- Clauses]),
     ?TRACE(["compound", ?VAR(Results), ?VAR(NewVar)]),
     %% Branches introduce variable when all branches introduce it
     if

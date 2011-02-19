@@ -52,11 +52,8 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_rec).
--vsn("$Rev: 1950 $").
+-vsn("$Rev: 2561 $").
 -behaviour(referl_esg).
-
-%% Interface exports
--export([record/1, field/1]).
 
 %% Callback exports
 -export([init/0, insert/5, remove/5]).
@@ -64,12 +61,7 @@
 -include("refactorerl.hrl").
 
 %% @private
-record(Name) ->
-    [{record, {name, '==', Name}}].
-
-%% @private
-field(Name) ->
-    [{field, {name, '==', Name}}].
+record(Name) -> [{record, {name, '==', Name}}].
 
 %% @private
 init() ->
@@ -88,56 +80,182 @@ init() ->
 %%% ----------------------------------------------------------------------------
 %%% Insert
 
+%% Record definition
 
 %% @private
 insert(File, #file{}, _, Record, #form{type=attrib, tag=record}) ->
-    #expr{value=Name} = ?GRAPH:data(hd(?GRAPH:path(Record, [{attr, 1}]))),
-    case ?GRAPH:path(File, record(Name)) of
-        [] -> update_field_defs(Record, record_object(File, Name, Record));
-        _  -> record_object(File, Name, Record)
+    #expr{value=Name} = ?Graph:data(hd(?Graph:path(Record, [{attr, 1}]))),
+    record_def(File, Record, Name);
+
+%% Record name in definition
+
+insert(Form, #form{type=attrib, tag=record}, attr,
+       _, #expr{kind=atom, value=Name}) ->
+
+    [File] = ?Graph:path(Form, [{form, back}]),
+    case ?Graph:path(Form, [recdef]) of
+        [] ->
+            record_def(File, Form, Name);
+        [Record] ->
+            case ?Rec:name(Record) of
+                Name ->
+                    ok;
+                _OldName ->
+                    Fields = ?Graph:path(Record, [field]),
+                    [remove_fieldlink(Def, fielddef, Field)
+                     || Field <- Fields,
+                        Def <- ?Graph:path(Field, [{fielddef,back}])],
+                    remove_reclink(Form, recdef, Record),
+                    record_def(File, Form, Name)
+            end
     end;
+
+%% Complete record expression
 
 insert(_,_,_, E, #expr{kind=Kind})
   when Kind == record_expr orelse Kind == record_index ->
-    [N | T] = ?GRAPH:path(E, [sub]),
-    #expr{kind=atom, value=Name} = ?GRAPH:data(N),
-    [File]=?GRAPH:path(E,[sup,{visib,back},scope,functx,modctx,{moddef,back}]),
-    case ?GRAPH:path(File, [incl] ++ record(Name)) of
-        [] ->
-            Record = record_object(File, Name);
-        [Record] ->
-            ok
-    end,
-    ?GRAPH:mklink(E, recref, Record),
+    [N | T] = ?Graph:path(E, [sub]),
+    Record = record_reference(E, N),
     field_references(Kind, Record, T);
 
 insert(_,_,_, E, #expr{kind=Kind})
   when Kind == record_update orelse Kind == record_access ->
-    [_, N | T] = ?GRAPH:path(E, [sub]),
-    #expr{kind=atom, value=Name} = ?GRAPH:data(N),
-    [File]=?GRAPH:path(E,[sup,{visib,back},scope,functx,modctx,{moddef,back}]),
-    case ?GRAPH:path(File, [incl] ++ record(Name)) of
-        [] ->
-            Record = record_object(File, Name);
-        [Record] ->
-            ok
-    end,
-    ?GRAPH:mklink(E, recref, Record),
+    [_, N | T] = ?Graph:path(E, [sub]),
+    Record = record_reference(E, N),
     field_references(Kind, Record, T);
+
+%% Record name in record expression
+%% Record field index/access
+
+insert(RecordExpr, #expr{kind=Kind}, sub, E, #expr{value=Name})
+  when Kind == record_expr orelse Kind == record_index orelse
+       Kind == record_update orelse Kind == record_access ->
+
+    NameIndex = case Kind of
+                    record_expr   -> 1; record_index  -> 1;
+                    record_update -> 2; record_access -> 2
+                end,
+    FieldIndex = case Kind of
+                     record_expr   -> 0; record_index  -> 2;
+                     record_update -> 0; record_access -> 3
+                end,
+    case ?Syn:index(RecordExpr, sub, E) of
+        NameIndex ->
+            case ?Graph:path(RecordExpr, [recref]) of
+                [] ->
+                    record_reference(RecordExpr, E);
+                [Record] ->
+                    case ?Rec:name(Record) of
+                        Name ->
+                            ok;
+                        _ ->
+                            Fields = ?Graph:path(Record, [field]),
+                            [remove_fieldlink(Ref, fieldref, Field)
+                             || Field <- Fields,
+                                Ref <- ?Graph:path(Field, [{fieldref,back}])],
+                            remove_reclink(RecordExpr, recref, Record),
+                            record_reference(RecordExpr, E)
+                    end
+            end;
+        FieldIndex ->
+            [Record] = ?Graph:path(RecordExpr, [recref]),
+            case ?Graph:path(E, [fieldref]) of
+                [] ->
+                    field_ref(E, Record, Name);
+                [Field] ->
+                    case (?Graph:data(Field))#field.name of
+                            Name ->
+                            ok;
+                        _ ->
+                            remove_fieldlink(E, fieldref, Field),
+                            field_ref(E, Record, Name)
+                    end
+            end;
+        _ ->
+            ok
+    end;
+
+%% Name in record field expression
+%% (record definition, record expression, record update)
+
+insert(FieldExpr, #expr{kind=record_field}, sub, E, #expr{value=Name}) ->
+    [Parent] = ?Graph:path(FieldExpr, [{sub, back}]),
+    Index = ?Syn:index(FieldExpr, sub, E),
+    case (?Graph:data(Parent))#expr.kind of
+        tuple ->
+            [Record] = ?Graph:path(FieldExpr, [sup, {attr, back}, recdef]),
+            case Index of
+                1 ->
+                    case ?Graph:path(E, [fielddef]) of
+                        [] ->
+                            field_object(Record, Name, E);
+                        [Field] ->
+                            case (?Graph:data(Field))#field.name of
+                                Name ->
+                                    ok;
+                                _ ->
+                                    remove_fieldlink(E, fielddef, Field),
+                                    %%[?Graph:rmlink(Ref, fieldref, Field) ||
+                                    %%    Ref <- ?Graph:path(Field, [{fieldref,back}])],
+                                    field_object(Record, Name, E)
+                            end
+                    end;
+                _ ->
+                    ok
+            end;
+        _ ->
+            [Record] = ?Graph:path(FieldExpr, [{sub, back}, recref]),
+            case Index of
+                1 ->
+                    case ?Graph:path(E, [fieldref]) of
+                        [] ->
+                            field_ref(E, Record, Name);
+                        [Field] ->
+                            case (?Graph:data(Field))#field.name of
+                                Name ->
+                                    ok;
+                                _ ->
+                                    remove_fieldlink(E, fieldref, Field),
+                                    field_ref(E, Record, Name)
+                            end
+                    end;
+                _ ->
+                    ok
+            end
+    end;
 
 insert(_,_,_,_,_) ->
     ok.
 
+record_def(File, Form, Name) ->
+    case ?Graph:path(File, record(Name)) of
+        [] ->
+            update_field_defs(Form, record_object(File, Name, Form));
+        _  ->
+            record_object(File, Name, Form)
+    end.
+
+record_reference(RecordExpr, NameExpr) ->
+    #expr{kind=atom, value=Name} = ?Graph:data(NameExpr),
+    [File] = ?Syn:get_file(RecordExpr),
+    Record = record_object(File, Name),
+    ?Graph:mklink(RecordExpr, recref, Record),
+    Record.
+
 update_field_defs(Form, Record) ->
-    [update_field_def(Def, ?GRAPH:data(Def), Record) ||
-        Def <- ?GRAPH:path(Form, [{attr, 2}, sub])].
+    [update_field_def(Def, ?Graph:data(Def), Record) ||
+        Def <- ?Graph:path(Form, [{attr, 2}, sub])].
+
+update_field_def(Node, #expr{kind=record_field}, Record) ->
+    [Left, _] = ?Graph:path(Node, [sub]),
+    #expr{value=Name} = ?Graph:data(Left),
+    field_object(Record, Name, Left);
 
 update_field_def(Node, #expr{kind=match_expr}, Record) ->
-    [Left, Right] = ?GRAPH:path(Node, [sub]),
-    D = ?GRAPH:data(Left),
-    #expr{value=Name} = D,
-    ?GRAPH:update(Left, D#expr{type=expr}),
-    ?GRAPH:update(Node, (?GRAPH:data(Right))#expr{kind=record_field}),
+    [Left, Right] = ?Graph:path(Node, [sub]),
+    #expr{value=Name} = D = ?Graph:data(Left),
+    ?Graph:update(Left, D#expr{type=expr}),
+    ?Graph:update(Node, (?Graph:data(Right))#expr{kind=record_field}),
     field_object(Record, Name, Left);
 
 update_field_def(Node, #expr{kind=atom, value=Name}, Record) ->
@@ -145,42 +263,56 @@ update_field_def(Node, #expr{kind=atom, value=Name}, Record) ->
 
 field_references(Kind, Record, T)
   when Kind == record_update orelse Kind == record_expr ->
-    FieldRefs = [hd(?GRAPH:path(RecField, [{sub, 1}])) || RecField <- T],
+    FieldRefs = [FieldName || RecField <- T,
+                              FieldName <- ?Graph:path(RecField, [{sub, 1}]),
+                              #expr{kind=atom} <- [?Graph:data(FieldName)]],
     lists:foreach(
       fun(FRef) ->
-              #expr{kind=atom, value=FieldName} = ?GRAPH:data(FRef),
-              Field = field_object(Record, FieldName),
-              ?GRAPH:mklink(FRef, fieldref, Field)
+              #expr{kind=atom, value=FieldName} = ?Graph:data(FRef),
+              field_ref(FRef, Record, FieldName)
+              %% TODO: links to wildcard field refs
       end,
       FieldRefs);
 
 field_references(Kind, Record, T)
   when Kind == record_index orelse Kind == record_access ->
     [F] = T,
-    #expr{kind=atom, value=FieldName} = ?GRAPH:data(F),
-    Field = field_object(Record, FieldName),
-    ?GRAPH:mklink(F, fieldref, Field).
+    #expr{kind=atom, value=FieldName} = ?Graph:data(F),
+    field_ref(F, Record, FieldName).
 
+field_ref(Expr, Record, FieldName) ->
+    Field = field_object(Record, FieldName),
+    ?Graph:mklink(Expr, fieldref, Field).
 
 %%% ----------------------------------------------------------------------------
 %%% Remove
 
 
 %% @private
-remove(_, #file{}, _, Record, #form{type=attrib, tag=record}) ->
-    case ?GRAPH:path(Record, [recdef]) of
+remove(_, #file{}, _, Form, #form{type=attrib, tag=record}) ->
+    case ?Graph:path(Form, [recdef]) of
         [RecObj] ->
-            remove_reclink(Record, recdef, RecObj);
+            Fields = ?Graph:path(RecObj, [field]),
+            [remove_fieldlink(Def, fielddef, Field)
+             || Field <- Fields,
+                Def <- ?Graph:path(Field, [{fielddef,back}])],
+            remove_reclink(Form, recdef, RecObj);            
         D ->
-            error_logger:warning_msg("Bad recdef for ~p: ~p~n", [Record, D])
+            error_logger:warning_msg("Bad recdef for ~p: ~p~n", [Form, D])
     end;
 
 remove(_, _, _, Expr, #expr{kind=Kind})
   when Kind == record_expr orelse Kind == record_index orelse
        Kind == record_update orelse Kind == record_access ->
-    case ?GRAPH:path(Expr, [recref]) of
-        [Record] ->
-            remove_reclink(Expr, recref, Record);
+    case ?Graph:path(Expr, [recref]) of
+        [RecObj] ->
+            Fields = ?Graph:path(RecObj, [field]),
+            Subs = ?Graph:path(Expr, [sub]) ++ ?Graph:path(Expr, [sub, sub]),
+            [remove_fieldlink(Ref, fieldref, Field)
+             || Field <- Fields,
+                Ref <- ?Graph:path(Field, [{fieldref,back}]),
+                lists:member(Ref, Subs)],
+            remove_reclink(Expr, recref, RecObj);
         [] ->
             ok
     end;
@@ -188,29 +320,48 @@ remove(_, _, _, Expr, #expr{kind=Kind})
 remove(_,_,_,_,_) ->
     ok.
 
-remove_fields(Record) ->
-    Fields = ?GRAPH:path(Record, [field]),
-    [[?GRAPH:rmlink(Ref, fieldref, Field) ||
-         Ref <- ?GRAPH:path(Field, [{fieldref,back}])] ||
-        Field <- Fields],
-    [?GRAPH:rmlink(Record, field, Field) || Field <- Fields],
-    [?GRAPH:delete(Field) || Field <- Fields].
-
 remove_reclink(From, Tag, Record) ->
-    ?GRAPH:rmlink(From, Tag, Record),
+    ?Graph:rmlink(From, Tag, Record),
     Links =
-        ?GRAPH:path(Record, [{recdef, back}]) ++
-        ?GRAPH:path(Record, [{recref, back}]),
+        ?Graph:path(Record, [{recdef, back}]) ++
+        ?Graph:path(Record, [{recref, back}]),
     case Links of
         [] ->
-            case ?GRAPH:path(Record, [{record, back}]) of
+            case ?Graph:path(Record, [{record, back}]) of
                 [File] ->
-                    remove_fields(Record),
-                    ?GRAPH:rmlink(File, record, Record),
-                    ?GRAPH:delete(Record);
+                    destroy_record(File, Record);
                 M ->
                     error_logger:warning_msg("Bad record link to ~p: ~p~n",
                                              [Record, M])
+            end;
+        _ -> ok
+    end.
+
+destroy_record(File, Record) ->
+    Fields = ?Graph:path(Record, [field]),
+    [remove_fieldlink(Def, fielddef, Field)
+     || Field <- Fields,
+        Def <- ?Graph:path(Field, [{fielddef,back}])],
+    [remove_fieldlink(Ref, fieldref, Field)
+     || Field <- Fields,
+        Ref <- ?Graph:path(Field, [{fieldref,back}])],
+    ?Graph:rmlink(File, record, Record),
+    ?Graph:delete(Record).
+
+remove_fieldlink(From, Tag, Field) ->
+    ?Graph:rmlink(From, Tag, Field),
+    Links =
+        ?Graph:path(Field, [{fielddef, back}]) ++
+        ?Graph:path(Field, [{fieldref, back}]),
+    case Links of
+        [] ->
+            case ?Graph:path(Field, [{field, back}]) of
+                [Record] ->
+                    ?Graph:rmlink(Record, field, Field),
+                    ?Graph:delete(Field);
+                M ->
+                    error_logger:warning_msg("Bad field link to ~p: ~p~n",
+                                             [Field, M])
             end;
         _ -> ok
     end.
@@ -224,18 +375,26 @@ record_object(File, Name) ->
     record_object(File, Name, undefined).
 
 record_object(File, Name, Def) ->
-    case ?GRAPH:path(File, [incl, {record, {name, '==', Name}}]) of
+    case ?Graph:path(File, [incl, {record, {name, '==', Name}}]) of
         [Record] ->
             ok;
         [] ->
-            Record = ?GRAPH:create(#record{name=Name}),
-            ?GRAPH:mklink(File, record, Record)
+            Record =
+                case ?Graph:path(File, [{incl, back}, {record, {name, '==', Name}}]) of
+                    [R] ->
+                        [FileOrigin] = ?Graph:path(R, [{record, back}]),
+                        ?Graph:rmlink(FileOrigin, record, R),
+                        R;
+                    [] ->
+                        ?Graph:create(#record{name=Name})
+                end,
+            ?Graph:mklink(File, record, Record)
     end,
     if
         Def =:= undefined ->
             ok;
         true ->
-            ?GRAPH:mklink(Def, recdef, Record)
+            ?Graph:mklink(Def, recdef, Record)
     end,
     Record.
 
@@ -243,17 +402,17 @@ field_object(Record, Name) ->
     field_object(Record, Name, undefined).
 
 field_object(Record, Name, Def) ->
-    case ?GRAPH:path(Record, [{field, {name, '==', Name}}]) of
+    case ?Graph:path(Record, [{field, {name, '==', Name}}]) of
         [Field] ->
             ok;
         [] ->
-            Field = ?GRAPH:create(#field{name=Name}),
-            ?GRAPH:mklink(Record, field, Field)
+            Field = ?Graph:create(#field{name=Name}),
+            ?Graph:mklink(Record, field, Field)
     end,
     if
         Def =:= undefined ->
             ok;
         true ->
-            ?GRAPH:mklink(Def, fielddef, Field)
+            ?Graph:mklink(Def, fielddef, Field)
     end,
     Field.

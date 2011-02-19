@@ -57,11 +57,11 @@ Authors: Tamas Nagy
 
           <!-- One production rule, generates a graph node -->
           <!-- The first attrib is mandatory, it shows the type or kind -->
-          <!ELEMENT rule (attrib,(symbol|token|repeat|optional)+) >
+          <!ELEMENT rule (attrib+,(symbol|token|repeat|optional)+) >
 
           <!-- The body is optional -->
           <!-- Optionals have to begin with a token or a repeat. -->
-          <!ELEMENT optional ((token|repeat),(symbol|token|repeat|optional)*) >
+          <!ELEMENT optional ((symbol|token|repeat|optional)+) >
 
           <!-- Repetitions of the symbol with interspersed tokens -->
           <!ELEMENT repeat EMPTY>
@@ -160,6 +160,7 @@ Authors: Tamas Nagy
     <ruleset head="Form">
       <chain-rule name="Attribute" />
       <chain-rule name="Function" />
+      <chain-rule name="EmptyForm" />
     </ruleset>
 
     <ruleset head="Attribute">
@@ -181,6 +182,16 @@ Authors: Tamas Nagy
         <repeat symbol="FunClause" link="funcl"
                 separator="semicol"/>
         <token type="stop"/>
+      </rule>
+    </ruleset>
+
+    <!-- Note that `eol' tokens are removed during whitespace processing,
+         only an empty file contains an `eol' token -->
+    <ruleset head="EmptyForm">
+      <rule>
+        <attrib name="type" value="lex" />
+        <attrib name="tag" value="empty" />
+        <token type="eol" />
       </rule>
     </ruleset>
   </rule-class>
@@ -549,6 +560,13 @@ Authors: Tamas Nagy
         <token type="equal"/>
         <symbol name="Expr" link="sub"/>
       </rule>
+      <!-- This second rule supports `#rec{ _ = '_' }' syntax -->
+      <rule>
+        <attrib name="kind" value="record_field"/>
+        <symbol name="Variable" link="sub"/>
+        <token type="equal"/>
+        <symbol name="Expr" link="sub"/>
+      </rule>
     </ruleset>
 
     <!-- Module qualifier -->
@@ -619,26 +637,33 @@ Authors: Tamas Nagy
         <token type="float" attr="value"/>
       </rule>
 
+      <chain-rule name="String"/>
+    </ruleset>
+
+    <ruleset head="String">
       <rule>
         <attrib name="kind" value="string"/>
         <token type="string" attr="value"/>
+      </rule>
+
+      <rule>
+        <attrib name="kind" value="mstring"/>
+        <token type="string" attr="value"/>
+        <symbol name="String" link="sub"/>
       </rule>
     </ruleset>
 
     <!-- List skeleton -->
     <ruleset head="List_skel">
       <rule>
-        <attrib name="kind" value="nil"/>
-        <token type="op_bracket"/>
-        <token type="cl_bracket"/>
-      </rule>
-      <rule>
         <attrib name="kind" value="cons"/>
         <token type="op_bracket"/>
-        <symbol name="List_head" link="sub"/>
         <optional>
-          <token type="vline"/>
-          <symbol name="Expr" link="sub"/>
+          <symbol name="List_head" link="sub"/>
+          <optional>
+            <token type="vline"/>
+            <symbol name="Expr" link="sub"/>
+          </optional>
         </optional>
         <token type="cl_bracket"/>
       </rule>
@@ -852,16 +877,22 @@ Authors: Tamas Nagy
       <rule>
         <attrib name="kind" value="implicit_fun"/>
         <token type="fun"/>
-        <symbol name="Atom" link="sub" />
-        <optional>
-          <token type="colon"/>
-          <symbol name="Atom" link="sub"/>
-        </optional>
+        <symbol name="Module_qualifier" link="sub" />
         <token type="slash"/>
         <symbol name="Integer" link="sub"/>
       </rule>
     </ruleset>
-      
+
+    <ruleset head="Module_qualifier">
+      <chain-rule name="Atom" />
+      <rule>
+        <attrib name="kind" value="infix_expr"/>
+        <symbol name="Atom" link="sub" />
+        <token type="colon" attr="value"/>
+        <symbol name="Atom" link="sub"/>
+      </rule>
+    </ruleset>
+
     <!-- try -->
     <ruleset head="Try_expr">
       <rule>

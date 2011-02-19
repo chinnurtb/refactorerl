@@ -24,103 +24,46 @@
 %%% renames the selected variable when there are no name clashes with
 %%% the new name.
 %%%
+
+%%% Conditions of applicability
+%%% <ul>
+%%% <li>The new variable name does not exist in the scope of the variable,
+%%%   either as a defined variable or as a visible
+%%%   variable.</li>
+%%% </ul>
+
+%%% Rules of the transformation
+%%% <ol>
+%%% <li>Replace every occurrence of the variable with the new name.  In
+%%%   case of variable shadowing, other variables with the same name are not
+%%%   modified.</li>
+%%% </ol>
+
 %%% @author Daniel Drienyovszky <monogram@inf.elte.hu>
 
 -module(referl_tr_rename_var).
--vsn("$Rev: 1965 $").
+-vsn("$Rev: 2613 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/3]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst, {filename, newname, pos,
-                file, var, refs}).
-
-%%% ============================================================================
-%%% Errors
-
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), string(), integer()) -> ok
-%%
-%% @doc Rename the variable on the selected position `Pos' and its occurences.
-do(FileName, NewName, Pos) ->
-     ?TRANSFORM:do(?MODULE,{FileName, NewName, Pos}).
+-export([prepare/1]).
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FileName, NewName, Pos}) ->
-    #refst{ filename = FileName,
-            newname = NewName,
-            pos = Pos }.
-
-%% @private
-steps() ->
-    [?MISC:check_varname(#refst.newname),
-     ?MISC:get_file_node(#refst.filename, #refst.file),
-     fun var_node/1,
-     fun check_name_clash/1,
-     fun var_refs/1].
-
-%% @private
-transform(#refst{refs = Refs, newname = NewName, file = File}) ->
-    Update = fun (N = #variable{}) ->
-                     N#variable{name = NewName};
-                 (N = #expr{}) ->
-                     N#expr{value = NewName};
-                 (N = #lex{data = Data}) ->
-                     N#lex{data = Data#token{value = NewName, text = NewName}}
-             end,
-    [?ESG:update(Node, Update(?ESG:data(Node))) || Node <- Refs],
-    {[File],ok}.
-
-%%% ============================================================================
-%%% Implementation
-
-var_node(St = #refst{file = File, pos = Pos}) ->
-    Token = ?LEX:get_token(File, Pos),
-    [{_,Expr}] = ?ESG:parent(Token),
-    case ?ESG:data(Expr) of
-        #expr{kind = variable} ->
-            [Var] = ?ESG:path(Expr, [varref]) ++ ?ESG:path(Expr, [varbind]),
-            St#refst{var = Var};
-        _ ->
-            throw("that's not a variable")
+prepare(Args) ->
+    Var    = ?Args:variable(Args),
+    Name   = ?Args:varname(Args),
+    Scopes = ?Query:exec([Var], ?Var:scopes()),
+    Occs   = ?Query:exec([Var], ?Var:occurrences()),
+    lists:foreach(fun (O) -> check_name_clash(Name, O) end, Scopes),
+    fun () ->
+            [?Syn:replace(VarExpr, {elex,1}, [Name]) || VarExpr <- Occs],
+            ?Transform:touch(hd(Occs))
     end.
 
-var_refs(St = #refst{var = Var}) ->
-    Exprs = ?ESG:path(Var, [{varref,  back}]) ++
-            ?ESG:path(Var, [{varbind, back}]),
-    Tokens = [Token || Expr <- Exprs, Token <- ?ESG:path(Expr, [elex])],
-    St#refst{refs = [Var] ++ Exprs ++ Tokens}.
-
-%%% ----------------------------------------------------------------------------
-%%% Checks
-
-check_name_clash(#refst{var = Var, newname = NewName}) ->
-    Refs = ?ESG:path(Var, [{varref, back}]) ++ 
-           ?ESG:path(Var, [{varbind, back}]),
-    lists:foreach(fun (R) -> check_name_clash(NewName, R) end, Refs).
-
 check_name_clash(Name, Ref) ->
-    VarNames = [(?ESG:data(Var))#variable.name || Var <- visible_vars(Ref)],
-    ?MISC:error_on_difference(lists:member(Name, VarNames), false,
-                              "there is already a variable "
-                              "with the same name").
-
-visible_vars(Expr) ->
-    lists:usort(?ESG:path(Expr, [sup, {visib, back}, scope, varvis]) ++
-                ?ESG:path(Expr, [sup, {visib, back}, scope, vardef])).
+    Names = [?Var:name(V) ||
+                V <- ?Query:exec([Ref], ?Clause:variables())],
+    ?Check(not lists:member(Name, Names), ?RefError(var_exists, Name)).

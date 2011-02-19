@@ -24,7 +24,7 @@
 
 
 -module(referl_draw_graph).
--vsn("$Rev: 1949 $").
+-vsn("$Rev: 2497 $").
 
 -include("refactorerl.hrl").
 -include("referl_schema.hrl").
@@ -32,7 +32,9 @@
 %%% ============================================================================
 %%% Exports
 
--export([draw_graph/1, draw_graph/2]).
+-export([draw_graph/1, draw_graph/2, draw_graph_tooltip/2]).
+
+
 
 %%% ============================================================================
 %%% Draw graph
@@ -44,14 +46,29 @@ draw_graph(File) -> draw_graph(File, all).
 %% @spec draw_graph(File :: string(), Filter :: atom()) -> ok | string()
 %% @doc  Draws the whole graph to File with edge filtering.
 draw_graph(File, Filter) ->
-    Root = ?GRAPH:root(),
+    draw_graph(File, Filter, false).
+
+%% @spec draw_graph_tooltip(File :: string(), Filter :: atom()) -> ok | string()
+%% @doc  Draws the whole graph to File with edge filtering.
+%%       Fill `tooltip' attributes with the data of the nodes. You can use 
+%%       this cool feature if you convert the dot file into svg.
+draw_graph_tooltip(File, Filter) ->
+    draw_graph(File, Filter, true).
+
+%% @spec draw_graph(File :: string(), Filter :: atom(), ToolTip::boolean()) 
+%%           -> ok | string()
+%% @doc  Draws the whole graph to File with edge filtering.
+%%       If `ToolTip' is `true' the `tooltip' attribute will contain the data of
+%%       the node.
+draw_graph(File, Filter, ToolTip) ->
+    Root = ?Graph:root(),
     ets:new(nodes, [named_table]),
     ets:insert(nodes, {max, 0}),
     case file:open(File, [write]) of
         {ok, Dev} ->
             io:format(Dev, "digraph erl {~n", []),
 %            io:format(Dev, "graph [ ordering=\"out\" ];~n", []),
-            CollectedTokens = draw_graph(Dev, Root, Filter, []),
+            CollectedTokens = draw_graph(Dev, Root, Filter, ToolTip, []),
             io:format(Dev, "{rank=same;~s}~n", [CollectedTokens]),
             io:format(Dev, "}~n", []),
             Ret = file:close(Dev);
@@ -64,39 +81,42 @@ draw_graph(File, Filter) ->
 
 %% @doc Prints the graphviz representation of the graph into Dev,
 %%      and returns the tokens of the file.
-draw_graph(Dev, Node, Filter, Tokens) ->
+draw_graph(Dev, Node, Filter, ToolTip, Tokens) ->
     case ets:lookup(nodes, Node) of
-        [] -> draw_new_node(Dev, Node, Filter, filter(Filter), Tokens);
+        [] -> draw_new_node(Dev, Node, Filter, filter(Filter), ToolTip, Tokens);
         _  -> Tokens
     end.
 
 
-draw_new_node(Dev, Node, Filter, FilterFun, Tokens) ->
+draw_new_node(Dev, Node, Filter, FilterFun, ToolTip, Tokens) ->
     Ind    = ets:update_counter(nodes, max, 1),
     IntInd = integer_to_list(Ind),
     ets:insert(nodes, {Node, Ind}),
 
-    io:format(Dev, "N~b [~s]~n", [Ind, nodelabel(Node)]),
+    io:format(Dev, "N~b [~s]~n", [Ind, nodelabel(Node, ToolTip)]),
 
-    NodeClass = element(1, ?GRAPH:data(Node)),
+    NodeClass = element(1, ?Graph:data(Node)),
     AllTokens =
         case NodeClass of
             token -> Tokens ++ ["N" ++ IntInd ++ ";"];
             _     -> Tokens
         end,
-    Links = [Link || Link = {Tag, _To} <- ?GRAPH:links(Node),
+    Links = [Link || Link = {Tag, _To} <- ?Graph:links(Node),
                      FilterFun(NodeClass, Tag),
                      Tag /= env],
 
-    {SynLinks, OtherLinks} =
+    {_SynLinks, OtherLinks} =
         lists:partition(fun({Tag, _}) ->
                             is_syn_link(NodeClass, Tag)
                              orelse is_lex_link(NodeClass, Tag)
                         end, Links),
     if
         Filter == lex orelse Filter == synlex ->
-            Children = ?SYNTAX:child_node_order(Node),
-            NewLinks = children_order_links(Children, SynLinks),
+            % For Root and file nodes it cause run-time error: unknown structure
+            %Children = ?SYNTAX:child_node_order(Node),
+            %NewLinks = children_order_links(Children, SynLinks),
+            % It give same result but it works for Root and file nodes
+            NewLinks = ?Syn:children(Node),
             IndexLinks = index(NewLinks ++ OtherLinks);
         true ->
             IndexLinks = index(Links)
@@ -104,7 +124,7 @@ draw_new_node(Dev, Node, Filter, FilterFun, Tokens) ->
 
     CollectedTokens =
         lists:foldl(fun ({_Tag, _I, To}, Tokens2) ->
-                        draw_graph(Dev, To, Filter, Tokens2)
+                        draw_graph(Dev, To, Filter, ToolTip, Tokens2)
                     end, AllTokens, IndexLinks),
 
     [ io:format(Dev, "N~b -> N~b [~s]~n",
@@ -117,11 +137,11 @@ draw_new_node(Dev, Node, Filter, FilterFun, Tokens) ->
     CollectedTokens.
 
 
-children_order_links([], OtherLinks)          -> OtherLinks;
-children_order_links([Child|Children], Links) ->
-    {ToChild, NotToChild} =
-        lists:partition(fun({_, To}) -> To == Child end, Links),
-    ToChild ++ children_order_links(Children, NotToChild).
+%children_order_links([], OtherLinks)          -> OtherLinks;
+%children_order_links([Child|Children], Links) ->
+%    {ToChild, NotToChild} =
+%        lists:partition(fun({_, To}) -> To == Child end, Links),
+%    ToChild ++ children_order_links(Children, NotToChild).
 
 
 %% @doc Adds the appropriate link indexes to the parent-child lists.
@@ -202,15 +222,20 @@ schema_has(Schema, From, To) ->
 
 
 %% @doc Returns the Graphviz label of the node.
-nodelabel(Node = {_,_, Index}) ->
-    Data          = ?GRAPH:data(Node),
+nodelabel(Node = {_,_, Index}, ToolTip) ->
+    Data          = ?Graph:data(Node),
     Shape         = shape(Data),
     Content       = label(Index, Data),
     IsRecordShape = Shape == "Mrecord" orelse Shape == "record",
     Label         = label_shape(IsRecordShape, Content, Index),
+    TooltipStr = if
+        ToolTip -> tooltipStr(Node,Data);
+        true    -> ""
+    end,
+    % Write attributes
+    io_lib:format("~s shape=\"~s\", label=\"~s\", fontsize=\"~p\"~s",
+                  [nodestyle(Data), Shape, Label, labelsize(Data), TooltipStr]).
 
-    io_lib:format("~s shape=\"~s\", label=\"~s\", fontsize=\"~p\"",
-                  [nodestyle(Data), Shape, Label, labelsize(Data)]).
 label_shape(false, Content, _)              -> escape_text(Content);
 label_shape(true, {Top, Bottom}, Index)     -> boxed_shape(Top, Index, Bottom);
 label_shape(true, {Type, Index, Bottom}, _) -> boxed_shape(Type, Index, Bottom).
@@ -248,7 +273,7 @@ label(_, Data) -> label(Data).
 %%      Data with Mrecord or record shapes have two components.
 label({root})                         -> "ROOT";
 label(#lex{type=T})                   -> atom_to_list(T);
-label(#macro{name=N})                 -> {"macro", N};
+%label(#macro{name=N})                 -> {"macro", N};
 label(#expr{type=T, kind=K, value=V}) -> explab(T,K,V);
 label(#clause{type=_T, kind=K})       -> {"clause", atom_to_list(K)};
 label(#form{type=include, tag=F})     -> {"include", F};
@@ -268,7 +293,7 @@ label(T) when is_tuple(T)             -> atom_to_list(element(1, T)).
 shape({root})              -> "triangle";
 shape(#lex{data=#token{}}) -> "Mrecord";
 shape(#lex{})              -> "diamond";
-shape(#macro{})            -> "Mrecord";
+%shape(#macro{})            -> "Mrecord";
 shape(#expr{})             -> "Mrecord";
 shape(#clause{})           -> "record";
 shape(#form{type=include}) -> "record";
@@ -372,3 +397,49 @@ color(elex)   -> steelblue;
 color(llex)   -> steelblue;
 
 color(_) -> black.
+
+
+
+%% -----------------------------------------------------------------------------
+%% ToolTip texts
+
+%% @spec tooltipStr(Node::node(), Data::tuple()) -> string()
+%% @doc  Write the properties of the `Node' into a string. This text used as
+%%  graphviz dot attribute for alt text in SVG format.
+%%  String format: 
+%%  `, URL="1", tooltip="propKey1=propValue1&#13;&#10;...propKeyN=propValueN"'
+tooltipStr(Node, Data) ->
+    RevProps = lists:reverse([{node,Node}|
+                    ?MISC:record_to_proplist(Data, nodedata_fields(Data))]),
+    {LastKey,LastValue} = hd(RevProps),
+    LastStr0 = ?MISC:format("~p=~p", [LastKey,LastValue]),
+    LastStr  = ?MISC:string_replace(LastStr0, ["\""], "&quot;", 0),
+    PropStr = lists:foldl(
+        fun({K,V},StrEndAcc) -> 
+            KV0 = ?MISC:format("~p=~p&#13;&#10;", [K,V]),
+            KV  = ?MISC:string_replace(KV0, ["\""], "&quot;", 0),
+            KV++StrEndAcc
+        end,
+        LastStr, 
+        tl(RevProps)),
+    ?MISC:format(", URL=\"1\", tooltip=\"~s\"", [PropStr]).
+
+
+%% @spec nodedata_fields(NodeDataType::atom()) -> [RecordField::atom()]
+%% @doc  Give back the record fields of the node data.
+nodedata_fields({root})      -> [];
+% Syntactical nodes
+nodedata_fields(#file{})     -> record_info(fields, file);
+nodedata_fields(#form{})     -> record_info(fields, form);
+nodedata_fields(#clause{})   -> record_info(fields, clause);
+nodedata_fields(#expr{})     -> record_info(fields, expr);
+nodedata_fields(#lex{})      -> record_info(fields, lex);
+nodedata_fields(#token{})    -> record_info(fields, token);
+% Semantical nodes
+nodedata_fields(#module{})   -> record_info(fields, module);
+%nodedata_fields(#macro{})    -> record_info(fields, macro);
+nodedata_fields(#record{})   -> record_info(fields, record);
+nodedata_fields(#field{})    -> record_info(fields, field);
+nodedata_fields(#func{})     -> record_info(fields, func);
+nodedata_fields(#variable{}) -> record_info(fields, variable);
+nodedata_fields(#env{})      -> record_info(fields, env).

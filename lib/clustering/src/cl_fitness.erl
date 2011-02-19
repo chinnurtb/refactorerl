@@ -28,34 +28,74 @@
 % call: cl_fitness:fitness(Clustering,FitnessOptions)
 
 -module(cl_fitness).
--vsn("$Rev: 1255 $").
-
--export([fitness/1, fitness/2]).
+-vsn("$Rev: 2165 $").
 
 -include("cluster.hrl").
 
+%% =============================================================================
+%% Exports
+
+-export([fitness/1, fitness/2, fitness_default/0]).
+
+
+
+%% =============================================================================
+
 %% @spec fitness(Clusters) -> float()
 %%       Clusters = [Cluster]
-%%       Cluster = [Module]
-%%       Module = atom()
+%%       Cluster = [ClusteringEntity]
+%% @doc Calculates the fitness of the clustering by analysing cluster-inner and 
+%%      inter-cluster connections.
+%% @see  fitness/2
+fitness(Clusters) ->
+    fitness(Clusters, fitness_default()).
+
+
+%% @spec fitness_default() -> 
+%%           DefaultSettings::[{Property::atom(), Value::term()}]
+%% @doc  Default settings for {@link fitness}.
+fitness_default() ->
+    [{mq, first_version}, {entity_type, module}, {entities, #which_entities{}}].
+
+
+%% @spec fitness(Clusters, Options::[{Key::atom(), Value::term()}]) -> float()
+%%       Clusters = [Cluster]
+%%       Cluster = [ClusteringEntity]
 %%
 %% @doc Calculates the fitness of the clustering by analysing 
-%% cluster-inner and inter-cluster connections
-%% It assumes that the `deps' table (the `function_calls' and `record_refs'
-%% Mnesia tables in the current implementation) is present in the database.
-fitness(Clusters) ->
-    fitness(Clusters, [{mq, first_version}, {entities, #which_entities{}}]).
-
-%% @doc Fitness function with an options list
+%% cluster-inner and inter-cluster connections.
+%% 
+%% Options:
+%% <ul>
+%%   <li>`mq': name of the used measurement. `first_version' is the TurboMQ,
+%%       `second_version' is the BasicMQ.</li>
+%%   <li>`entity_type': the type of the clustering entities
+%%     <ul>
+%%       <li>`module': entities are module names. The `function calls' and the
+%%            `record_calls' tables must be updated into the database.</li>
+%%       <li>`function': entities are module names. The `ffdg' and the
+%%            `frdg' tables must be updated into the database.</li>
+%%     </ul>
+%%   </li>
+%%   <li>`entities': a `which_entities' record which controll the calculating
+%%        the fitness value</li>
+%% </ul>
 fitness(Clusters, Options) ->
+    {EntFunDeps, EntRecDeps} = case proplists:get_value(entity_type,Options) of
+        module   -> {function_calls, record_refs};
+        function -> {ffdg, frdg}
+    end,
     case proplists:get_value(mq, Options, first_version) of
         first_version ->
-            core(Clusters, {function_calls, record_refs}, 
+            %core(Clusters, {function_calls, record_refs}, 
+            core(Clusters, {EntFunDeps, EntRecDeps}, 
                  proplists:get_value(entities, Options, #which_entities{}));
         second_version ->
-            core2(Clusters, {function_calls, record_refs}, 
+            %core2(Clusters, {function_calls, record_refs}, 
+            core2(Clusters, {EntFunDeps, EntRecDeps}, 
                   proplists:get_value(entities, Options, #which_entities{}))
     end.
+
 
 %% internal
 %% first version of MQ
@@ -149,12 +189,18 @@ cluster_factor_all(Clusters, Cluster, ModuleTable, RecordTable) ->
                                 Acc
                         end
                 end, 0, Clusters),
-    CF = if 2*Mu - SumEpsilon =< 0 ->
-            0;
-       true ->
-            2*Mu/(2*Mu - SumEpsilon)
-    end,
-    CF.
+    %CF = if 2*Mu - SumEpsilon =< 0 ->
+    %        0;
+    %   true ->
+    %        2*Mu/(2*Mu - SumEpsilon)
+    %end,
+    %CF.
+    Nomination = 2*Mu + SumEpsilon, % The right operation is the addition 
+                                    % not the substraction !!!
+    if
+        Nomination == 0 -> 0;
+        true -> 2*Mu/Nomination
+    end.
     
 cluster_factor_fun(Clusters, Cluster, Table) ->    
     Mu = mu(Cluster, Table),
@@ -167,12 +213,18 @@ cluster_factor_fun(Clusters, Cluster, Table) ->
                                 Acc
                         end
                 end, 0, Clusters),
-    CF = if 2*Mu - SumEpsilon =< 0 ->
-            0;
-       true ->
-            2*Mu/(2*Mu - SumEpsilon)
-    end,
-    CF.
+    %CF = if 2*Mu - SumEpsilon =< 0 ->
+    %        0;
+    %   true ->
+    %        2*Mu/(2*Mu - SumEpsilon)
+    %end,
+    %CF.
+    Nomination = 2*Mu + SumEpsilon, % The right operation is the addition 
+                                    % not the substraction !!!
+    if
+        Nomination == 0 -> 0;
+        true -> 2*Mu/Nomination
+    end.
     
 cluster_factor_rec(Clusters, Cluster, RecordTable) ->    
     Mu2 = mu2(Cluster, RecordTable),
@@ -184,12 +236,18 @@ cluster_factor_rec(Clusters, Cluster, RecordTable) ->
                                 Acc
                         end
                 end, 0, Clusters),
-    CF = if 2*Mu2 - SumEpsilon2 =< 0 ->
-            0;
-       true ->
-            2*Mu2/(2*Mu2 - SumEpsilon2)
-    end,
-    CF.
+    %CF = if 2*Mu2 - SumEpsilon2 =< 0 ->
+    %        0;
+    %   true ->
+    %        2*Mu2/(2*Mu2 - SumEpsilon2)
+    %end,
+    %CF.
+    Nomination = 2*Mu2 + SumEpsilon2,    % The right operation is the addition 
+                                        % not the substraction !!!
+    if
+        Nomination == 0 -> 0;
+        true -> 2*Mu2/Nomination
+    end.
 
 %% Cluster : [Module]
 %% Table: ets({CallerMod, CalledMod, Fun}, Count)

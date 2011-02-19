@@ -38,3 +38,6 @@
 -import(string).
 -import(file).
 -import(proplists).
+
+%%
+-define(CMISC, cl_misc).

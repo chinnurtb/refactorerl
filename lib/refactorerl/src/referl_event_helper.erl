@@ -24,15 +24,25 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(referl_event_helper).
--vsn("$Rev: 1990 $").
+-vsn("$Rev: 2128 $").
 -behaviour(gen_event).
 
--export([wait/1]).
+-export([wait/0, wait/1]).
 
 -export([init/1, handle_event/2, handle_call/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -include("refactorerl.hrl").
+
+%% @spec wait() -> ok
+%%
+%% @doc Waits until any given event occurs and returns that event.
+wait() ->
+    Message = make_ref(),
+    start(self(), Message),
+    receive
+        {Message, Event} -> Event
+    end.
 
 %% @spec wait(term()) -> ok
 %%
@@ -49,16 +59,19 @@ wait(Event) ->
     start(self(), Event, Message),
     receive
         Message -> ok
-    end,
-    stop().
+    end.
+
+%% @doc Adds the event handler to the event manager of ?UI.
+start(Pid, MessageToSend) ->
+    ?UI:add_msg_handler(?MODULE, {Pid, MessageToSend}).
 
 %% @doc Adds the event handler to the event manager of ?UI.
 start(Pid, Event, MessageToSend) ->
     ?UI:add_msg_handler(?MODULE, {Pid, Event, MessageToSend}).
 
-%% @doc Removes the event handler.
-stop() ->
-    ?UI:del_msg_handler(?MODULE, null).
+%% @ doc Removes the event handler.
+%% stop() ->
+%%     ?UI:del_msg_handler(?MODULE, null).
 
 %% Event handler callbacks
 %% @private
@@ -67,14 +80,19 @@ init(State) ->
 
 %% @private
 handle_event(Event, State) ->
-    {Pid, EventToMonitor, MessageToSend} = State,
-    case Event of
-        EventToMonitor ->
-            Pid ! MessageToSend;
-        _ ->
-            ok
-    end,
-    {ok, State}.
+    case State of
+        {Pid, MessageToSend} ->
+            Pid ! {MessageToSend, Event},
+            remove_handler;
+        {Pid, EventToMonitor, MessageToSend} ->
+            case Event of
+                EventToMonitor ->
+                    Pid ! MessageToSend,
+                    remove_handler;
+                _ ->
+                    {ok, State}
+            end
+    end.
 
 %% @private
 handle_call(_Req, State) ->

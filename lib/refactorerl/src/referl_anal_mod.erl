@@ -37,7 +37,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_mod).
--vsn("$Rev: 1972 $").
+-vsn("$Rev: 2324 $").
 -behaviour(referl_esg).
 
 %% Callback exports
@@ -53,106 +53,102 @@ init() ->
      {module, record_info(fields, module), []}
     ].
 
+
+%%% ----------------------------------------------------------------------------
+
 %% @private
 insert(File, #file{}, _, Attr, #form{type=attrib, tag=module}) ->
-    case ?GRAPH:path(Attr, [attr]) of
+    case ?Graph:path(Attr, [attr]) of
         [] -> ok;
         [ModName] ->
-            #expr{value=Name} = ?GRAPH:data(ModName),
+            #expr{value=Name} = ?Graph:data(ModName),
             create_module(File, Name)
     end;
 
 insert(_, _, _, Attr, #form{type=attrib, tag=import}) ->
-    case ?GRAPH:path(Attr, [attr]) of
+    case ?Graph:path(Attr, [attr]) of
         []            -> ok;
         [_]           -> ok;
         [ModExpr | _] -> mod_name_ref(ModExpr)
     end;
 
-insert(_, _, _, App, #expr{kind=application}) ->
-    case ?GRAPH:path(App, [{sub, {{kind, '==', infix_expr}, 'and',
-                                  {value, '==', ':'}}}, {sub, 1}]) of
-        [ModRef] -> mod_name_ref(ModRef);
-        _        -> ok
-    end;
-
-insert(_, _, _, Fun, #expr{kind=implicit_fun}) ->
-    case ?GRAPH:path(Fun, [sub]) of
-        [ModRef, _FunRef, _Arity] -> mod_name_ref(ModRef);
-        [_FunRef, _Arity]         -> ok
+insert(I, #expr{kind=infix_expr,value=':'}, _, E, #expr{}) ->
+    case ?Graph:index(I, sub, E) of
+        1 -> mod_name_ref(E);
+        _ -> ok
     end;
 
 insert(_,_,_,_,_) ->
     ok.
 
 mod_name_ref(ModNameNode) ->
-    case ?GRAPH:data(ModNameNode) of
+    case ?Graph:data(ModNameNode) of
         #expr{kind=atom, value=Name} ->
             Mod = create_module(undefined, Name),
-            ?GRAPH:mklink(ModNameNode, modref, Mod);
+            ?Graph:mklink(ModNameNode, modref, Mod);
         _ -> ok
     end.
 
+
+%%% ----------------------------------------------------------------------------
+
 %% @private
 remove(File, #file{}, _, _, #form{type=attrib, tag=module}) ->
-    case ?GRAPH:path(File, [moddef]) of
+    case ?Graph:path(File, [moddef]) of
         [] -> ok;
         [Mod] -> remove_module(File, Mod)
     end;
 
 remove(_, _, _, Attr, #form{type=attrib, tag=import}) ->
-    case ?GRAPH:path(Attr, [attr]) of
+    case ?Graph:path(Attr, [attr]) of
         [] -> ok;
         [_] -> ok;
         [ModExpr | _] -> del_modref(ModExpr)
-    end;  
-
-remove(_, _, _, App, #expr{kind=application}) ->
-    case ?GRAPH:path(App, [{sub, {{kind, '==', infix_expr}, 'and',
-                                  {value, '==', ':'}}}, {sub, 1}]) of
-        [ModRef] -> del_modref(ModRef);
-        _        -> ok
     end;
 
-remove(_, _, _, Fun, #expr{kind=implicit_fun}) ->
-    case ?GRAPH:path(Fun, [sub]) of
-        [MR, _FR, _Ar] -> del_modref(MR);
-        [_FR, _Ar] -> ok
+remove(_, _, _, E, #expr{kind=infix_expr,value=':'}) ->
+    case ?Graph:path(E, [{sub, 1}]) of
+        [ModRef] -> del_modref(ModRef);
+        _        -> ok
     end;
 
 remove(_,_,_,_,_) ->
     ok.
 
 del_modref(ModRef) ->
-    case ?GRAPH:path(ModRef, [modref]) of
+    case ?Graph:path(ModRef, [modref]) of
         [Mod] ->
-            ?GRAPH:rmlink(ModRef, modref, Mod),
+            ?Graph:rmlink(ModRef, modref, Mod),
             remove_module(undefined, Mod);
         _ -> ok
     end.
 
+
+%%% ----------------------------------------------------------------------------
+
 create_module(File, Name) ->
-    case ?GRAPH:path(?GRAPH:root(), [{module, {name, '==', Name}}]) of
+    case ?Graph:path(?Graph:root(), [{module, {name, '==', Name}}]) of
         [Mod] -> ok;
         [] ->
-            Mod = ?GRAPH:create(#module{name=Name}),
-            ?GRAPH:mklink(?GRAPH:root(), module, Mod)
+            Mod = ?Graph:create(#module{name=Name}),
+            ?Graph:mklink(?Graph:root(), module, Mod)
     end,
     case File of
         undefined -> ok;
-        _         -> ?GRAPH:mklink(File, moddef, Mod)
+        _         -> ?Graph:mklink(File, moddef, Mod)
     end,
     Mod.
 
 remove_module(File, Mod) ->
     case File of
         undefined -> ok;
-        _         -> ?GRAPH:rmlink(File, moddef, Mod)
+        _         -> ?Graph:rmlink(File, moddef, Mod)
     end,
-    case ?GRAPH:path(Mod, [{modref, back}]) ++ 
-        ?GRAPH:path(Mod, [{moddef, back}]) of
+    case ?Graph:path(Mod, [{modref, back}]) ++ 
+        ?Graph:path(Mod, [{moddef, back}]) ++
+        ?Graph:path(Mod, [func]) of
         [] ->
-            ?GRAPH:rmlink(?GRAPH:root(), module, Mod),
-            ?GRAPH:delete(Mod);
+            ?Graph:rmlink(?Graph:root(), module, Mod),
+            ?Graph:delete(Mod);
         _ -> ok
     end.

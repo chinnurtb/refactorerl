@@ -1,0 +1,78 @@
+#!/bin/sh
+
+# Unix shell script that starts RefactorErl. The same command line can be used
+# on all platforms to start the server.
+
+SERVER=yes
+CLIENT=no
+NAME=refactorerl@localhost
+
+# Interpret arguments
+while [ $# -gt 0 ]
+do
+    if [ "$1" = -erl ]
+    then
+        ERL="$2"
+        shift 2
+    elif [ "$1" = -base ]
+    then
+        BASE="$2"
+        shift 2
+    elif [ "$1" = -name ]
+    then
+        NAME="$2"
+        shift 2
+    elif [ "$1" = -server ]
+    then
+        SERVER=yes
+        CLIENT=server
+        shift
+    elif [ "$1" = -emacs ]
+    then
+        CLIENT=emacs
+        shift
+    elif [ "$1" = -client ]
+    then
+        SERVER=no
+        shift
+    elif [ "$1" = -help ]
+    then
+        echo "Use:" >&2
+        echo "$0 [-erl path] [-base dir] [-name node] [-server|-client|-emacs]" >&2
+        exit
+    fi
+done
+
+# Set defaults
+[ ! "$ERL" ]  && ERL=erl
+[ ! "$BASE" ] && BASE=`pwd`
+
+# Set extra arguments
+[ $CLIENT = server ] && ARGS="-noinput"
+[ $CLIENT = emacs ]  && ARGS="-noshell -run referl_emacs"
+
+
+# The following feature appeared in R12B-2:
+# export ERL_LIBS="$BASE/lib"
+
+# Other possibility, which only works in Unix:
+# -pa "$BASE/lib"/*/ebin
+
+if [ $SERVER = yes ]
+then
+    "$ERL" \
+        -sname  "$NAME" \
+        -pa     "$BASE/lib"/refactorerl/ebin \
+        -pa     "$BASE/lib"/clustering/ebin \
+        -pa     "$BASE/lib"/test/ebin \
+        -pa     "$BASE/build" \
+        -boot   "$BASE/refactorerl" \
+        -config "$BASE/sys.config" \
+        +W "w" \
+        $ARGS
+else
+    "$ERL" \
+        -sname  "$NAME" \
+        -pa     "$BASE/lib"/refactorerl/ebin \
+        $ARGS
+fi

@@ -24,7 +24,7 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(referl_graph).
--vsn("$Rev: 1920 $").
+-vsn("$Rev: 2211 $").
 -behaviour(gen_server).
 -include("refactorerl.hrl").
 -include_lib("stdlib/include/qlc.hrl").
@@ -40,7 +40,7 @@
 
 %% Client exports
 -export([start_link/0, schema/1, reset_schema/0, root/0,
-         create/1, update/2, delete/1, data/1,
+         create/1, update/2, delete/1, data/1, class/1,
          mklink/3, rmlink/3, links/1, path/2, index/3, info/0]).
 
 -export([backup/0, restore/1, undo/0, redo/0, clean/0]).
@@ -129,6 +129,12 @@ data(Node) when ?IS_NODE(Node) ->
         {data, Data}   -> Data;
         {error, Error} -> erlang:error(Error, [Node])
     end.
+
+%% @spec class(node()) -> atom()
+%% @doc Returns the node class of the node. This is equivalent to
+%% `element(1, data(Node))' (but may be faster).
+class({?NODETAG, Class, _Id}) ->
+    Class.
 
 %% @spec mklink(node(), atom() | {atom(), integer()}, node()) -> ok
 %% @doc Creates a link between two nodes.
@@ -358,7 +364,9 @@ handle_call({mklink, {?NODETAG, FCl, FId},
     end,
     case mnesia:dirty_read(target, {FCl, Tag}) of
         [#target{next=TCl}] ->
+            Absent = link_index(FCl, FId, Tag, TId) =:= [],
             if
+                not Absent   -> ok;
                 Ind =:= last -> append_link(linktab(FCl), FId, TId, Tag);
                 true         -> insert_link(linktab(FCl), FId, TId, Tag, Ind)
             end,
@@ -400,10 +408,7 @@ handle_call({index, {?NODETAG, FCl, FId},
              Tag, {?NODETAG, TCl, TId}}, _F, S) ->
     case mnesia:dirty_read(target, {FCl, Tag}) of
         [#target{next=TCl}] ->
-            Q = ets:fun2ms(fun ({_, Key, Ind, To})
-                               when Key =:= {FId, Tag},
-                                    To =:= TId -> Ind end),
-            case mnesia:dirty_select(linktab(FCl), Q) of
+            case link_index(FCl, FId, Tag, TId) of
                 []                        -> {reply, none, S};
                 [Ind]                     -> {reply, Ind, S};
                 Multi when is_list(Multi) -> {reply, Multi, S}
@@ -494,6 +499,12 @@ tabinfo({Tag, Tables}, WS) ->
     TableMems  = [mnesia:table_info(T, memory) || T <- Tables],
     {Tag, lists:sum(TableSizes), WS * lists:sum(TableMems)}.
 
+%% Returns existing link indexes (normally only zero or one)
+link_index(FCl, FId, Tag, TId) ->
+    Q = ets:fun2ms(fun ({_, Key, Ind, To})
+                       when Key =:= {FId, Tag},
+                            To =:= TId -> Ind end),
+    mnesia:dirty_select(linktab(FCl), Q).
 
 %% Replaces the set of links completely with the new set
 insert_link(Links, From, To, Tag, Ind) ->

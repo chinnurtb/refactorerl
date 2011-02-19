@@ -53,7 +53,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_attr).
--vsn("$Rev: 1489 $").
+-vsn("$Rev: 2176 $").
 
 -export([mod_empty_attrib/0, mod_attrib_data/0, fun_empty_attrib/0,
          fun_attrib_data/0]).
@@ -130,7 +130,7 @@ fun_attrib_data()->
                 add_ref_to_dict(Fun1, macro_to_macro_attr(Macro), Count,D,Empty)
         end}]).
 
-%% @spec attrib_data([entity()], [{[atom()], ref_adder_fun()}]) -> 
+%% @spec attrib_data([entity()], [{[atom()], ref_adder_fun()}]) ->
 %%           [{entity(), [{Attrib, integer()}]}]
 %%
 %% @doc Returns an attribute matrix which is based on reference numbers
@@ -220,7 +220,7 @@ rec_to_rec_attr(Record) ->
 %%
 %% @doc Returns the macro_attr record of the `Macro' macro node.
 macro_to_macro_attr(Macro) ->
-    #macro{name=Name} = ?ESG:data(Macro),
+    #form{tag=Name} = ?ESG:data(Macro),
     [File] = ?ESG:path(Macro, [{macro, back}]),
     #file{path=Path} = ?ESG:data(File),
     #macro_attr{file=Path, name=Name}.
@@ -292,6 +292,8 @@ attribs_to_deps(Attribs) ->
 %%
 %% @doc The returning list contains `{Mod, Modules}' pairs that represent that
 %% `Mod' uses exactly the modules that are in `Modules'.
+%%
+%% @todo The return value of the specification is incorrect.
 attribs_to_uses(Attribs) ->
     Rows = cl_matrix:rows(Attribs),
     OrdRows = ordsets:from_list(Rows),

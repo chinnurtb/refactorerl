@@ -24,9 +24,10 @@
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
 
 -module(referl_fileman).
--vsn("$Rev: 1998 $").
+-vsn("$Rev: 2599 $").
 
--export([add_file/1, add_form/3, drop_file/1, save_file/1]).
+-export([add_file/1, add_form/3, add_text/3, drop_file/1, save_file/1]).
+-export([save_file/3]).
 
 -include("refactorerl.hrl").
 
@@ -42,48 +43,60 @@
 %% errors). Note that during preprocessing, every included file will also be
 %% added to the graph.
 add_file(Name) ->
-    case ?SYNTAX:file(Name) of
-        {file, F} ->
+    case ?Graph:path(?Graph:root(), ?File:find(Name)) of
+        [F] ->
             add_file_result(F);
-        not_found ->
+        [] ->
             case store_file_tokens(Name) of
                 {error, Reason} ->
                     {error, Reason};
                 {File, Tokens} ->
-                    ?GRAPH:mklink(File, incl, File),
+                    ?Graph:mklink(File, incl, File),
                     process_forms(File, Tokens, last),
                     add_file_result(File)
             end
     end.
 
 add_file_result(File) ->
-    case ?GRAPH:path(File, [{form, {type, '==', error}}]) of
+    case ?Graph:path(File, [{form, {type, '==', error}}]) of
         [] ->
             {file, File};
         [E|_] ->
-            {error, (?GRAPH:data(E))#form.tag}
+            {error, (?Graph:data(E))#form.tag}
     end.
 
 %% @spec add_form(node(), integer() | last, [node()]) -> ok
-%% 
+%%
 %% @doc Preprocesses `Tokens', creates a set of forms from the result, and
 %% inserts these forms into `File' starting from the position `Index'.
 %% `Index' specifies the position between links from `File' with tag `form'.
 add_form(File, Index, Tokens) ->
-    TokenData = [{?LEX:token_data(T), T} || T <- Tokens],
+    TokenData = [{?Token:data(T), T} || T <- Tokens],
     process_forms(File, [TokenData], Index),
     ok.
+
+%% @spec add_text(node(), integer() | last, string()) -> ok
+%%
+%% @doc Turns `Text' into tokens, preprocesses then, creates a set of forms
+%% from the result, and inserts these forms into `File' starting from the
+%% position `Index'. `Index' specifies the position between links from `File'
+%% with tag `form'.
+add_text(File, Index, Text) ->
+    case store_text(Text) of
+        {ok, Tokens} -> process_forms(File, Tokens, Index), ok;
+        {error, Error} -> Error
+    end.
 
 
 %% process_forms/3: entry point for preprocessing forms
 process_forms(File, Forms, Index) ->
-    Type = (?GRAPH:data(File))#file.type,
+    Type = (?Graph:data(File))#file.type,
     process_forms(File, Type, Forms, start, Index).
 
 %% process_forms/5: preprocesses tokens and stores the result
 process_forms(_, _, [], _, _) -> ok;
 process_forms(File, Type, [Tokens | Rest], State, Index) ->
-    {Forms, St1} = ?PREPROC:preprocess(Tokens, File, State),
+    {Forms, St1} = ?PreProc:preprocess(Tokens, File, State),
     Ind1 = process_forms(File, Type, Forms, Index),
     ?ESG:close(),
     process_forms(File, Type, Rest, St1, Ind1).
@@ -104,12 +117,11 @@ next_index(Ind) when is_integer(Ind) -> Ind+1.
 %% @doc Removes `File' from the graph (together with all other files which
 %% depend on it).
 drop_file(File) ->
-    case ?GRAPH:path(File, [{incl, back}]) -- [File] of
+    case ?Graph:path(File, [{incl, back}]) -- [File] of
         [Dep | _] ->
             drop_file(Dep),
             drop_file(File);
         [] ->
-            ?PREPROC:clear(File),
             ?ESG:remove(?ESG:root(), file, File),
             ?ESG:close()
     end.
@@ -119,19 +131,19 @@ drop_file(File) ->
 %%
 %% @doc Writes the textual contents of `File' back to its source.
 save_file(File) ->
-    case ?GRAPH:path(?GRAPH:root(), [{env, {name, '==', output}}]) of
+    case ?Graph:path(?Graph:root(), [{env, {name, '==', output}}]) of
         [] ->
             throw(unsafe_save);
         [Output] ->
-            case ?GRAPH:data(Output) of
-                #env{value=original} ->
-                    #file{path=Path, eol=Eol} = ?ESG:data(File),
-                    save_file(File, Eol, Path);
-                #env{value=Dir} ->
-                    #file{path=Path, eol=Eol} = ?ESG:data(File),
-                    save_file(File, Eol,
-                              filename:join(Dir, filename:basename(Path)))
-            end
+            FileData = #file{path=Path, eol=Eol} = ?Graph:data(File),
+            SavePath = case ?Graph:data(Output) of
+                           #env{value=original} ->
+                               Path;
+                           #env{value=Dir} ->
+                               filename:join(Dir, filename:basename(Path))
+                       end,
+            save_file(File, Eol, SavePath),
+            ?Graph:update(File, FileData#file{lastmod=now()})
     end.
 
 %% @private
@@ -139,7 +151,7 @@ save_file(File) ->
 save_file(File, Eol, Name) ->
     case file:open(Name, [write]) of
         {ok, Dev} ->
-            Text = orig_text(Eol, ?SYNTAX:tree_text(File)),
+            Text = orig_text(Eol, ?Syn:tree_text(File)),
             io:put_chars(Dev, Text),
             file:close(Dev),
             ok;
@@ -154,7 +166,7 @@ orig_text({crlf, _}, $\n) -> "\r\n";
 orig_text({lf, _}, $\n)   -> $\n;
 orig_text(_, Ch) when Ch >= 0, Ch =< 255 -> Ch;
 orig_text(_, _) -> "".
-    
+
 
 %%% ============================================================================
 %%% Token level manipulation
@@ -169,21 +181,29 @@ store_file_tokens(Name) ->
     case file:read_file(Name) of
         {ok, BinaryText} ->
             {Text, Eol} = file_text(BinaryText),
-            case ?SCANNER:string(Text) of
-                {ok, Tokens, _Line} ->
+            case store_text(Text) of
+                {ok, Tokens} ->
                     Type = case filename:extension(Name) of
                                ".erl" -> module;
                                _      -> header
                            end,
                     File = ?ESG:create(#file{type=Type, path=Name, eol=Eol}),
                     ?ESG:insert(?ESG:root(), file, File),
-                    {File, store_tokens([Tok || {_Ty, _Ln, Tok} <- Tokens])};
-                {error, {Ln, Mod, Error}, _Line} ->
-                    {error, {Ln, Mod:format_error(Error)}}
+                    {File, Tokens};
+                Err -> Err
             end;
         {error, Reason} ->
             {error, file:format_error(Reason)}
     end.
+
+store_text(Text) ->
+    case ?Scanner:string(Text) of
+        {ok, Tokens, _Line} ->
+            {ok, store_tokens([Tok || {_Ty, _Ln, Tok} <- Tokens])};
+        {error, {Ln, Mod, Error}, _Line} ->
+            {error, {Ln, Mod:format_error(Error)}}
+    end.
+
 
 %% @spec store_tokens([#token{}]) -> [FormTokens]
 %%       FormTokens = [{#token{},node()}]
@@ -200,38 +220,26 @@ store_tokens(Tokens) ->
 %% @spec store_form_tokens([#token{}]) -> [{#token{}, #node{}}]
 %% @doc Store token data in the graph
 store_form_tokens(Tokens) ->
-    [{Token, ?GRAPH:create(#lex{type=token, data=Token})} || Token <- Tokens].
+    [{Token, ?Graph:create(#lex{type=token, data=Token})} || Token <- Tokens].
 
 
 %% Converts the binary `Bin' to string, terminating it with a newline if it
 %% is missing.
-file_text(Bin) ->
-    file_text(Bin, "", any).
+file_text(Bin) -> file_text(Bin, "", any).
 
-file_text(<<"\r\n", _/binary>>=Bin, Text, any) ->
-    file_text(Bin, Text, crlf);
-file_text(<<"\r", _/binary>>=Bin, Text, any) ->
-    file_text(Bin, Text, cr);
-file_text(<<"\n", _/binary>>=Bin, Text, any) ->
-    file_text(Bin, Text, lf);
+file_text(<<"\r\n", _/binary>>=Bin, Text, any) -> file_text(Bin, Text, crlf);
+file_text(<<"\r",   _/binary>>=Bin, Text, any) -> file_text(Bin, Text, cr);
+file_text(<<"\n",   _/binary>>=Bin, Text, any) -> file_text(Bin, Text, lf);
 
-file_text(<<"\r\n">>, Text, crlf) ->
-    {lists:reverse([$\n|Text]), {crlf, eol}};
-file_text(<<"\r">>, Text, cr) ->
-    {lists:reverse([$\n|Text]), {cr, eol}};
-file_text(<<"\n">>, Text, lf) ->
-    {lists:reverse([$\n|Text]), {lf, eol}};
-file_text(<<>>, Text, Eol) ->
-    {lists:reverse(Text), {Eol, noeol}};
+file_text(<<"\r\n">>, Text, crlf) -> {lists:reverse([$\n|Text]), {crlf, eol}};
+file_text(<<"\r">>,   Text, cr)   -> {lists:reverse([$\n|Text]), {cr,   eol}};
+file_text(<<"\n">>,   Text, lf)   -> {lists:reverse([$\n|Text]), {lf,   eol}};
+file_text(<<>>,       Text, Eol)  -> {lists:reverse([$\n|Text]), {Eol,  noeol}};
 
-file_text(<<"\r\n", Tail/binary>>, Text, crlf) ->
-    file_text(Tail, [$\n|Text], crlf);
-file_text(<<"\r", Tail/binary>>, Text, cr) ->
-    file_text(Tail, [$\n|Text], cr);
-file_text(<<"\n", Tail/binary>>, Text, lf) ->
-    file_text(Tail, [$\n|Text], lf);
-file_text(<<C, Tail/binary>>, Text, Eol) ->
-    file_text(Tail, [C|Text], Eol).
+file_text(<<"\r\n",Tail/binary>>, Text, crlf)-> file_text(Tail,[$\n|Text],crlf);
+file_text(<<"\r",  Tail/binary>>, Text, cr)  -> file_text(Tail,[$\n|Text],cr);
+file_text(<<"\n",  Tail/binary>>, Text, lf)  -> file_text(Tail,[$\n|Text],lf);
+file_text(<<C,     Tail/binary>>, Text, Eol) -> file_text(Tail,[C  |Text],Eol).
 
 
 %% Split `stop' tokens into a `stop' and a `ws' or `eol' token.
@@ -268,8 +276,14 @@ merge_ws([#token{postws=Post} = Token | Tail]) ->
                           lists:any(fun(C)-> not lists:member(C," \t\n\r") end,
                                     Txt)
                   end, Eols),
-            [Token#token{postws = Post ++ join_ws([Eol|Head])} |
-             merge_ws(Next ++ Rest)]
+            if
+                Next =:= [] ->
+                    [Token#token{postws = Post ++ Eol#token.text} |
+                        merge_ws(Head ++ Next ++ Rest)];
+                true ->
+                    [Token#token{postws = Post ++ join_ws([Eol|Head])} |
+                     merge_ws(Next ++ Rest)]
+            end
     end.
 
 %% Join the textual contents of tokens.
@@ -288,6 +302,8 @@ split_first_form(Tokens) ->
     split_first_form(Tokens, []).
 split_first_form([Head=#token{type=stop}|Tail], Form) ->
     {lists:reverse([Head|Form]), Tail};
+split_first_form([], Form) ->
+    {lists:reverse(Form), []};
 split_first_form([Head|Tail], Form) ->
     split_first_form(Tail, [Head|Form]).
 
@@ -318,7 +334,7 @@ process_form(header, {tokens, Tokens}) ->
 %% @doc Parses `Tokens' and returns the result, the root form of the tree.
 parse(Tokens) ->
     TokenData =[{Type, 1, Data} || Data={#token{type=Type}, _} <- Tokens],
-    case ?PARSER:parse(TokenData) of
+    case ?Parser:parse(TokenData) of
         {error, {Ln, Mod, Msg}} ->
             error_logger:info_msg("Parser message: ~s~n",
                                   [Mod:format_error(Msg)]),

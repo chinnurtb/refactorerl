@@ -24,10 +24,11 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(cl_matrix).
--vsn("$Rev: 1246 $").
+-vsn("$Rev: 2355 $").
 
 -export([new/3, delete/1, add_col/2, add_row/2, del_col/2, del_row/2,
-         cols/1, rows/1, get/3, set/4, transform/2, transform2/2,
+         cols/1, rows/1, get/3, get_row/2, get_col/2, set/4, insert_new_row/3,
+         to_list/1, from_list/2, transform/2, transform2/2, 
          fold_col/4, fold_row/4, fold_col2/5, fold_row2/5, clone/1]).
 
 -export([dump/1, dump/2]).
@@ -118,6 +119,18 @@ get(Row, Col, #matrix{table=Tab, default=Def}) ->
         [{_, Val}] -> Val
     end.
 
+%% @spec get_row(row(), matrix()) -> [{col(), val()}]
+%%
+%% @doc Returns the specified row of the matrix.
+get_row(Row, Mtr) ->
+    fold_row(fun (C, V, L) -> [{C, V} | L] end, [], Row, Mtr).
+
+%% @spec get_col(col(), matrix()) -> [{row(), val()}]
+%%
+%% @doc Returns the specified col of the matrix.
+get_col(Col, Mtr) ->
+    fold_col(fun (R, V, L) -> [{R, V} | L] end, [], Col, Mtr).
+
 %% @spec set(row(), col(), val(), Matrix::matrix()) -> matrix()
 %%
 %% @doc Updates the element at position (`Row', `Col'), returns the updated
@@ -125,6 +138,45 @@ get(Row, Col, #matrix{table=Tab, default=Def}) ->
 set(Row, Col, Value, Matrix=#matrix{table=Tab}) ->
     ets:insert(Tab, {{Row,Col}, Value}),
     Matrix.
+
+%% @spec insert_new_row(row(), [{col(), val()}], matrix()) -> matrix()
+%%
+%% @doc Inserts a new row with its elements into the matrix, and returns the
+%% updated matrix.
+insert_new_row(RowLabel, RowValues, Matrix) ->
+    M2 = add_row(RowLabel, Matrix),
+    #matrix{table=Tab} = M2,
+    lists:foreach(fun ({Col, Value}) ->
+                    ets:insert(Tab, {{RowLabel, Col}, Value})
+                  end, RowValues),
+    M2.
+
+%% @spec to_list(Matrix::matrix()) ->
+%%           [{{Row::row(), Col::col()}, Value::term()}]
+%% @doc  Fetch `Matrix' contain into a list.
+to_list(#matrix{table=TabID}) ->
+    ets:tab2list(TabID).
+
+
+%% @spec from_list(List::[{{Row::row(), Col::col()}, Value::term()}], 
+%%               Default::term()) -> matrix()
+%% @doc  Create a matrix from `List'. Every element in the `List' contain the
+%%       description of a cell of the matrix. This is a row-column index pair 
+%%       and the value of current cell.
+from_list(List, Default) ->
+    % Calculate row and column identifications lists
+    {Rows1, Cols1} = lists:foldl(
+        fun({{Row,Col}, _Value}, {Rs,Cs}) -> {[Row|Rs],[Col|Cs]} end,
+        {[],[]},
+        List),
+    % Create matrix
+    lists:foldl(
+        fun({{Row,Col}, Value}, Matrix=#matrix{}) ->
+            set(Row, Col, Value, Matrix)
+        end,
+        new(lists:usort(Rows1), lists:usort(Cols1), Default),
+        List).
+    
 
 %% @spec transform((val()) -> val(), matrix()) -> matrix()
 %%

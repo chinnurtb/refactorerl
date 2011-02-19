@@ -21,10 +21,8 @@
 
 -define(LEXICAL_SCHEMA,
         [{lex,   record_info(fields, lex),
-          [{mref, macro}, {orig, lex}, {llex, lex}]},
-         {macro, record_info(fields, macro),
-          [{marg, lex}, {mbody, lex}]},
-         {file,   [{incl, file}, {macro, macro}]},
+          [{mref, form}, {orig, lex}, {llex, lex}]},
+         {file,   [{incl, file}]},
          {form,   [{iref, file}, {flex, lex}]},
          {clause, [{clex, lex}]},
          {expr,   [{elex, lex}]}

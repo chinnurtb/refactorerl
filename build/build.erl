@@ -24,10 +24,10 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(build).
--vsn("$Rev: 1804 $").
+-vsn("$Rev: 2077 $").
 
 -export([start/0, start/1, start/2]).
--export([cmp/0, rel/0, doc/0, build/3]).
+-export([cmp/0, cmp/1, rel/0, rel/1, doc/0, build/3]).
 
 %%%%% =========================================================================
 %%%%% File defines

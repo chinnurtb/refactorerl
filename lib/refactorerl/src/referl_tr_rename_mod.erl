@@ -20,198 +20,79 @@
 %%% ============================================================================
 %%% Module information
 
-%%% @doc This module implements the rename module refactoring.
+%%% @author Istvan Bozo <bozo_i@inf.elte.hu>
+
+%%% @doc This module implements the rename module refactoring. The rename module
+%%% refactoring renames a module to the given new name. Renames the file and
+%%% make changes in other file where this module is referenced.
 %%%
-%%% @author István Bozó <bozo_i@inf.elte.hu>
+%%% Conditions of applicability
+%%% <ul>
+%%%   <li>The given new name should be a legal file name.</li>
+%%%   <li>There must not exist another module with the given new name in the
+%%%   graph.</li>
+%%%   <li>There must not exist another file with the same name as the given new
+%%%    name in the directory of the module to be renamed.</li>
+%%% </ul>
+%%%
+%%% Rules of the transformation
+%%% <ol>
+%%%   <li>Rename the current module name to the new name.</li>
+%%%   <li>Rename the related module qualifiers to the given new name.</li>
+%%%   <li>Rename the references to the module in the import lists.</li>
+%%%   <li>Rename the file to the new name.</li>
+%%% </ol>
 
 -module(referl_tr_rename_mod).
--vsn("$Rev: 1933 $").
+-vsn("$Rev: 2599 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/3]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst,{filename,
-               newname,
-               pos,
-               filenode,
-               modobj,
-               modname,
-               modexprnode,
-               newfilepath,
-               modrefnodes
-              }).
-
-%%% ============================================================================
-%%% Errors
-
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), string(), integer()) -> ok
-%%
-%% @doc Renames the file `FileName' and the module to `NewName' if on the 
-%% selected position `Pos' is a module attribute.
-
-do(FileName, NewName, Pos) ->
-    ?TRANSFORM:do(?MODULE,{FileName, NewName, Pos}).
+-export([prepare/1]).
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FileName, NewName, Pos})->
-    #refst{filename = FileName, newname = list_to_atom(NewName), pos = Pos}.
+prepare(Args)->
+    NewName = ?Args:name(Args),
+    ?Check(hd(io_lib:write(NewName)) /= $', %if quoted -> refuse
+           ?RefErr0r(quoted_atom) ),
+    FileNode = ?Args:file(Args),
+    ModuleObj = ?Args:module(Args),
+    ?Check(?Query:exec(?Mod:find(NewName)) == [],
+           ?RefError(module_exists,[NewName])),
+    [ModuleExpr] =
+        ?Query:exec(FileNode, ?Query:seq(?File:form(1), ?Form:exprs())),
+    OldPath = ?File:path(FileNode),
+    NewPath = new_file_path(NewName, OldPath),
+    ?Check(not filelib:is_file(NewPath), ?RefError(file_exists,[NewPath])),
+    References = ?Query:exec(ModuleObj, ?Mod:references()),
+    fun()->
+            transform(FileNode, ModuleExpr, References, NewName, NewPath,
+                      OldPath, ModuleObj)
+    end.
 
-%% @private
-steps() ->
-    [
-     fun check_new_name_is_legal/1,
-     fun file_node/1,
-     fun check_is_module_attr/1,
-     fun check_module_exits_in_the_graph/1,
-     fun module_data/1,
-     fun new_file_path/1,
-     fun check_does_file_exist/1,
-     fun get_nodes_for_update/1
-    ].
-
-%% @private
-transform(#refst{filenode = FileNode, modexprnode = ModExprNode,
-                 modrefnodes = ModRefNodes, newname = NewName,
-                 newfilepath = NewFilePath, filename = FileName,
-                 modobj = ModObj}) ->
-    Files =
-        lists:usort(
-          [ begin
-                update_expr_node(Node, NewName),
-                get_file_node(Node)
-                end
-            || Node <- (ModRefNodes ++ [ModExprNode])]),
-    update_file_node(FileNode, NewFilePath),
-    update_module_obj(ModObj, NewName),
-    file:rename(FileName, NewFilePath),
-    ?ESG:close(),
-    {[FileNode] ++ (Files -- [FileNode]), ok}.
 
 %%% ============================================================================
 %%% Implementation
 
-get_file_node(Node) ->
-    [FileNode] =
-        ?ESG:path(Node, [sup, {visib,back}, scope, functx,
-                         {funcl, back}, {form, back}]) ++
-        ?ESG:path(Node, [{attr, back}, {form, back}]),
-    FileNode.
+transform(FileNode, ModExprNode, References, NewName, NewPath, OldPath,
+          ModObj) ->
+    ?File:upd_path(FileNode, NewPath),
+    ?Transform:touch(FileNode),
+    [ begin
+          ?Syn:replace(Node, {elex, 1}, [atom_to_list(NewName)]),
+          ?Transform:touch(Node)
+      end
+      || Node <- (References ++ [ModExprNode])],
+    %% TODO: Remove it!!!
+    ObjData = ?Graph:data(ModObj),
+    ?Graph:update(ModObj, ObjData#module{name = NewName}),
+    %%
+    ?Transform:rename(OldPath, NewPath).
 
-
-file_node(St = #refst{filename = FileName}) ->
-    case ?SYNTAX:file(FileName) of
-        {file, FileNode} ->
-            St#refst{filenode = FileNode};
-        _  ->
-            throw("Module is not present in the database!")
-    end.
-
-module_data(St = #refst{filenode = FileNode}) ->
-    [ModuleExpr] =
-        ?ESG:path(FileNode,[{form,{tag, '==', module}}, attr]),
-    #expr{value = Name} =
-        ?ESG:data(ModuleExpr),
-    [ModuleObj] =
-        ?ESG:path(FileNode,[moddef]),
-    St#refst{modname = Name, modexprnode = ModuleExpr, modobj = ModuleObj}.
-
-new_file_path(St = #refst{newname = NewName, filename = FileName}) ->
+new_file_path(NewName, OldPath) ->
     Dir =
-        filename:dirname(FileName),
-    NewFilePath =
-        filename:join([Dir, atom_to_list(NewName) ++ ".erl"]),
-    St#refst{newfilepath = NewFilePath}.
-
-get_nodes_for_update(St = #refst{modobj = ModObj}) ->
-    RefNodes =
-        ?ESG:path(ModObj,[{modref, back}]),
-    St#refst{modrefnodes = RefNodes}.
-
-%%% ============================================================================
-%%% Transformation
-
-update_expr_node(Node, NewName)->
-    Data = ?GRAPH:data(Node),
-    [Token] = ?GRAPH:path(Node,[elex]),
-    Lex = ?GRAPH:data(Token),
-    #lex{data = TokenData = #token{value = _OldName}} = Lex,
-    NewToken =
-        Lex#lex{data =
-                TokenData#token{value = NewName,
-                                text = atom_to_list(NewName)}},
-    ?ESG:update(Node, Data#expr{value = NewName}),
-    ?ESG:update(Token, NewToken).
-
-update_file_node(FileNode, NewFilePath) ->
-    Data = ?GRAPH:data(FileNode),
-    ?ESG:update(FileNode, Data#file{path = NewFilePath}).
-
-update_module_obj(ModObj, NewName)->
-    ?ESG:update(ModObj, #module{name = NewName}).
-
-
-%%% ============================================================================
-%%% Checks
-
-check_new_name_is_legal(#refst{newname = NewName}) ->
-    case ?LEX:is_valid_name(function, atom_to_list(NewName)) of
-        true ->
-            ok;
-        _ ->
-            throw(?MISC:format("The given name ~n is not a legal module name!",
-                               [NewName]))
-    end.
-
-check_module_exits_in_the_graph(#refst{newname = NewName}) ->
-    Module =
-        ?ESG:path(?ESG:root(), [{module, {name, '==', NewName}}]),
-    case Module of
-        [] ->
-            ok;
-        _ -> throw("There is a module with the same name in the database!")
-    end.
-
-check_does_file_exist(#refst{newfilepath = NewFilePath}) ->
-    case filelib:is_file(NewFilePath) of
-        true ->
-            throw("There is a file with the same name in the current" ++ 
-                  " directory!");
-        _ ->
-            ok
-    end.
-
-check_is_module_attr(#refst{pos = Pos, filenode = FileNode})->
-    Token = ?LEX:token_by_pos(FileNode, Pos),
-    case Token of
-        illegal -> 
-            throw(?MISC:format("The selected position ~p does not indicate" ++ 
-                               " a module attribute!",[Pos]));
-        _       -> ok
-    end,
-    {_, TokenNode} = Token,
-    Module =
-        ?ESG:path(TokenNode,[{{flex, back},{tag,'==',module}}]) ++
-        ?ESG:path(TokenNode,[{elex, back},{{attr, back},{tag,'==',module}}]),
-    if Module == [] ->
-            throw(?MISC:format("The selected position ~p does not indicate" ++
-                               " a module attribute!",[Pos]));
-       true ->
-            ok
-    end.
+        filename:dirname(OldPath),
+    filename:join([Dir, atom_to_list(NewName) ++ ".erl"]).

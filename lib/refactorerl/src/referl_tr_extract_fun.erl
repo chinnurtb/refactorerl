@@ -21,427 +21,193 @@
 %%% Module information
 
 %%% @doc This module implements the extract function refactoring.
+%%% An alternative of a function definition might contain an expression
+%%% (or a sequence of expressions) which can be considered as a logical unit,
+%%% hence a function definition can be created from it. The extracted function
+%%% is lifted to the module level, and it is parametrized with the `free'
+%%% variables of the original expression(s): those variables which are bound
+%%% outside of the expression(s), but the value of which is used by the
+%%% expression(s). The extracted function will not be exported from the module.
 %%%
-%%% @author Melinda Toth <toth_m@inf.elte.hu>
-%%% @author Robert Kitlei <kitlei@inf.elte.hu>
+%%% Conditions of applicability
+%%% <ul>
+%%%   <li> The name of the function to be introduced should not conflict with
+%%%   another function, either defined in the same module, imported from
+%%%   another module, or being an autoimported built-in function (overloading).
+%%%    Furthermore, the name should be a legal function name.</li>
+%%%   <li> The starting and ending positions should delimit a sequence of
+%%%   expressions.</li>
+%%%   <li> Variables with possible binding occurrences in the selected
+%%%   sequence of expressions should not appear outside of the
+%%%   sequence of expressions.</li>
+%%%   <li> The extracted sequence of expressions cannot be part of a guard
+%%%   sequence.</li>
+%%%   <li> The extracted sequence of expressions cannot be part of a
+%%%   pattern.</li>
+%%%   <li> The extracted sequence of expressions cannot be part of macro
+%%%   definition, and are not part of macro application parameters.</li>
+%%%   <li> If the selection is a part of a list comprehension, it must be
+%%%   a single expression and must not be the generator of the comprehension.
+%%%   </li>
+%%% </ul>
+%%%
+%%% Rules of the transformation
+%%% <ol>
+%%%   <li> Collect all variables that the selected sequence of expressions
+%%%   depends on.</li>
+%%%   <li> Collect variables from the selected variables in step 1, which has
+%%%   binding occurrence out of the selected part of the module. </li>
+%%%   <li> Add a new function definition to the current module with a single
+%%%   alternative. The name of the function is an argument to the
+%%%   refactoring. The formal parameter list consists of the variables
+%%%   selected in step 2.</li>
+%%%   <li> Replace the selected sequence of expressions with a function call
+%%%   expression, where the name of the function is given as an argument
+%%%   to the refactoring, and the actual parameter list consists of the
+%%%   variables selected in step 2.</li>
+%%%   <li> The order of the variables must be the same in steps 3 and 4.</li>
+%%%   <li> If the selected expression is a block-expression, eliminate the
+%%%   begin-end keywords from the expression in the body of the created new
+%%%   function.</li>
+%%% </ol>
+%%%
+%%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_tr_extract_fun).
--vsn("$Rev: 1939 $").
+-vsn("$Rev: 2611 $").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/4]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
--record(refst, {filename, newname, frompos, topos,
-                file, module, fromtoken, totoken,
-                form, index, notboundvarnames,
-                fromexpr, fromtype, fromkind, toexpr,
-                topexpr, topclause, refcase, exprs,
-                varrefs, vars, boundvars, notboundvars,
-                arity, parent, delexprs}).
-
-%%% ============================================================================
-%%% Errors
-
-
-%%% ============================================================================
-%%% Interface
-
-%% @spec do(string(), string(), integer(), integer()) -> ok
-%%
-%% @doc Create a new function definition from the selected expression(s)
-%% between 
-%% the given positions `Begin' and `End' if the side-conditions are hold, and 
-%% replace the selection with a call of this new function. The name of the  
-%% function is the parameter `FunName'. The variables used inside but 
-%% bound outside the selected part becomes the parameters of the new function.
-do(File, FunName, Begin, End) ->
-    ?TRANSFORM:do(?MODULE, {File, FunName, Begin, End}).
+-export([prepare/1]).
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({FileName, NewName, FromPos, ToPos}) ->
-    #refst{filename = FileName,
-           newname  = list_to_atom(NewName),
-           frompos  = FromPos,
-           topos    = ToPos}.
-
-%%% ----------------------------------------------------------------------------
-%%% Transformation steps
-
-%% @private
-steps() ->
-    [
-        fun file_node/1,
-        fun module_node/1,
-        fun from_token/1,
-        fun to_token/1,
-        fun from_expr_type_kind/1,
-
-        fun check_from/1,
-
-%        fun check_macro/1,
-
-        fun to_expr/1,
-        fun top_expr/1,
-        fun check_is_pattern/1,
-        fun refac_case/1,
-        fun top_clause/1,
-        fun selected_exprs/1,
-
-        fun check_top_expr/1,
-        fun check_whole_expr_is_selected/1,
-        fun check_is_binary_field/1,
-
-        fun form_index/1,
-        fun used_vars/1,
-        fun bindings/1,
-
-        fun check_is_function_name/1,
-        fun check_is_autoimported/1,
-        fun check_existing_funname/1,
-        fun check_imported_funname/1,
-        fun check_all_var_bound_ok/1,
-
-        fun parent/1,
-        fun delexprs/1,
-        fun eliminate_begin_end/1
-    ].
-
-
-%% @private
-%% Removes the selection and inserts a function application instead.
-%% Adds the selection as a new function at the end of the file.
-transform(#refst{topexpr          = TopExpr,
-                 refcase          = RefacCase,
-                 file             = File,
-                 index            = FormIndex,
-                 newname          = Name,
-                 notboundvarnames = NotBoundVarNames,
-                 exprs            = Exprs,
-                 parent           = Parent,
-                 delexprs         = DelExprs}) ->
-    case RefacCase of
-        expr ->
-            Index  = ?ESG:index(Parent, sub, TopExpr),
-            replace_with_app(Parent, Name, NotBoundVarNames,
-                                     hd(DelExprs),Index, sub);
-        _  ->
-            replace_with_app(Parent, Name, NotBoundVarNames,
-                                     DelExprs, index, body)
+prepare(Args) ->
+    Exprs   = ?Args:expr_range(Args),
+    {Link, Parent} = check_expr_link(Exprs),
+    NewName = ?Args:name(Args),
+    Module = ?Args:module(Args),
+    lists:foreach(fun check_expr/1, Exprs),
+    Form = ?Query:exec1(hd(Exprs), ?Query:seq(?Expr:clause(), ?Clause:form()),
+                        ?RefErr0r(parent_not_form)),
+    [File] = ?Query:exec(Form, ?Form:file()),
+    {Bound, NotBound} = vars(Exprs),
+    check_var(Bound,Exprs),
+    DelExprs = Exprs,
+    NewExprs = eliminate_begin_end(Exprs),
+    Comments = ?Syn:get_comments(NewExprs),
+    PatNames = lists:usort([?Var:name(Var) || Var <- NotBound]),
+    Arity = length(PatNames),
+    check_fun(Module, NewName, Arity),
+    FormIndex  = ?Syn:index(File, form, Form),
+    ?Transform:touch(File),
+    [fun() ->
+         replace_with_app(Parent, NewName, PatNames, DelExprs, Link),
+         add_fun_form(File, NewName, PatNames, NewExprs, FormIndex)
     end,
-    add_fun_form(File, Name, NotBoundVarNames, Exprs, FormIndex),
-    ?ESG:close(),
+    fun(_) ->
+            ?Syn:put_comments(NewExprs, Comments)
+    end].
 
-    {[File], ok}.
+vars(Exprs) ->
+    VarBinds = lists:usort(?Query:exec(Exprs, ?Expr:varbinds())),
+    VarRefs  = lists:usort(?Query:exec(Exprs, ?Expr:varrefs())),
+    {VarBinds, VarRefs -- VarBinds}.
 
 
-%%% ============================================================================
-%%% Implementation
-
-file_node(St = #refst{filename = FileName}) ->
-    case ?SYNTAX:file(FileName) of
-        {file, File} -> St#refst{file = File};
-        not_found    -> throw({"The file does not exist in the database!",
-                               FileName})
+eliminate_begin_end(Exprs) ->
+    case {?Expr:kind(hd(Exprs)), length(Exprs)} of
+        {block_expr, 1} ->
+            ?Query:exec(hd(Exprs), ?Query:seq(?Expr:clauses(), ?Clause:body()));
+        _ -> Exprs
     end.
-
-
-module_node(St = #refst{file = File}) ->
-    case ?GRAPH:path(File, [moddef]) of
-        [ModuleNode] -> St#refst{module = ModuleNode};
-        _            -> throw("The module node does not exist in the graph!")
-    end.
-
-
-from_token(St = #refst{file = File, frompos = FromPos}) ->
-    case  ?LEX:token_by_pos(File, FromPos) of
-        {ok, FromToken} -> St#refst{fromtoken = FromToken};
-        _         -> throw("There is not any lexical element " ++
-                            "in the selected position")
-    end.
-
-
-to_token(St = #refst{file = File, topos = ToPos}) ->
-    case  ?LEX:token_by_pos(File, ToPos) of
-        {ok, ToToken} -> St#refst{totoken = ToToken};
-        _         -> throw("There is not any lexical element " ++
-                            "in the selected position")
-    end.
-
-
-from_expr_type_kind(St = #refst{fromtoken = FromToken}) ->
-    [{_,FromExpr}] = ?ESG:parent(FromToken),
-    case ?ESG:data(FromExpr) of
-        #expr{type=FromType, kind = FromKind} ->
-            St#refst{fromexpr = FromExpr,
-                     fromtype = FromType,
-                     fromkind = FromKind };
-        _ ->
-            throw("The selected part is not a legal sequence")
-    end.
-
-
-to_expr(St = #refst{totoken = ToToken}) ->
-    [{_,ToExpr}] = ?ESG:parent(ToToken),
-    case ?ESG:data(ToExpr) of
-        #expr{} -> St#refst{toexpr = ToExpr};
-        _ -> throw("The selected part is not a legal sequence")
-    end.
-
-
-top_expr(St = #refst{fromexpr = FromExpr, toexpr = ToExpr}) ->
-    case ?SYNTAX:top_node(FromExpr, ToExpr) of
-        {expr, TopExpr, _, _}   -> St#refst{topexpr = TopExpr};
-        {clause, TopExpr, _, _} -> St#refst{topexpr = TopExpr};
-        _  -> throw("The selected part is not a legal sequence!!!")
-    end.
-
-
-%% Three cases of the refactoring according to the selection:
-%%      refcase_expr      : an expression that does not form a whole body
-%%      refcase_expr_body : an expression that forms a whole body
-%%      refcase_body      : a part of a body, contains multiple expressions
-refac_case(St = #refst{topexpr = TopExpr}) ->
-    case {?ESG:data(TopExpr), ?ESG:data(?SYNTAX:single_parent(TopExpr))} of
-        {#expr{},   #expr{}}   -> St#refst{refcase = expr};
-        {#expr{},   #clause{}} -> St#refst{refcase = expr_body};
-        {#clause{}, _}         -> St#refst{refcase = body};
-        {_, _} -> throw("The selected part is not a legal sequence!")
-    end.
-
-
-top_clause(St = #refst{fromexpr = Expr}) ->
-    case ?ESG:path(Expr, [sup, {visib, back}, scope, functx]) of
-        [] -> throw("The selected part is not a legal sequence!");
-        [TopClause] ->
-            St#refst{topclause = TopClause}
-    end.
-
-
-%% Returns the list of the selected expressions.
-selected_exprs(St = #refst{refcase = body, fromexpr = FromExpr,
-                           toexpr = ToExpr, topexpr = ClauseNode}) ->
-    BodyExprs = ?ESG:path(ClauseNode,[body]),
-    case BodyExprs of
-        [] -> throw("The selected part is not a legal sequence!");
-        _  -> ok
-    end,
-    [From]    = ?ESG:path(FromExpr, [sup]),
-    [To]      = ?ESG:path(ToExpr, [sup]),
-    Selected  = ?MISC:separate_interval(BodyExprs, From, To),
-    case Selected of
-        [] -> throw("The selected part is not a legal sequence!");
-        _  -> ok
-    end,
-    St#refst{exprs = Selected};
-
-selected_exprs(St = #refst{topexpr = TopExpr}) ->
-    St#refst{exprs = [TopExpr]}.
-
-
-form_index(St = #refst{exprs = [Expr1|_], file = File}) ->
-    [Form] = ?ESG:path(Expr1, [sup, {visib,back}, scope, functx, {funcl,back}]),
-    Index  = ?ESG:index(File, form, Form),
-    St#refst{form = Form, index = Index}.
-
-
-used_vars(St = #refst{exprs = Exprs}) ->
-    Vars    = ?SEMINF:vars(sub, Exprs),
-    VarRefs = ?SEMINF:varrefs(Vars) ++ ?SEMINF:varbinds(Vars),
-    St#refst{vars = Vars, varrefs = VarRefs}.
-
-
-bindings(St = #refst{vars = Vars, varrefs = VarRefs}) ->
-    BoundVars        = ?SEMINF:inside_bound_vars(Vars, lists:usort(VarRefs)),
-    NotBoundVars     = Vars -- BoundVars,
-    NotBoundVarNames = lists:usort(
-                       [(?ESG:data(Var))#expr.value|| Var <- NotBoundVars]),
-    Arity            = length(NotBoundVarNames),
-    St#refst{boundvars        = BoundVars,
-             notboundvars     = NotBoundVars,
-             notboundvarnames = NotBoundVarNames,
-             arity            = Arity }.
-
-
-parent(St = #refst{exprs = Exprs})->
-    [{_,Parent}] = ?ESG:parent(hd(Exprs)),
-    St#refst{parent = Parent}.
-
-delexprs(St = #refst{exprs = Exprs})->
-    St#refst{delexprs = Exprs}.
-
-
-eliminate_begin_end(#refst{refcase = body})->
-    ok;
-eliminate_begin_end(St = #refst{exprs = Exprs} ) ->
-    case ?ESG:data(hd(Exprs)) of
-        #expr{kind = block_expr} ->
-            NewExprs = ?ESG:path(hd(Exprs), [exprcl, body]),
-            St#refst{exprs = NewExprs};
-        _ -> St
-    end.
-
-
 
 %%% ----------------------------------------------------------------------------
 %%% Checks
 
-check_whole_expr_is_selected(#refst{fromtoken=FromToken, totoken=ToToken,
-                                    exprs = Exprs}) ->
-     First = ?LEX:first_token(hd(Exprs)),
-     Last  = ?LEX:last_token(lists:last(Exprs)),
-      if
-         First/= FromToken -> 
-             throw("The selected part is not a legal sequence");
-         Last /= ToToken   -> 
-             throw("The selected part is not a legal sequence");
-         true -> 
-             ok
-      end.
+%% Note: the expression list is never empty, guaranteed by `?Args:expr_range/1'.
+check_expr_link([Expr1|Rest])->
+    case ?Syn:parent(Expr1) of
+        [{body, Par}] ->
+            ?Check(Rest =:= [] orelse ?Expr:kind(Expr1) =/= filter,
+                   ?RefError(bad_kind, filter)),
+            {body, Par};
+        [{sub, Par}]  ->
+            ?Check(Rest =:= [], ?RefErr0r(bad_range)),
+            {sub, Par};
+        [{pattern, _Par}] -> throw(?RefError(bad_kind, pattern));
+        [{guard, _Par}] -> throw(?RefError(bad_kind, guard));
+        _ ->  throw(?RefErr0r(bad_kind))
+    end.
 
-check_is_function_name(#refst{newname = NewName}) ->
-    case ?LEX:is_valid_name(function, atom_to_list(NewName)) of
-        true -> ok;
-        _    -> 
-            Message = ?MISC:format("The given name ~p is not a legal " ++ 
-                      "function name!", [NewName]),
-            throw(Message)
+check_expr(Expr) ->
+    Type = ?Expr:type(Expr),
+    Kind = ?Expr:kind(Expr),
+    ?Check(Type =:= expr,
+           ?RefError(bad_kind, Type)),
+    ?Check(Kind =/= compr andalso
+           Kind =/= list_gen,
+           ?RefError(bad_kind, list_comp)),
+    ?Check(Kind =/= binary_gen andalso
+           Kind =/= binary_field andalso
+           Kind =/= prefix_bit_expr andalso
+           Kind =/= bit_size_expr andalso
+           Kind =/= size_qualifier,
+           ?RefError(bad_kind, binary)),
+    case ?Query:exec(Expr, ?Expr:parent()) of
+        []        -> ok;
+        [Parent]  ->
+            ParKind = ?Expr:kind(Parent),
+            ?Check(ParKind =/= binary_field andalso
+                   ParKind =/= prefix_bit_expr andalso
+                   ParKind =/= bit_size_expr andalso
+                   ParKind =/= size_qualifier,
+                   ?RefError(bad_kind, binary))
     end.
 
 
-check_is_autoimported(#refst{newname = NewName, arity = NewArity})->
-    Clashes     = [erl_internal:bif(NewName, NewArity)],
-    ErrFunArity = ?MISC:format("~p/~p", [NewName, NewArity]),
-    ErrMsg      = "The given function " ++ ErrFunArity ++ " is autoimported",
-    ?MISC:error_on_difference(Clashes, [false], ErrMsg).
+check_fun(Module, NewName, Arity) ->
+    ModName = ?Mod:name(Module),
+    ?Check(?Query:exec(Module, ?Mod:local(NewName, Arity)) =:= [],
+           ?RefError(fun_exists, [ModName, NewName, Arity])),
+    ?Check(?Query:exec(Module, ?Mod:imported(NewName, Arity)) =:= [],
+           ?RefError(imported_fun_exists, [ModName, [NewName, Arity]])),
+    ?Check(?Fun:autoimported(NewName, Arity) =:= false,
+           ?RefError(autoimported_fun_exists, [NewName, Arity])).
 
-check_existing_funname(#refst{module=Module, newname=NewName, arity=Arity})->
-    check_funs(Module, NewName, Arity, func).
-
-check_imported_funname(#refst{module=Module, newname=NewName, arity=Arity})->
-    check_funs(Module, NewName, Arity, funimp).
-
-
-check_funs(Module, NewName, NewArity, Link) ->
-    Objects = ?GRAPH:path(Module, [Link]),
-    Clashes = [clash || Obj <- Objects,
-                        #func{name=Name,arity=Arity} <- [?GRAPH:data(Obj)],
-                        Name  == NewName, Arity == NewArity],
-    ErrFunArity = ?MISC:format("~p/~p", [NewName, NewArity]),
-    ErrMsg      = "The given function " ++ErrFunArity++ " exists in the module",
-    ?MISC:error_on_difference(Clashes, [], ErrMsg).
+check_var(BoundVars, Exprs)->
+    Occurrences  = lists:flatten([?Query:exec(BoundVars,
+                                              ?Var:occurrences(Expr)) ||
+                                  Expr <- Exprs]),
+    AllVarOccurs = ?Query:exec(BoundVars, ?Var:occurrences()),
+    Clash = lists:usort([list_to_atom(?Expr:value(Var)) ||
+                         Var <- (AllVarOccurs -- Occurrences)]),
+    ?Check( Clash =:= [],
+           ?RefError(outside_used_vars, Clash)).
 
 
-%% check_macro(#refst{fromexpr = Expr, toexpr = Expr}) -> ok;
-%% check_macro(#refst{fromtoken = FromToken}) ->
-%%     PossibleMacro = ?GRAPH:path(FromToken, [{mbody,back}]),
-%%     ?MISC:error_on_difference(PossibleMacro, [], in_macro, {}).
+%%% ===========================================================================
+%%% Syntactic transformations.
 
-check_from(#refst{fromtype = guard}) ->
-    throw("The selected expression is a guard expression");
-check_from(#refst{fromkind = conjunction}) ->
-    throw("The selected expression is a guard expression");
-check_from(#refst{fromkind = disjunction}) ->
-    throw("The selected expression is a guard expression");
-check_from(_) ->
-    ok.
-
-
-check_top_expr(#refst{topexpr = TopExpr}) ->
-    case ?ESG:data(TopExpr) of
-        #expr{kind = list_gen} ->
-            throw("The selected expression  is a list generator");
-        _                      -> ok
-    end,
-    [{_,Parent}] = ?ESG:parent(TopExpr),
-    case ?ESG:data(Parent) of
-        #expr{kind = list_gen} ->
-            Sub1 = ?ESG:path(Parent, [{sub,1}]),
-            case Sub1 == [TopExpr] of
-                true -> throw("The selected expression is in a list generator");
-                _    -> ok
-            end;
-        _ -> ok
-    end.
-
-
-check_is_pattern(St = #refst{fromexpr = FromExpr,  toexpr = ToExpr})->
-    case {?ESG:data(FromExpr), ?ESG:data(ToExpr)} of
-        {#expr{type = pattern}, #expr{type = pattern}} -> 
-            throw("The selected expression is a pattern!");
-        {#expr{}, #expr{}} -> 
-            St;
-        _ ->
-           throw("The selected part is not a legal sequence!")
-    end.
-
-
-check_is_binary_field(#refst{topexpr = TopExpr})->
-    case ?ESG:data(element(2,hd(?ESG:parent(TopExpr)))) of
-        #expr{kind = binary_field} -> throw("The selected expression "
-                                             ++ " is a binary_field");
-        _                          -> ok
-    end.
-
-
-check_all_var_bound_ok(#refst{boundvars = BoundVars, varrefs = VarObjs,
-                              topclause = TopClause})->
-    AllVarNodes = ?SEMINF:vars(clause, [TopClause]),
-    AllVarObjs  = ?SEMINF:varrefs(AllVarNodes) ++ ?SEMINF:varbinds(AllVarNodes),
-    OutVarObjs  = AllVarObjs -- VarObjs,
-    OutUsedVarBindings = ?SEMINF:varbinds_back(OutVarObjs),
-    BadList     = ?MISC:intersect(OutUsedVarBindings, BoundVars),
-    ErrNames    = [(?ESG:data(Bad))#expr.value|| Bad <- BadList],
-    ErrMsg      = 
-        "The following variables are bound inside the selection, " ++
-        "but are used outside: " ++ var_io(ErrNames),
-    ?MISC:error_on_difference(BadList, [], ErrMsg).
-
-var_io([])->
-    "";
-var_io([Head])->
-    Head;
-var_io([Head|Tail]) ->
-    Head ++ ", " ++ var_io(Tail).
-
-
-%%% Transformations from referl_create
-
-%% Extract function uses it
-replace_with_app(Parent, AppName, AppArgNames, DelExprs, Index, Type)->
-    Name = ?SYNTAX:create(#expr{kind = atom}, [atom_to_list(AppName)]),
-    Args = [?SYNTAX:create(#expr{kind = variable}, [AName]) 
+replace_with_app(Parent, AppName, AppArgNames, DelExprs, Type)->
+    Name = ?Syn:create(#expr{kind = atom}, [io_lib:write(AppName)]),
+    Args = [?Syn:create(#expr{kind = variable}, [AName])
                                 || AName <- AppArgNames],
-    App  = ?SYNTAX:create(#expr{kind = application}, [{sub, [Name]}, 
+    App  = ?Syn:create(#expr{kind = application}, [{sub, [Name]},
                                {sub, Args}]),
-    case Type of 
-        sub  -> ?ESG:remove(Parent, sub, DelExprs),
-                ?ESG:insert(Parent, {sub,Index}, App);
-        body -> Dels = {hd(DelExprs), lists:last(DelExprs)},
-                ?SYNTAX:replace(Parent, Dels, [{body, [App]}])
+    case Type of
+        sub  -> ?Syn:replace(Parent, {node, hd(DelExprs)}, [App]);
+        body -> Dels = {range, hd(DelExprs), lists:last(DelExprs)},
+                ?Syn:replace(Parent, Dels, [App])
     end.
 
-
-%% Extract function uses it
 add_fun_form(File, FunName, ClPatternNames, Body, FormIndex) ->
-    ClPatternNodes = [?SYNTAX:create(#expr{kind = variable},[Name])
+    ClPatternNodes = [?Syn:create(#expr{kind = variable},[Name])
                      || Name <- ClPatternNames ],
-    FName   =   ?SYNTAX:create(#expr{kind = atom}, [atom_to_list(FunName)]),
-    ClNode  = ?SYNTAX:create(#clause{kind = fundef},[{name, FName},
+    FName   = ?Syn:create(#expr{kind = atom}, [io_lib:write(FunName)]),
+    ClNode  = ?Syn:create(#clause{kind = fundef},[{name, FName},
                              {pattern, ClPatternNodes},{body, Body}]),
-    FunForm = ?SYNTAX:create(#form{type = func}, [{funcl,ClNode}]),
-    ?ESG:insert(File, {form, FormIndex +1}, FunForm).
-
-
+    FunForm = ?Syn:create(#form{type = func}, [{funcl,ClNode}]),
+    ?File:add_form(File, FormIndex + 1, FunForm).

@@ -25,7 +25,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(build_parser).
--vsn("$Rev: 1578 $").
+-vsn("$Rev: 2247 $").
 
 -export([build/1]).
 
@@ -94,23 +94,32 @@ node_structure(Root = #xmlElement{name='erlang-syntax'}) ->
 
     ensure_no_duplicates(Rules),
 
+    LexInf =
+        [{Class, Lex} ||
+            [[Class], [Lex]] <-
+                collect_xml(Root, [{"rule-class", ["@class", "@lexlink"]}])],
+
     ["-module(referl_syntax_nodes).\n",
-     "-export([node_structure/1, token_attribs/1]).\n",
+     "-export([structure/1, attribs/1, lexlink/1, parentlink/1]).\n",
      "-include(\"refactorerl.hrl\").\n\n",
      [structure_text(R) || R <- Rules],
-     "node_structure(_) -> erlang:error(unknown_structure).\n\n\n",
+     "structure(_) -> erlang:error(unknown_structure).\n\n\n",
      [attrib_text(R) || R <- Rules],
-     "token_attribs(_) -> [].\n"
+     "attribs(_) -> [].\n\n\n",
+     [lexlink_text(Class, Lex) || {Class, Lex} <- LexInf],
+     "lexlink(_) -> erlang:error(unknown_class).\n\n\n",
+     [parent_text(Class, Links) || {Class, Links} <- parent_info(Root)],
+     "parentlink(_) -> erlang:error(unknown_class).\n"
     ].
 
 structure_text({Class, _Lex, Attribs, Struct, _TokenAttrib}) ->
-    ["node_structure(", data_text(Class, Attribs), ") ->\n",
+    ["structure(", data_text(Class, Attribs), ") ->\n",
      io_lib:format("    ~p;", [Struct]),
      "\n\n"].
 
 attrib_text({_C, _L, _A, _S, []}) -> "";
 attrib_text({Class, Lex, Attribs, _Struct, TokenAttrib}) ->
-    ["token_attribs(", data_text(Class, Attribs), ") ->\n",
+    ["attribs(", data_text(Class, Attribs), ") ->\n",
      "    [",
      join([io_lib:format("{{~s, ~b}, #~s.~s}", [Lex, N, Class, Attr]) ||
               {Attr, N} <- TokenAttrib],
@@ -120,6 +129,40 @@ data_text(Class, Attribs) ->
     ["#", Class, "{",
      join([[A,"='",V,"'"] || {A,V} <- Attribs], ","),
      "}"].
+
+lexlink_text(Class, Lex) ->
+    ["lexlink(", Class, ") -> ", Lex, ";\n"].
+
+parent_text(Class, Links) ->
+    ["parentlink(", Class, ") -> [", join(Links, ", "), "];\n"].
+
+parent_info(Root) ->
+    ParLink =
+        lists:foldl(
+          fun ({Name, Link}, D) -> dict:append(Name, Link, D) end,
+          dict:new(),
+          [{Name, Link} ||
+              [[Name],[Link]] <- collect_xml(
+                                   Root, [{"rule-class/ruleset/rule//symbol",
+                                           ["@name", "@link"]}]) ++
+                  collect_xml(
+                    Root, [{"rule-class/ruleset/rule//repeat",
+                            ["@symbol", "@link"]}])
+                 ]),
+    Classes =
+        lists:foldl(
+          fun({Class, Name}, D) -> dict:append(Class, Name, D) end,
+          dict:new(),
+          [{Class, Name} ||
+              [[Class], [Name]] <- collect_xml(
+                                     Root, [{"rule-class", "@class"},
+                                            {"ruleset","@head"}])]),
+    [{Class, lists:usort(lists:flatmap(
+                           fun(N) -> case dict:find(N, ParLink) of
+                                         {ok, L} -> L;
+                                         error   -> [] end
+                           end, dict:fetch(Class, Classes)))} ||
+        Class <- dict:fetch_keys(Classes)].
 
 ensure_no_duplicates([{C1, Att1, Tok1, _, _} |
                        Tail = [{C2, Att2, Tok2, _, _} | _]]) ->
@@ -226,9 +269,10 @@ parser(Root) ->
      "Rootsymbol ", RootSymbol, ".\n",
      Rules,
      "Erlang code.\n",
-     "-import(referl_synlex, [syn_elem/2]).\n",
      "-include(\"refactorerl.hrl\").\n",
-     "tvalue({_Type,_Index,{#token{value=V},_Node}})->V.\n"].
+     "-import(?Syn, [build/2]).\n",
+     "tvalue({_Type,_Index,{#token{value=V},_Node}})->V.\n",
+     "tnode({_Type,_Index,{_Token,Node}})->Node.\n"].
 
 
 %% returns {NTs, Rules}
@@ -236,7 +280,7 @@ parser_rules(Root) ->
     {OneLineRulesText, OneLineNTs} = one_line_rules(Root),
 
     Rules = collect_xml(Root,
-                        [ {"rule-class", "@class"},
+                        [ {"rule-class", ["@class", "@lexlink"]},
                           {"ruleset", "@head"},
                           {"rule", ["attrib/@name", "attrib/@value", "*"]}
                          ]),
@@ -273,21 +317,22 @@ one_line_rule_text([Head, Name]) ->
 
 
 synelem(Class, Nr) -> ["{", Class, ", '$", Nr, "'}"].
+lexelem(Lex, Nr) -> ["{", Lex, ", tnode('$", Nr, "')}"]. 
 
-gen_rule(Head, Nr, Head, Class, _) ->
+gen_rule(Head, Nr, Head, Class, _, _) ->
     {{Head, synelem(Class, Nr)}, "", [Head]};
-gen_rule(Elem = #xmlElement{name=Name}, Nr, Head, Class, RuleFullHead) ->
-    gen_rule2(Name, Elem, Nr, Head, Class, RuleFullHead).
+gen_rule(Elem = #xmlElement{name=Name}, Nr, Head, Class, Lex, RuleFullHead) ->
+    gen_rule2(Name, Elem, Nr, Head, Class, Lex, RuleFullHead).
 
 
-gen_rule2(token, Elem, Nr, Head, _, _) ->
+gen_rule2(token, Elem, Nr, Head, _, Lex, _) ->
     TokenType = xpath_attr("@type", Elem),
-    {{TokenType, synelem("'$token'", Nr)}, "", [Head]};
-gen_rule2(symbol, Elem, Nr, Head, _, _) ->
+    {{TokenType, lexelem(Lex, Nr)}, "", [Head]};
+gen_rule2(symbol, Elem, Nr, Head, _, _, _) ->
     Name = xpath_attr("@name", Elem),
     Link = xpath_attr("@link", Elem),
     {{Name, synelem(Link, Nr)}, "", [Head]};
-gen_rule2(repeat, Elem, Nr, _, _, RuleFullHead) ->
+gen_rule2(repeat, Elem, Nr, _, _, Lex, RuleFullHead) ->
     NewHead                    = RuleFullHead ++ "@reps" ++ Nr,
     [TokenName]                = collect_xml(Elem, [{".", "@separator"}]),
     [[SymbolName, SymbolLink]] =
@@ -295,23 +340,24 @@ gen_rule2(repeat, Elem, Nr, _, _, RuleFullHead) ->
     SimpleRule =
         NewHead ++ " -> " ++ SymbolName ++ " : {" ++ SymbolLink ++ ", '$1'}.\n",
     TokenRule =
-        NewHead ++ " -> " ++ NewHead ++ " " ++ TokenName ++ " " ++ SymbolName
-        ++ " : ['$1', {'$token', '$2'}, " ++ synelem(SymbolLink, "3") ++ "].\n",
+        [NewHead, " -> ", NewHead, " ", TokenName, " ", SymbolName,
+         " : ['$1', ",lexelem(Lex, "2"),", ",synelem(SymbolLink, "3"),"].\n"],
     { {NewHead, ["'$",Nr,"'"]}, SimpleRule ++ TokenRule, [NewHead]};
-gen_rule2(optional, Elem, Nr, _, Class, RuleFullHead) ->
+gen_rule2(optional, Elem, Nr, _, Class, Lex, RuleFullHead) ->
     NewHead   = RuleFullHead ++ "@opt" ++ Nr,
     EmptyRule = NewHead ++ " -> '$empty' : [].\n",
     Content   = xmerl_xpath:string("*", Elem),
     {InnerRule, InnerNTs} =
-        parser_generate_rule({[Class, [NewHead], [], [], Content], ""}),
+        parser_generate_rule({[Class, Lex, [NewHead], [], [], Content], ""}),
     { {NewHead, ["'$",Nr,"'"]}, EmptyRule ++ InnerRule, [NewHead] ++ InnerNTs}.
 
 
-parser_generate_rule({[Class, [Head], AttribName, AttribValue, RHS], RuleNr}) ->
+parser_generate_rule({[Class, Lex, [Head],
+                       AttribName, AttribValue, RHS], RuleNr}) ->
     RuleFullHead = Head ++ RuleNr,
     FilteredRHS  = [E || E=#xmlElement{name=Name} <- RHS, Name =/= attrib],
     IndexedRHS   = text_index_list(FilteredRHS),
-    Mixture      = [ gen_rule(RHSElem, Nr, Head, Class, RuleFullHead)
+    Mixture      = [ gen_rule(RHSElem, Nr, Head, Class, Lex, RuleFullHead)
                         || {RHSElem, Nr} <- IndexedRHS ],
 
     {RuleComponents, GeneratedRules, NTs} = lists:unzip3(Mixture),
@@ -337,7 +383,7 @@ parser_synelem(AttribName, AttribValue, SemanticText, IndexedRHS, Class) ->
 
     SemText = lists:flatten(SemanticText),
 
-    ["syn_elem(#", Class, "{", join(AllAdditionalAttrs, ","), "}, ",
+    ["build(#", Class, "{", join(AllAdditionalAttrs, ","), "}, ",
      "[", SemText, "])"].
 
 %%%%% =========================================================================
@@ -407,11 +453,12 @@ schema_group([[From, Via, To]|Xs], Head, RuleAcc, Acc) ->
 scanner(Root) ->
     EndToken = xpath_attr("@end", Root),
     "Definitions.\n" ++ scanner_generate_definitions(Root)
-      ++ "Rules.\n"
-       ++ scanner_generate_rules(Root, EndToken)
-       ++ scanner_generate_lexical_rules(Root, EndToken)
-      ++ "Erlang code.\n"
-       ++ "-import(referl_synlex, [lex_elem/2]).".
+        ++ "Rules.\n"
+        ++ scanner_generate_rules(Root, EndToken)
+        ++ scanner_generate_lexical_rules(Root, EndToken)
+        ++ "Erlang code.\n"
+        ++ "-include(\"refactorerl.hrl\").\n"
+        ++ "-import(?Token, [build/2]).\n".
 
 scanner_generate_definitions(Root) ->
     Patterns = collect_xml( Root, [ {"pattern", ["@name", "*"]}]),
@@ -484,7 +531,7 @@ scanner_RHS([Name], EndToken) ->
             true              -> "token"
         end,
     ["{", TokenType, ",",
-     "{'", Name, "', TokenLine, lex_elem('", Name, "', TokenChars)}}.\n"].
+     "{'", Name, "', TokenLine, build('", Name, "', TokenChars)}}.\n"].
 
 
 %%%%% =========================================================================

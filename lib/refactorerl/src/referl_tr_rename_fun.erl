@@ -21,269 +21,150 @@
 %%% Module information
 
 %%% @doc This module implements the rename function refactoring.
-%%% Currently it works only in special cases and it does not check any
-%%% conditions.
 %%%
-%%% @todo Now every file is saved; only the modified ones should be.
-%%% @todo Files should not be saved here.
-%%% @todo The function could be selected by clicking on the export list's
-%%% corresponding item.
-%%% @todo If a function is exported and is imported to module `a', and the new
-%%% form of the function would collide with a local or imported function in `a',
-%%% then the refactoring should not be allowed.
+%%% The name is an important property of a function. While its actual value does
+%%% not influence the semantics of the program, it is a key point in the
+%%% readability of the code, and because Erlang programs mainly consist of
+%%% functions, their names play an often underestimated role in software
+%%% development and support. It is worth the effort to try to choose them well,
+%%% and to correct misleading names even when they are user throughout the code.
+%%% This transformation helps in the latter case.
+%%%
+%%% Side conditions
+%%%
+%%% <ul>
+%%% <li> There must be no function with the given name and the same arity as the
+%%% function to be renamed among the functions in the module,
+%%% the functions imported in the module, and the auto-imported BIFs.</li>
+%%% <li>There must be no function with the given name and the same arity as the
+%%% function to be renamed among the local and imported
+%%% functions in the modules that import the function to be renamed.</li>
+%%% <li>When there are multiple overloaded versions of the function, there must
+%%% be no call to the function that creates the list of arguments dynamically.
+%%% </li></ul>
+%%% Transformation steps and compensations
+%%%
+%%% <ol>
+%%%  <li>The name label of the function is changed at every branch of the
+%%%  definition to the new one.</li>
+%%%  <li>In every static call to the function, the old function name is changed
+%%%  to the new one.</li>
+%%%  <li>Every implicit function expression is modified to contain the new
+%%%  function name instead of the old one.</li>
+%%%  <li>If the function is exported from the module, the old name is removed
+%%%  from the export list and the new name is put in it.</li>
+%%%  <li>If the function is imported in an other module, the import list is
+%%%  changed in that module to contain the new name instead of the old one.</li>
+%%% </ol>
+%%%
+%%% Implementation status
+%%%
+%%% <ul>
+%%%   <li>All the transformation steps are implemented.</li>
+%%%   <li >The transformation does not takes into account
+%%%   the dynamic function calls. </li>
+%%% </ul>
+%%%
+%%% Implementation details
+%%%
+%%% <ul>
+%%% <li>The transformation first checks the side conditions, then performs the
+%%% refactoring if all the side conditions hold.</li>
+%%% <li>The transformation is implemented is a recursive manner. </li>
+%%% <li>It starts with the function's semantic node, visits the nodes that may
+%%% contain a token that refers to that function's name
+%%% and changes those tokens.</li>
+%%% </ul>
+%%%
 %%%
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
+%%% @author Atilla Erdodi <erdodi@elte.hu>
 
 -module(referl_tr_rename_fun).
--vsn("$Rev: 1952 $ ").
+-vsn("$Rev: 2641 $ ").
 -include("refactorerl.hrl").
 
-%%% ============================================================================
-%%% Exports
-
-%% Interface
--export([do/3, do/4]).
-
 %% Callbacks
--export([init/1, steps/0, transform/1]).
-
-%%% ============================================================================
-%%% Refactoring state
-
-%%% type refst() = #refst{spectype = (pos | mfa),
-%%%                       filename = string(),
-%%%                       pos = natural(),
-%%%                       modname = atom(),
-%%%                       oldfunname = atom(),
-%%%                       arity = integer(),
-%%%                       newfunname = atom() | string(),
-%%%                       funnode = node()}.
-%%%
-%%% Describes a specific rename function refactoring.
-%%%
-%%% Fields:
-%%% <ul>
-%%%     <li>`spectype': If `pos', then the specification is given with the
-%%%         `filename', `pos' and `newfunname' fields. If it is `mfa', the
-%%%         specification is given with the `modname', `oldfunname', `arity' and
-%%%         `newfunname' fields.</li>
-%%%     <li>`filename', `pos': The name and the position where the function to
-%%%         be renamed is.</li>
-%%%     <li>`modname', `oldfunname', `arity': The module, the name and the arity
-%%%         of the function to be renamed.</li>
-%%%     <li>`newfunname': The new name of the function to be renamed.</li>
-%%%     <li>`funnode': The semantic node of the function to be renamed.</li>
-%%% </ul>
--record(refst, {spectype, filename, pos, modname, oldfunname, arity, newfunname,
-                funnode}).
-
-%%% ============================================================================
-%%% Errors
-
-
-%%% ============================================================================
-%%% Interface
-
-% do({...}) ->
-%     todo.
-
-%% @spec do(string(), integer(), atom() | string()) -> ok
-%%
-%% @doc Renames the function at `Pos' position in `FileName' file to
-%% `NewFunName'.
-%%
-%% @todo Check that FileName is a list, Pos is an integer and NewFunName is an
-%% atom.
-do(FileName, Pos, NewFunName) ->
-    ?TRANSFORM:do(?MODULE, {pos, {FileName, Pos, NewFunName}}).
-
-%% @spec do(atom(), atom(), integer(), atom() | string()) -> ok
-%%
-%% @doc Renames the `OldFunName' function in the `ModName' module to
-%% `NewFunName'.
-%%
-%% @todo Check the type of the arguments.
-do(ModName, OldFunName, Arity, NewFunName) ->
-    ?TRANSFORM:do(?MODULE, {mfa, {ModName, OldFunName, Arity, NewFunName}}).
+-export([prepare/1]).
 
 %%% ============================================================================
 %%% Callbacks
 
 %% @private
-init({pos, {FileName, Pos, NewFunName}}) ->
-    #refst{spectype = pos,
-           filename = FileName,
-           pos = Pos,
-           newfunname = NewFunName};
-init({mfa, {ModName, OldFunName, Arity, NewFunName}}) ->
-    #refst{spectype = mfa,
-           modname = ModName,
-           oldfunname = OldFunName,
-           arity = Arity,
-           newfunname = NewFunName}.
+prepare(Args) ->
+    FunNode = ?Args:function(Args),
+    NewFunNameAtom = ?Args:name(Args),
 
-%% @private
-steps() ->
-    [fun preparation/1].
+    check_fun(FunNode, NewFunNameAtom),
 
-
-%% @private
-transform(St = #refst{funnode = FunNode}) ->
     %% calculating the updates
-    Updates = calc_update(FunNode, St),
+    Updates = calc_update(FunNode),
 
-    %% applying the updates
+    fun() ->
+	    lists:foreach(
+	      fun(Node) ->
+		      ?Syn:replace(Node, {elex, 1},
+				   [io_lib:write_atom(NewFunNameAtom)]),
+		      ?Transform:touch(Node)
+	      end, Updates)
+    end.
+
+%% @spec calc_update(node()) -> [node()]
+%%
+%% @doc Returns a list of name nodes that should be updated
+calc_update(FunNode) ->
+
+    %function definition
+    [FunDefNode] = ?Query:exec(FunNode, ?Fun:definition()),
+    FunClauseNodes = ?Query:exec(FunDefNode, ?Form:clauses()),
+    FunNameNodes = lists:flatten([?Query:exec(FunClauseNode, ?Clause:name())
+                                  || FunClauseNode <- FunClauseNodes]),
+
+    ImpExpNodes = ?Query:exec(FunNode, ?Fun:impexps()),
+    AppNodes = ?Query:exec(FunNode, ?Fun:applications()),
+    ImplicitNodes = ?Query:exec(FunNode, ?Fun:implicits()),
+
+    %function imports and exports
+    ImpExpNameNodes = [hd(?Query:exec(Node, ?Expr:child(1))) ||
+                          Node <- ImpExpNodes],
+
+    %function applications
+    AppNameNodes =
+        [case (?Query:exec(Node, ?Expr:modq()) == []) of
+             true ->
+                 hd(?Query:exec(Node, ?Expr:child(1)));
+             false -> % module qualifier present
+                 [DelimiterNode] = ?Query:exec(Node, ?Expr:child(1)),
+                 hd(?Query:exec(DelimiterNode, ?Expr:child(2)))
+         end || Node <- AppNodes],
+
+    %implicit function expressions
+    ImplicitNameNodes =
+        [case (?Query:exec(Node, ?Expr:modq()) == []) of
+             true ->
+                 hd(?Query:exec(Node, ?Expr:child(1)));
+             false ->
+                 [DelimiterNode] = ?Query:exec(Node, ?Expr:child(1)),
+                 hd(?Query:exec(DelimiterNode, ?Expr:child(2)))
+         end || Node <- ImplicitNodes],
+
+    FunNameNodes ++ ImpExpNameNodes ++ AppNameNodes ++ ImplicitNameNodes.
+
+
+check_fun(FunNode, NewName) ->
+    Arity = ?Fun:arity(FunNode),
+    Modules =
+        ?Query:exec(FunNode, ?Fun:module()) ++
+        ?Query:exec(FunNode, ?Fun:imported()),
+
     lists:foreach(
-      fun({Node, NewData}) ->
-              ?ESG:update(Node, NewData)
-      end, Updates),
+      fun(Module) ->
+              ModName = ?Mod:name(Module),
+              ?Check(?Query:exec(Module, ?Mod:local(NewName, Arity)) =:= [],
+                     ?RefError(fun_exists, [ModName, NewName, Arity])),
+              ?Check(?Query:exec(Module, ?Mod:imported(NewName, Arity)) =:= [],
+                     ?RefError(imported_fun_exists, [ModName, [NewName, Arity]]))
+      end, Modules),
 
-    ?ESG:close(),
-
-    %% TODO delete next line?
-    [ referl_fileman:save_file(X) || X <- ?ESG:path(?ESG:root(), [file]) ],
-    {?ESG:path(?ESG:root(), [file]), ok}.
-
-%%% ============================================================================
-%%% Implementation
-
-%% @spec preparation(State::refst()) -> refst()
-%%
-%% @doc Calculates certain undefined fields of the `State' and check the
-%% preconditions of the refactoring.
-%% The following fields of the `State' are set:
-%% `spectype', `oldfunname', `arity', `newfunname', `funnode'.
-%% The following fields are not sure to be set:
-%% `filename', `pos', `modname'.
-preparation(St = #refst{spectype = SpecType, newfunname = NewFunNameOrig}) ->
-    NewFunName =
-        case is_atom(NewFunNameOrig) of
-            true -> NewFunNameOrig;
-            false -> list_to_atom(NewFunNameOrig)
-        end,
-    case SpecType of
-        pos ->
-            #refst{filename = FileName, pos = Pos} = St,
-            FunNode = get_fun_by_token(
-                        ?LEX:get_token(?SYNTAX:get_file(FileName), Pos)),
-            #func{name = OldFunName, arity = Arity} = ?ESG:data(FunNode);
-        mfa ->
-            #refst{modname = ModName,
-                   oldfunname = OldFunName,
-                   arity = Arity} = St,
-            FunNode = ?SEMINF:get_fun_by_mfa(ModName, OldFunName, Arity)
-    end,
-    [Mod] = ?ESG:path(FunNode, [{func, back}]),
-    ?SEMINF:check_mod_does_not_have_fun(Mod, NewFunName, Arity),
-    ?SEMINF:check_mod_does_not_import_fun(Mod, NewFunName, Arity),
-    ?SEMINF:check_not_autoimported(NewFunName, Arity),
-    St#refst{oldfunname = OldFunName,
-             arity = Arity,
-             funnode = FunNode,
-             newfunname = NewFunName}.
-
-%%% ============================================================================
-%%% Transformation
-
-%% @spec calc_update(node(), refst()) -> [{node(), data()}]
-%%
-%% @doc Calculates the updates that should be performed on the nodes, starting
-%% from `Node'.
-calc_update(Node, Args) ->
-    calc_update(Node, ?ESG:data(Node), Args).
-
-%% @spec calc_update(node(), Data::data(), refst()) -> [{node(), data()}]
-%%
-%% @doc Calculates the updates that should be performed on the nodes, starting
-%% from `Node'.
-%% This function is separated from {@link calc_update/2} only so that the code
-%% will be nicer this way.
-%% This function should not be called directly, only through
-%% {@link calc_update/2}. `Data' is the data that belongs to `Node'.
-%% `calc_update(Node, Args)' is the same as
-%% `calc_update(Node, ?ESG:data(Node), Args)'.
-calc_update(Node, Data=#func{type = global, name = OldFunName, arity = Arity},
-            Args = #refst{oldfunname = OldFunName,
-                          arity = Arity,
-                          newfunname = NewFunName}) ->
-    NodeUpdate = {Node, Data#func{name=NewFunName}},
-    FunNameNodes = ?ESG:path(Node, [{fundef, back}, funcl, name]),
-    UserFunNodes = ?ESG:path(Node, [{funref, back}]),
-    OtherUpdates = [ Update ||
-                       ExprNode <- FunNameNodes ++ UserFunNodes,
-                       Update <- calc_update(ExprNode, Args) ],
-    [NodeUpdate|OtherUpdates];
-calc_update(Node, #expr{type = expr, kind = application}, Args) ->
-    [FunNameNode|_] = ?ESG:path(Node, [sub]),
-    calc_update(FunNameNode, Args);
-calc_update(Node, #expr{type = expr, kind = infix_expr, value = '/'}, Args) ->
-    [FunNameNode, _ArityNode] = ?ESG:path(Node, [sub]),
-    calc_update(FunNameNode, Args);
-calc_update(Node, #expr{type = expr, kind = infix_expr, value = ':'}, Args) ->
-    [_ModNode, FunNameNode] = ?ESG:path(Node, [sub]),
-    calc_update(FunNameNode, Args);
-calc_update(Node, #expr{type = expr, kind = implicit_fun}, Args) ->
-    case ?ESG:path(Node, [sub]) of
-        [FunNameNode, _ArityNode] ->
-            calc_update(FunNameNode, Args);
-        [_ModNode, FunNameNode, _ArityNode] ->
-            calc_update(FunNameNode, Args)
-    end;
-calc_update(Node,
-            Data = #expr{type = expr, kind = atom, value = OldFunName},
-            Args = #refst{oldfunname = OldFunName,
-                          newfunname = NewFunName}) ->
-    NodeNewData = Data#expr{value = NewFunName},
-    [LexNode] = ?ESG:path(Node, [elex]),
-    [{Node, NodeNewData} | calc_update(LexNode, Args)];
-calc_update(Node,
-            Lex = #lex{type = token,
-                       data = Data = #token{type = atom, value = OldFunName}},
-            _Args = #refst{oldfunname = OldFunName,
-                           newfunname = NewFunName}) ->
-    NewFunNameString = ?MISC:format("~p",[NewFunName]),
-    LexNodeNewData =
-        Lex#lex{data = Data#token{value = NewFunName,
-                                  text = NewFunNameString}},
-    [{Node, LexNodeNewData}].
-
-%%% ----------------------------------------------------------------------------
-%%% General functions
-%%% TODO should be placed in a general module
-
-%% @spec get_fun_by_token(node()) -> node()
-%%
-%% @doc Returns the semantic node of the function that is represented by the
-%% token under the cursor. The token may be the function name in the function's
-%% definition, but it may be a function call.
-get_fun_by_token(Token) ->
-    Path1 = [{elex, back}, {name, back}, {funcl, back}, fundef],
-    Path2 = [{elex, back}, sup, funref],
-    case try_paths([{Token, Path1}, {Token, Path2}]) of
-        {_, [FunNode]} -> FunNode;
-        _ -> throw("The selected position does not indicate a function!")
-    end.
-
-%% @spec try_path(node(), path()) -> [node()]
-%%
-%% @doc Calls the `path' function with the given arguments.
-%% Returns an empty list in case of a bad path.
-try_path(Node, Path) ->
-    try
-        ?ESG:path(Node, Path)
-    catch
-        error:{bad_path, _} -> []
-    end.
-
-%% @spec try_paths([{node(), path()}]) -> {{node(), path()}, [node()]}
-%%
-%% @doc Calls the `path' function with the `{Node, Path}' combinations.
-%% Stops at the first pair, where the result is not empty.
-%% That result and the matching pair will be the result of the function.
-try_paths([]) ->
-    [];
-try_paths([{Node, Path}|Tail]) ->
-    case try_path(Node, Path) of
-        [] -> try_paths(Tail);
-        Result -> {{Node, Path}, Result}
-    end.
+    ?Check(?Fun:autoimported(NewName, Arity) =:= false,
+           ?RefError(autoimported_fun_exists, [NewName, Arity])).

@@ -28,7 +28,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_nodetype).
--vsn("$Rev: 1921 $").
+-vsn("$Rev: 2170 $").
 -behaviour(referl_esg).
 
 -export([init/0, insert/5, remove/5]).
@@ -41,26 +41,26 @@ init() ->
 
 %% @private
 insert(_, #form{}, _, Clause, C=#clause{}) ->
-    ?GRAPH:update(Clause, C#clause{type=scope});
+    ?Graph:update(Clause, C#clause{type=scope});
 
 insert(_, #clause{}, pattern, Expr, E=#expr{}) ->
-    ?GRAPH:update(Expr, E#expr{type=pattern});
+    ?Graph:update(Expr, E#expr{type=pattern});
 
 insert(_, #clause{}, guard, Expr, E=#expr{}) ->
-    ?GRAPH:update(Expr, E#expr{type=guard});
+    ?Graph:update(Expr, E#expr{type=guard});
 
 insert(M, #expr{kind=match_expr}, sub, Expr, E=#expr{}) ->
-    case ?GRAPH:index(M, sub, Expr) of
-        1 -> ?GRAPH:update(Expr, E#expr{type=pattern});
+    case ?Graph:index(M, sub, Expr) of
+        1 -> ?Graph:update(Expr, E#expr{type=pattern});
         _ -> ok
     end;
 
 insert(_, #expr{type=T}, sub, Expr, E=#expr{type=T2}) when T =/= T2 ->
-    ?GRAPH:update(Expr, E#expr{type=T});
+    ?Graph:update(Expr, E#expr{type=T});
 
 insert(Parent, #expr{kind=Exp}, Tag, Clause, C=#clause{}) ->
-    Type = clause_type(Exp, Tag, ?GRAPH:index(Parent, Tag, Clause)),
-    ?GRAPH:update(Clause, C#clause{type=Type});
+    Type = clause_type(Exp, Tag, ?Graph:index(Parent, Tag, Clause)),
+    ?Graph:update(Clause, C#clause{type=Type});
 
 insert(_,_,_,_,_) ->
     ok.

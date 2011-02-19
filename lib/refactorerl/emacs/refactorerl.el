@@ -46,12 +46,15 @@
                  (directory :tag "Given directory"))
   :group 'refactorerl)
 
-(defcustom refactorerl-server-shell 'shell
-  "Launch the server using `erlang-shell' to get a direct shell access,
-or launch it as a direct subprocess, in which case a remote shell can be
-used to access the server."
-  :type '(choice (const :tag "Without local shell" noshell)
-                 (const :tag "With local shell" shell))
+(defcustom refactorerl-server-type 'internal
+  "Specifies how to start the RefactorErl server process.
+If its value is internal, the server process is managed internally.
+It its value is external, the server should be started manually.
+If its value is shell, a separate process is started by Emacs, with its
+  Erlang shell accessible through the buffer *RefactorErlShell*."
+  :type '(choice (const :tag "Internally managed server" internal)
+                 (const :tag "Externally started server" external)
+                 (const :tag "Managed server with shell access" shell))
   :group 'refactorerl)
 
 ;; Minor mode definition
@@ -191,6 +194,7 @@ used to access the server."
     (define-key map "\C-c\C-rS"    'refactorerl-add-checkpoint)
     (define-key map "\C-c\C-rc"    'refactorerl-clean)
     (define-key map "\C-c\C-rU"    'refactorerl-undo)
+    (define-key map "\C-c\C-rTT"   'refactorerl-toggle-test)
     (define-key map [menu-bar refactorerl]
       (cons "Refactor" (make-refactorerl-menu-map)))
     map))
@@ -214,10 +218,11 @@ Key bindings:
 \\{refactorerl-mode-map}
 "
   nil
-  (:eval (cond ((not refac-buffer-state) " Refact:???")
-                        ((eq refac-buffer-state 'off) " Refact:off")
-                        ((eq refac-buffer-state 'err) " Refact:error")
-                        ((eq refac-buffer-state 'ok) " Refact")))
+  (:eval (cond ((bound-and-true-p refac-test-mode) " Refact:TEST")
+               ((not refac-buffer-state) " Refact:???")
+               ((eq refac-buffer-state 'off) " Refact:off")
+               ((eq refac-buffer-state 'err) " Refact:error")
+               ((eq refac-buffer-state 'ok) " Refact")))
   (make-refactorerl-mode-map)
   (when refactorerl-mode
     (make-local-variable 'refac-buffer-state)
@@ -300,6 +305,23 @@ that connects to the RefactorErl server."
            "-remsh" "refactorerl@localhost")))
     (erlang-shell)))
 
+(defun refactorerl-toggle-test ()
+  (interactive)
+  (if (boundp 'refac-test-mode)
+      (setq refac-test-mode (not refac-test-mode))
+    (set (make-local-variable 'refac-test-mode) t)))
+
+(defun refac-transform (name &rest args)
+  (let ((arglist (mapcar (lambda (a) (vector (car a) (cdr a))) args)))
+    (cond ((not buffer-file-name)
+           (error "No visited file"))
+          ((bound-and-true-p refac-test-mode)
+           (kill-new (refac-erl-format arglist)))
+          ((not (eq refac-buffer-state 'ok))
+           (error "File is not ready for refactoring"))
+          (t
+           (refac-send-command 'transform name arglist)))))
+
 (defun refactorerl-extract-function (beg end name)
   "Performs the Extract Function refactoring. Operates on the expression or
 expressions between the point and the mark.
@@ -308,13 +330,11 @@ expressions between the point and the mark.
 2. Call the refactoring from the menu or with \\[refactorerl-extract-function].
 3. Type the new function name."
   (interactive "r\nsFunction name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'extract buffer-file-name beg end name)
-         (deactivate-mark))))
+  (refac-transform 'referl_tr_extract_fun
+                   (cons 'file buffer-file-name)
+                   (cons 'posrange (vector beg (1- end)))
+                   (cons 'name name))
+  (deactivate-mark))
 
 (defun refactorerl-merge-expr (beg end varname)
   "Performs the Merge Expression Duplicates refactoring. Operates
@@ -324,13 +344,11 @@ on the expression between the point and the mark.
 2. Call the refactoring from the menu or with \\[refactorerl-merge-expr].
 3. Type the new variable name."
   (interactive "r\nsNew variable name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'merge buffer-file-name beg end varname)
-         (deactivate-mark))))
+  (refac-transform 'referl_tr_merge
+                   (cons 'file buffer-file-name)
+                   (cons 'posrange (vector beg (1- end)))
+                   (cons 'varname varname))
+  (deactivate-mark))
 
 (defun refactorerl-inline-function (pos)
   "Performs the Inline Function refactoring.
@@ -338,58 +356,47 @@ on the expression between the point and the mark.
 1. Position the cursor over a function application.
 2. Call the refactoring from the menu or with \\[refactorerl-inline-function]."
   (interactive "d")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'inline buffer-file-name pos))))
+  (refac-transform 'referl_tr_inline_fun
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)))
 
 
-(defun refactorerl-rename-mod (pos name)
+(defun refactorerl-rename-mod (name)
   "Performs the Rename Module refactoring.
 
 1. Position the cursor over the name in the module attribute.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-mod].
 3. Type the new module name."
-  (interactive "d\nsNew module name:")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'renamemod buffer-file-name name pos))))
+  (interactive "sNew module name:")
+  (refac-transform 'referl_tr_rename_mod
+                   (cons 'file buffer-file-name)
+                   (cons 'name name)))
 
 (defun refactorerl-tuple-funpar (beg end)
-  "Performs the Tuple Function Parameters refactoring. Operates on the 
+  "Performs the Tuple Function Parameters refactoring. Operates on the
 parameters of function which are marked.
 
 1. Mark the arguments to be tupled in the function definition.
 2. Call the refactoring from the menu or with \\[refactorerl-tuple-funpar]."
   (interactive "r")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'tuplefunpar buffer-file-name beg end)
-         (deactivate-mark))))
+  (refac-transform 'referl_tr_tuple_funpar
+                   (cons 'file buffer-file-name)
+                   (cons 'posrange (vector beg (1- end))))
+  (deactivate-mark))
 
 (defun refactorerl-reorder-funpar (pos order)
-  "Performs the Reorder Function Parameters refactoring. 
+  "Performs the Reorder Function Parameters refactoring.
 
 1. Position the cursor over the name of the function in any
       clause of the function definition.
 2. Call the refactoring from the menu or with \\[refactorerl-reorder-funpar].
 3. Type the name for the new order of the function arguments."
-  (interactive "d\nsNew order (e.g. 3,1,2): ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'reorder buffer-file-name pos order)
-         )))
+  (interactive "d\nsNew order (e.g. 3 1 2): ")
+  (refac-transform 'referl_tr_reorder_funpar
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)
+                   (cons 'order (car (read-from-string
+                                      (concat "(" order ")"))))))
 
 (defun refactorerl-generalize-function (beg end name)
   "Performs the Generalize Function refactoring. Operates on the expression or
@@ -399,15 +406,13 @@ expressions between the point and the mark.
 2. Call the refactoring from the menu or with \\[refactorerl-generalize-function].
 3. Type the name for the new function argument."
   (interactive "r\nsNew parameter name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'generalize buffer-file-name beg end name)
-         (deactivate-mark))))
+  (refac-transform 'referl_tr_gen
+                   (cons 'file buffer-file-name)
+                   (cons 'posrange (vector beg (1- end)))
+                   (cons 'varname name))
+  (deactivate-mark))
 
-(defun refactorerl-rename-function (name)
+(defun refactorerl-rename-function (pos name)
   "Performs the Rename Function refactoring.
 
 1. Position the cursor over the name of the function in any
@@ -416,55 +421,47 @@ expressions between the point and the mark.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-function].
 3. Type the new function name."
 
-  (interactive "sNew function name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'renamefun buffer-file-name name (point)))))
+  (interactive "d\nsNew function name: ")
+  (refac-transform 'referl_tr_rename_fun
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)
+                   (cons 'name name)))
 
-(defun refactorerl-rename-variable (name)
+(defun refactorerl-rename-variable (pos name)
   "Performs the Rename Variable refactoring.
 
 1. Position the cursor over any instance of the variable.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-variable].
 3. Type the new variable name."
-  (interactive "sNew variable name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'renamevar buffer-file-name name (point)))))
+  (interactive "d\nsNew variable name: ")
+  (refac-transform 'referl_tr_rename_var
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)
+                   (cons 'varname name)))
 
-(defun refactorerl-rename-record (name)
+(defun refactorerl-rename-record (pos name)
   "Performs the Rename Record refactoring.
 
 1. Position the cursor over the name in the record definition.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-record].
 3. Type the new record name."
-  (interactive "sNew record name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'renamerec buffer-file-name name (point)))))
+  (interactive "d\nsNew record name: ")
+  (refac-transform 'referl_tr_rename_rec
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)
+                   (cons 'name name)))
 
-(defun refactorerl-rename-field (name)
+(defun refactorerl-rename-field (pos name)
   "Performs the Rename Record Field refactoring.
 
 1. Position the cursor over the field name in the record definition.
 2. Call the refactoring from the menu or with \\[refactorerl-rename-field].
 3. Type the new field name."
-  (interactive "sNew field name: ")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'renamefield buffer-file-name name (point)))))
+  (interactive "d\nsNew field name: ")
+  (refac-transform 'referl_tr_rename_recfield
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)
+                   (cons 'name name)))
 
 (defun refactorerl-eliminate-variable (pos)
   "Performs the Eliminate Variable refactoring.
@@ -472,12 +469,9 @@ expressions between the point and the mark.
 1. Position the cursor over any instance of the variable.
 2. Call the refactoring from the menu or with \\[refactorerl-eliminate-variable]."
   (interactive "d")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'elimvar buffer-file-name pos))))
+  (refac-transform 'referl_tr_elim_var
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)))
 
 (defun refactorerl-expand-funexpr (pos)
   "Performs the Expand Fun Expression refactoring.
@@ -485,12 +479,9 @@ expressions between the point and the mark.
 1. Position the cursor over the name of the function to be expanded.
 2. Call the refactoring from the menu or with \\[refactorerl-expand-funexpr]."
   (interactive "d")
-  (cond ((not buffer-file-name)
-         (error "No visited file"))
-        ((not (eq refac-buffer-state 'ok))
-         (error "File is not ready for refactoring"))
-        (t
-         (refac-send-command 'funexpr buffer-file-name pos))))
+  (refac-transform 'referl_tr_expand_funexpr
+                   (cons 'file buffer-file-name)
+                   (cons 'position pos)))
 
 (defun refactorerl-move-function ()
   "Performs the Move Function refactoring. The functions to be
@@ -659,8 +650,12 @@ moved can be selected from a list.
       (error "No target module specified"))
     (when (equal funlist nil)
       (error "No functions selected"))
-    (refac-send-command 'movefun source-file target funlist))
-  (refac-move-fun-cleanup))
+    (refac-send-command 'transform
+                        'referl_tr_move_fun
+                        (list (vector 'file source-file)
+                              (vector 'funlist funlist)
+                              (vector 'name target)))
+    (refac-move-fun-cleanup)))
 
 (defun refac-move-fun-cleanup (&rest args)
   (delete-window (get-buffer-window refac-move-fun-buffer))
@@ -714,8 +709,12 @@ moved can be selected from a list.
       (error "No target module specified"))
     (when (equal recordlist nil)
       (error "No records selected"))
-    (refac-send-command 'moverec source-file target recordlist))
-  (refac-move-rec-cleanup))
+    (refac-send-command 'transform
+                        'referl_tr_move_rec
+                        (list (vector 'file source-file)
+                              (vector 'reclist recordlist)
+                              (vector 'filename target)))
+  (refac-move-rec-cleanup)))
 
 (defun refac-move-rec-cleanup (&rest args)
   (delete-window (get-buffer-window refac-move-rec-buffer))
@@ -732,40 +731,31 @@ moved can be selected from a list.
     (error "Configuration error: RefactorErl base path is not set"))
   (when (not (refac-server-is-running))
     (let* ((base-path (file-name-as-directory refactorerl-base-path))
-           (lib-paths (apply 'append
-                             (mapcar (lambda (dir) (list "-pa" dir))
-                                     (file-expand-wildcards
-                                      (concat base-path "lib/*/ebin")))))
-           (srv-args (append
-                      (list "-sname"  "refactorerl@localhost"
-                            "+W"      "w"
-                            "-boot"   (concat base-path "refactorerl")
-                            "-config" (concat base-path "sys.config")
-                            "-pa"     (concat base-path "build"))
-                      lib-paths))
-           (inp-args (list
-                      "-run" "referl_emacs"
-                      "-noshell"))
-           (default-directory (file-name-as-directory
-                               (if (eq refactorerl-data-dir 'base)
+           (server-cmd (concat base-path "bin/referl"))
+           (server-data-dir (if (eq refactorerl-data-dir 'base)
                                    refactorerl-base-path
-                                 refactorerl-data-dir))))
-      (when (eq refactorerl-server-shell 'shell)
-        (let ((inferior-erlang-machine refactorerl-erlang-runtime)
-              (inferior-erlang-machine-options srv-args)
-              (inferior-erlang-process-name "RefactorErlShell")
-              (inferior-erlang-buffer-name "*RefactorErlShell*"))
-          (erlang-shell))
-        (setq srv-args (append '("-sname" "refacinput@localhost")
-                               lib-paths)))
+                                 refactorerl-data-dir))
+           (server-args (list "-base" refactorerl-base-path
+                              "-erl"  refactorerl-erlang-runtime)))
+      (when (eq refactorerl-server-type 'shell)
+        (let ((default-directory (file-name-as-directory server-data-dir)))
+          (with-current-buffer
+              (apply 'make-comint (append (list "RefactorErlShell"
+                                                server-cmd
+                                                nil)
+                                          server-args))
+            (when (require 'erlang nil t)
+              (erlang-shell-mode)))))
       (setq refac-server-buffer
             (save-excursion (refac-make-server-buffer)))
       (setq refac-server-process
             (apply 'start-process
                    (append (list "RefactorErl" refac-server-buffer
-                                 refactorerl-erlang-runtime)
-                           srv-args
-                           inp-args)))
+                                 server-cmd)
+                           server-args
+                           (if (eq refactorerl-server-type 'internal)
+                               (list "-emacs")
+                             (list "-emacs" "-client" "-name" "referlemacs")))))
       (set-process-filter refac-server-process 'refac-output-filter)
       (set-process-sentinel refac-server-process 'refac-process-sentinel)
       )))
@@ -882,12 +872,6 @@ moved can be selected from a list.
    )
 )
 
-(defun refac-handle-print (data)
-      (with-current-buffer (process-buffer proc)
-      (save-excursion
-      (goto-char (point-max))
-      (widget-insert (concat (prin1-to-string data) "\n")))))
-
 
 (defun refac-handle-error (string)
   (message "RefactorErl internal error: %s" string))
@@ -923,8 +907,13 @@ moved can be selected from a list.
       (with-current-buffer buf
         (revert-buffer t t t)))))
 
-(defun refac-handle-setbuffer (file)
-  (set-visited-file-name file))
+(defun refac-handle-rename (files)
+  (let* ((frompath  (elt files 0))
+         (topath    (elt files 1)))
+    (let ((buf (get-file-buffer frompath)))
+      (when buf
+        (with-current-buffer buf
+          (set-visited-file-name topath))))))
 
 (defun refac-handle-invalid (file)
   (refac-progress-report 'err file)
@@ -937,6 +926,35 @@ moved can be selected from a list.
   (with-current-buffer (refac-list-buffer)
     (let ((inhibit-read-only t))
       (refac-file-list-add file))))
+
+(defun refac-handle-question (desc)
+  (let* ((id    (elt desc 0))
+         (props (elt desc 1))
+         (text  (refac-get-prop props 'text "?"))
+         (type  (refac-get-prop props 'type 'string))
+         (reply (refac-ask-question type text)))
+    (cond ((not reply)
+           (refac-send-command 'cancel id))
+          (t
+           (refac-send-command 'reply id reply)))))
+
+(defun refac-ask-question (type text)
+  (condition-case nil
+      (cond ((eq type 'string)
+             (read-string (concat text " ")))
+            ((eq type 'yesno)
+             (if (yes-or-no-p (concat text " "))
+                 'yes 'no)))
+    (quit nil)))
+
+(defun refac-get-prop (props key default)
+  (catch 'found
+    (dolist (prop props default)
+      (cond ((and (vectorp prop)
+                  (eq (elt prop 0) key))
+             (throw 'found (elt prop 1)))
+            ((eq prop key)
+             (throw 'found 'true))))))
 
 (defvar refac-progress [])
 (defun refac-progress-report (type file)

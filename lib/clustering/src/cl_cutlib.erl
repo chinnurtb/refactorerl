@@ -31,7 +31,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_cutlib).
--vsn("$Rev: 1489 $").
+-vsn("$Rev: 2176 $").
 
 -export([collect_files/1, collect_files_by_modnames/1,
          collect_files_by_filenames/1,
@@ -228,9 +228,9 @@ contents_of_files(Files) ->
                                         [] -> undefined;
                                         _ -> cl_attr:fun_to_fun_attr(Node)
                                     end;
-                                #macro{name="MODULE"} ->
+                                #form{type=macro,tag="MODULE"} ->
                                     undefined;
-                                #macro{} ->
+                                #form{type=macro} ->
                                     cl_attr:macro_to_macro_attr(Node);
                                 #record{} ->
                                     cl_attr:rec_to_rec_attr(Node)

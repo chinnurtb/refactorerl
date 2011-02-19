@@ -58,7 +58,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_db).
--vsn("$Rev: 1489 $").
+-vsn("$Rev: 2165 $").
 
 -export([recalculate/1, update/1, is_valid/1, invalidate/0,
          save_matrix/2, load_matrix/2, delete_matrix/1, matrix_exists/1,
@@ -101,8 +101,8 @@
 %%                                    value = term()}.
 %% It represents a cell of a matrix.
 %% If the row of the cell is `Row', the column of the cell is `Column' and the
-%% value of the cell if `Value', the matrix_cell will be index will be
-%% `{Row, Column}' and the `value' will be `Value'.
+%% value of the cell is `Value', the matrix_cell's `index' will be
+%% `{Row, Column}' and its `value' will be `Value'.
 -record(matrix_cell, {index, value}).
 
 %%% ======================================================================
@@ -126,10 +126,13 @@ recalculate(fun_attr) ->
     ok;
 recalculate(deps) ->
     cl_db:save_deps();
+recalculate(fdg) ->
+    save_fdg();
 recalculate(all) ->
     recalculate(mod_attr),
     recalculate(fun_attr),
-    recalculate(deps).
+    recalculate(deps),
+    recalculate(fdg).
 
 %% @spec update(table_name() | all) -> ok
 %%
@@ -144,14 +147,21 @@ update(TableName) when TableName == mod_attr;
         true -> ok
     end;
 update(deps) ->
-    case cl_db:mnesia_table_exists(deps) of
+    %case cl_db:mnesia_table_exists(deps) of
+    case is_valid(deps) of
         false -> recalculate(deps);
         true -> ok
+    end;
+update(fdg) -> 
+    case is_valid(fdg) of
+        false -> recalculate(fdg);
+        true  -> ok
     end;
 update(all) ->
     update(mod_attr),
     update(fun_attr),
-    update(deps).
+    update(deps),
+    update(fdg).
 
 %% @spec is_valid(table_name() | all) -> bool()
 %%
@@ -161,11 +171,17 @@ is_valid(TableName) when TableName == mod_attr;
                          TableName == fun_attr ->
     cl_db:matrix_exists(TableName);
 is_valid(deps) ->
-    cl_db:mnesia_table_exists(deps);
+    %cl_db:mnesia_table_exists(deps);
+    cl_db:mnesia_table_exists(function_calls) andalso 
+    cl_db:mnesia_table_exists(record_calls);
+is_valid(fdg) ->
+    cl_db:mnesia_table_exists(ffdg) andalso 
+    cl_db:mnesia_table_exists(frdg);
 is_valid(all) ->
     is_valid(mod_attr) andalso
     is_valid(fun_attr) andalso
-    is_valid(deps).
+    is_valid(deps),
+    is_valid(fdg).
 
 %% @spec invalidate() -> ok
 %%
@@ -173,7 +189,8 @@ is_valid(all) ->
 invalidate() ->
     cl_db:delete_matrix(mod_attr),
     cl_db:delete_matrix(fun_attr),
-    cl_db:delete_deps().
+    cl_db:delete_deps(),
+    delete_fdg().
 
 %% @spec save_deps() -> ok
 %%
@@ -202,6 +219,38 @@ delete_deps() ->
         {ok, ok} -> ok;
         Error -> Error
     end.
+
+
+%% @spec save_fdg() -> ok
+%% @doc Saves the function depending graph into the database. It mean create a 
+%%      mnesia table (named `ffdg') that contains the function-function 
+%%      dependences and an another table (named `frdg') that contains the 
+%%      function-record dependences.
+%% @see cl_db:create_ffdg/1
+%% @see cl_db:create_frdg/1
+save_fdg() -> 
+    FunFunDeps = ets:new(ffdg, []),
+    FunRecDeps = ets:new(frdg, []),
+    cl_deps:create_ffdg(FunFunDeps),
+    cl_deps:create_frdg(FunRecDeps),
+    save_ets(FunFunDeps, ffdg, fun_fun_dep, [relation, count]),
+    save_ets(FunRecDeps, frdg, fun_rec_dep, [relation, count]),
+    ets:delete(FunFunDeps),
+    ets:delete(FunRecDeps),
+    ok.
+
+
+%% @spec delete_fdg() -> ok
+%% @doc Delete the function depending graph from the database.
+%% @see save_fdg/0
+delete_fdg() ->
+    case {delete_mnesia_table(ffdg), 
+          delete_mnesia_table(frdg)} of
+        {ok, ok} -> ok;
+        Error -> Error
+    end.
+
+
 
 %%% ======================================================================
 %%% Low level functions

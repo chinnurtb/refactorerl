@@ -40,14 +40,14 @@
 %%%
 %%% Both `f' and `g' will work correctly with every output (that has the type
 %%% {@link output_ref()}).
-%%% E.g. if `f({file, FileName, write})' is called, the opened file will be
-%%% closed only at the end of `f'. But if `g({file, FileName, write})' is
+%%% E.g. if `f({file, FileName, [write]})' is called, the opened file will be
+%%% closed only at the end of `f'. But if `g({file, FileName, [write]})' is
 %%% called, `g' will close the file.
 
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_out).
--vsn("$Rev: 1458 $").
+-vsn("$Rev: 2620 $").
 
 -export([open/1, close/1, fwrite/2, fwrite/3, new_section/1,
          start_section_process/1, file_name_gen/2,
@@ -133,6 +133,11 @@
 %%% '''
 %%%                 then every line will be written twice into `out.txt'.
 %%%                 This cannot be done when `fast' is `true'.
+%%%                 However, the printing can be quite slow without the `fast'
+%%%                 option.
+%%%                 An example: printing into 300 files line-by-line (each file
+%%%                 had 300 to 1500 lines) took 60 minutes on an avarage machine
+%%%                 without the `fast' option.
 %%%                 If both the fast execution and using the files in more than
 %%%                 one channel are important, a process can be used that will
 %%%                 handle the file.</li>
@@ -537,12 +542,14 @@ file_name_gen(Prefix, Postfix) ->
 file_name_gen(Prefix, Numerals, Postfix) ->
     fun(undefined) ->
             {{file,
-              Prefix ++ cl_utils:integer_to_list(1, Numerals) ++ Postfix}, 2};
+              Prefix ++ cl_utils:integer_to_list(1, Numerals) ++ Postfix,
+              [fast]}, 2};
        ({_,close}) ->
             ok;
        (N) ->
             {{file, 
-              Prefix ++ cl_utils:integer_to_list(N, Numerals) ++ Postfix}, N+1}
+              Prefix ++ cl_utils:integer_to_list(N, Numerals) ++ Postfix,
+              [fast]}, N+1}
     end.
 
 %%% @type output_collector_pid() = pid().

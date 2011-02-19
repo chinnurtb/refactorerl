@@ -27,7 +27,7 @@
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(referl_egraph).
--vsn("$Rev: 1388 $").
+-vsn("$Rev: 2170 $").
 
 -export([create_egraph/0, create_egraph/1]).
 
@@ -64,7 +64,7 @@ create_egraph() ->
 create_egraph(Options) ->
     Opts = cl_utils:proplist_update(create_egraph_default(),Options),
     E = ets:new(proplists:get_value(ets_name,Opts),[]),
-    create_egraph(E, ?GRAPH:root(),
+    create_egraph(E, ?Graph:root(),
                   filter(proplists:get_value(filter,Opts))),
     E.
 
@@ -79,8 +79,8 @@ create_egraph_default() ->
 create_egraph(Ets, Node, Filter) ->
     case ets:lookup(Ets, Node) of
         [] ->
-            Data = ?GRAPH:data(Node),
-            Links = [Link || Link = {Tag, _To} <- ?GRAPH:links(Node),
+            Data = ?Graph:data(Node),
+            Links = [Link || Link = {Tag, _To} <- ?Graph:links(Node),
                              Filter(element(1, Data), Tag)],
             ets:insert(Ets, {Node, {Data, Links}}),
             lists:foldl(fun ({_Tag, To}, _) ->

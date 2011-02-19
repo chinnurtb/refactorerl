@@ -25,7 +25,7 @@
 %%% @author Hanna Kollo <khi@inf.elte.hu>
 
 -module(cl_core).
--vsn("$Rev: 1489 $").
+-vsn("$Rev: 2355 $").
 
 -export([attribs/2, filter/3, transform/2, transform2/2, distances/2,
          agglom_dist/2, agglom_attr/3]).
@@ -63,12 +63,12 @@ filter(Attribs, EntityFilt, AttribFilt) ->
 
 filter_rows(Filter, Attribs) ->
     filter(Filter, Attribs,
-           fun get_row/2, fun ?MTR:del_row/2,
+           fun cl_matrix:get_row/2, fun ?MTR:del_row/2,
            ?MTR:rows(Attribs)).
 
 filter_cols(Filter, Attribs) ->
     filter(Filter, Attribs,
-           fun get_col/2, fun ?MTR:del_col/2,
+           fun cl_matrix:get_col/2, fun ?MTR:del_col/2,
            ?MTR:cols(Attribs)).
 
 filter(Filter, Matrix, GetElem, DelElem, Elements) ->
@@ -80,12 +80,6 @@ filter(Filter, Matrix, GetElem, DelElem, Elements) ->
               end
       end,
       Matrix, Elements).
-
-get_row(Row, Mtr) ->
-    ?MTR:fold_row(fun (C, V, L) -> [{C, V} | L] end, [], Row, Mtr).
-
-get_col(Col, Mtr) ->
-    ?MTR:fold_col(fun (R, V, L) -> [{R, V} | L] end, [], Col, Mtr).
 
 %% @spec transform(attribs(), MapFun) -> attribs()
 %%           MapFun = (value1()) -> value2()
@@ -109,7 +103,7 @@ transform2(Attribs, MapFun) ->
 %% the given distance function.
 distances(Attribs, DistFun) ->
     Ent = ?MTR:rows(Attribs),
-    Rows = [{E, get_row(E, Attribs)} || E <- Ent],
+    Rows = [{E, cl_matrix:get_row(E, Attribs)} || E <- Ent],
     Empty = ?MTR:new(Ent, Ent, []),
     calc_distances(Rows, Empty, DistFun).
 
@@ -173,11 +167,16 @@ dst_result(#aggdst{groups=Groups}, Clusters) ->
 %% @doc Performs clustering using the agglomerative algorithm, starting from
 %% a given attribute matrix, calculating entity distances using this matrix.
 agglom_attr(Attribs, DistFun, MergeFun) ->
-    {Data, Clusters} = agglom(distances(Attribs, DistFun),
-                              attr_start(Attribs, DistFun, MergeFun),
-                              fun attr_new_group/3,
-                              fun attr_group_dist/4),
-    attr_result(Data, Clusters).
+    case ?MTR:rows(Attribs) of
+        [] ->
+            [];
+        _ ->
+            {Data, Clusters} = agglom(distances(Attribs, DistFun),
+                attr_start(Attribs, DistFun, MergeFun),
+                fun attr_new_group/3,
+                fun attr_group_dist/4),
+            attr_result(Data, Clusters)
+    end.
 
 -record(aggattr, {attrs, groups, distfun, mergefun}).
 
@@ -195,15 +194,16 @@ attr_new_group(#aggattr{attrs=Attribs, groups=Groups, mergefun=MergeFun}=Data,
     FilledAttrs =
         lists:foldl(fun({Col, Val}, Attr) -> ?MTR:set(New, Col, Val, Attr) end,
                     NewAttrs,
-                    MergeFun(NewLst, [get_row(Gr, Attribs) || Gr <- NewLst], 
-                             {Gr1, get_row(Gr1, Attribs),
-                              Gr2, get_row(Gr2, Attribs)})),
+                    MergeFun(NewLst,
+                             [cl_matrix:get_row(Gr, Attribs) || Gr <- NewLst],
+                             {Gr1, cl_matrix:get_row(Gr1, Attribs),
+                              Gr2, cl_matrix:get_row(Gr2, Attribs)})),
     {New, Data#aggattr{attrs=FilledAttrs, groups=NewGroups}}.
 
 attr_group_dist(New, Grp,
                 #aggattr{attrs=Attribs, distfun=DistFun}, _Dists) ->
-    DistFun(Grp, get_row(Grp, Attribs),
-            New, get_row(New, Attribs)).
+    DistFun(Grp, cl_matrix:get_row(Grp, Attribs),
+            New, cl_matrix:get_row(New, Attribs)).
 
 attr_result(#aggattr{groups=Groups}, Clusters) ->
     [ [ dict:fetch(Grp, Groups) || Grp <- Cls] || Cls <- Clusters].
@@ -281,7 +281,7 @@ dist_to_file(Dists, FileName) ->
                             fun(Attrib) ->
                                     io:format(S, "\t~w", [valueofattr(Attrib)])
                             end,
-                            get_row(RowName, Dists)) 
+                            cl_matrix:get_row(RowName, Dists)) 
                   end,
                   ?MTR:rows(Dists)),
     file:close(S),

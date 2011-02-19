@@ -34,13 +34,13 @@
 %%%   not processed any further (dropped by the preprocessor).</li>
 %%%
 %%% <li>`include' and `include_lib' directives are handled by reading and
-%%%   storing the specified files (@see ?FILEMAN:add_file/1), and
+%%%   storing the specified files (@see ?FileMan:add_file/1), and
 %%%   substituting their contents during preprocessing. Note that macro and
 %%%   record definitions are not substituted, only unknown attributes and
 %%%   function definitions.</li>
 %%%
 %%% <li>`define' directives are parsed and macros are stored using
-%%%   `#macro{}' graph nodes.</li>
+%%%   `#form{type=macro, tag=Name}' graph nodes.</li>
 %%%
 %%% <li>`?MACRO' and `?MACRO(Par, ..., Par)' references are substituted when
 %%%   the macro body is available, other macros trigger a "Non-local macro"
@@ -52,15 +52,13 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 %%% Plans:
-%%%   Remove `macro' nodes, use `#lex{type=macro}' with `#lex{type=marg}' and
-%%%     `#lex{type=mbody}' -- this automates lexical cleaning
 %%%   Include line number with tokens, possibly {file, line} -- better error
 %%%      reporting
 
 -module(referl_preproc).
--vsn("$Rev: 1903 $").
+-vsn("$Rev: 2559 $").
 
--export([preprocess/2, preprocess/3, clear/1]).
+-export([preprocess/2, preprocess/3]).
 
 -include("refactorerl.hrl").
 
@@ -100,10 +98,10 @@ preprocess([{#token{type=minus},              T1},
             {#token{type=stop},               T6}], _File, St)
   when ((If==ifdef) or (If==ifndef)), ((AtVar==atom) or (AtVar==variable)) ->
     TNodes = [T1, T2, T3, T4, T5, T6],
-    Def = ?GRAPH:path(?GRAPH:root(),
+    Def = ?Graph:path(?Graph:root(),
                       [{env, {{name, '==', def}, 'and',
                               {value, '==', macro_name(Name)}}}]),
-    {{form, create_form(lex, If, TNodes)},
+    {[{form, create_form(lex, If, TNodes)}],
      if
          ((If == ifdef)  and (Def /= [])) or
          ((If == ifndef) and (Def == [])) ->
@@ -116,7 +114,7 @@ preprocess([{#token{type=minus},              T1},
 preprocess([{#token{type=minus},              T1},
             {#token{type=atom, value=else},   T2},
             {#token{type=stop},               T3}], _File, [StTop|St]) ->
-    {{form, create_form(lex, else, [T1, T2, T3])},
+    {[{form, create_form(lex, else, [T1, T2, T3])}],
      case StTop of
          copy -> [skip|St];
          skip -> [copy|St]
@@ -125,14 +123,14 @@ preprocess([{#token{type=minus},              T1},
 preprocess([{#token{type=minus},              T1},
             {#token{type=atom, value=endif},  T2},
             {#token{type=stop},               T3}], _File, [_|St]) ->
-    {{form, create_form(lex, endif, [T1, T2, T3])}, St};
+    {[{form, create_form(lex, endif, [T1, T2, T3])}], St};
 
 preprocess(Form, File, St=[StTop|_]) ->
     case StTop of
         copy ->
             {form(Form, File), St};
         skip ->
-            {{form, create_form(lex, skip, token_nodes(Form))}, St}
+            {[{form, create_form(lex, skip, token_nodes(Form))}], St}
     end.
 
 %% @spec form(formTokens(), node()) -> [{tokens, formTokens()} | {form, node()}]
@@ -160,29 +158,19 @@ form([{#token{type=minus},                      T1},
 
 form([{#token{type=minus},                        T1},
       {#token{type=atom,           value=define}, T2},
-      {#token{type=op_paren},                     T3} |
-      Tail = [{#token{value=Name},                 _} | _]], File) ->
+      {#token{type=op_paren},                     T3} | Tail], _File) ->
     TNodes = [T1, T2, T3],
-    try define(Tail, File) of
-        Rest ->
-            [{form, create_form(macro, macro_name(Name), TNodes ++ Rest)}]
+    try define(Tail) of
+        {Name, Body} ->
+            [{form, create_form(macro, Name, TNodes ++ Body)}]
     catch
         throw:Error ->
             [{form, create_form(error, Error, TNodes ++ token_nodes(Tail))}]
     end;
 
 form(Tokens, File) ->
-    try macro_subst(Tokens, File) of
-        TList=[{#token{type=minus},                   _},
-               {#token{type=atom,      value=module}, _},
-               {#token{type=op_paren},                _},
-               {#token{type=atom},                 Name} | _] ->
-            Mod = ?GRAPH:create(#macro{name="MODULE"}),
-            ?GRAPH:mklink(File, macro, Mod),
-            ?GRAPH:mklink(Mod, mbody, Name),
-            [{tokens, TList}];
-        TList ->
-            [{tokens, TList}]
+    try
+        [{tokens, macro_subst(Tokens, File)}]
     catch
         throw:Error ->
             [{form, create_form(error, Error, token_nodes(Tokens))}]
@@ -200,38 +188,50 @@ create_form(Type, Tag, Tokens) ->
     [?ESG:insert(Form, flex, Token) || Token <- Tokens ],
     Form.
 
-%% @spec define(formTokens(), node()) -> [node()]
+%% @spec define(formTokens()) -> [node()]
 %% @doc Analyses macro definition, returns the lexical nodes
-define([{#token{type=NameType, value=Name}, T} | Tokens], File)
+define([{#token{type=NameType, value=Name}, T} | Tokens])
   when NameType == atom; NameType == variable ->
-    Def = ?GRAPH:create(#macro{name = macro_name(Name)}),
-    ?GRAPH:mklink(File, macro, Def),
-    [T | define(arglist, Tokens, Def)].
+    {macro_name(Name), [T | define(arglist, Tokens, none)]}.
 
-define(arglist, [{#token{type=op_paren}, T} | Tokens], Def) ->
-    [T | define(nextarg, Tokens, Def)];
-define(arglist, [{#token{type=comma},    T} | Tokens], Def) ->
-    [T | define(body, Tokens, Def)];
+define(arglist, [{#token{type=op_paren}, T1},
+                 {#token{type=cl_paren}, T2},
+                 {#token{type=comma},    T3} | Tokens], none) ->
+    Arg = ?ESG:create(#lex{type=arg}),
+    ?ESG:insert(Arg, llex, T1),
+    ?ESG:insert(Arg, llex, T2),
+    [Arg, T3 | define(body, Tokens, none)];
+define(arglist, [{#token{type=op_paren}, T} | Tokens], none) ->
+    Arg = ?ESG:create(#lex{type=arg}),
+    ?ESG:insert(Arg, llex, T),
+    define(nextarg, Tokens, Arg);
+define(arglist, [{#token{type=comma},    T} | Tokens], none) ->
+    [T | define(body, Tokens, none)];
 
-define(nextarg, [{#token{type=variable}, T} | Tokens], Def) ->
-    ?GRAPH:mklink(Def, marg, T),
-    [T | define(argsep, Tokens, Def)];
+define(nextarg, [{#token{type=variable}, T} | Tokens], Arg) ->
+    ?ESG:insert(Arg, llex, T),
+    define(argsep, Tokens, Arg);
 
-define(argsep, [{#token{type=comma},     T} | Tokens], Def) ->
-    [T | define(nextarg, Tokens, Def)];
+define(argsep, [{#token{type=comma},     T} | Tokens], Arg) ->
+    ?ESG:insert(Arg, llex, T),
+    define(nextarg, Tokens, Arg);
 define(argsep, [{#token{type=cl_paren},  T1},
-                {#token{type=comma},     T2} | Tokens], Def) ->
-    [T1, T2 | define(body, Tokens, Def)];
+                {#token{type=comma},     T2} | Tokens], Arg) ->
+    ?ESG:insert(Arg, llex, T1),
+    [Arg, T2 | define(body, Tokens, none)];
+
+define(body, Tokens, none) ->
+    define(body, Tokens, ?ESG:create(#lex{type=body}));
 
 define(body, [{#token{type=cl_paren},    T},
-              {#token{type=stop},        Stop} ], _Def) ->
-    [T, Stop];
+              {#token{type=stop},        Stop} ], Body) ->
+    [Body, T, Stop];
 %% Quote from epp.erl: "Be nice, allow no right paren!"
-define(body, [{#token{type=stop},        Stop} ], _Def) ->
-    [Stop];
-define(body, [{_, T} | Tokens], Def) ->
-    ?GRAPH:mklink(Def, mbody, T),
-    [T | define(body, Tokens, Def)];
+define(body, [{#token{type=stop},        Stop} ], Body) ->
+    [Body, Stop];
+define(body, [{_, T} | Tokens], Body) ->
+    ?ESG:insert(Body, llex, T),
+    define(body, Tokens, Body);
 
 define(Stat, [], _Def) ->
     throw({define, Stat}).
@@ -261,8 +261,9 @@ macro_subst([], _File) ->
 %% `{App, Params, Rest}' for macros to be substituted later.
 macro([{#token{type=NameType, value=Name}, N} | Tokens], File, First)
   when NameType == atom; NameType == variable ->
-    MacroPath = [incl, {macro, {name, '==', macro_name(Name)}}],
-    case lists:usort(?GRAPH:path(File, MacroPath)) of
+    MacroPath = [incl, {form, {{type, '==', macro}, 'and',
+                               {tag, '==', macro_name(Name)}}}],
+    case lists:usort(?Graph:path(File, MacroPath)) of
         [Def|Others] ->
             if
                 Others =/= [] ->
@@ -270,38 +271,64 @@ macro([{#token{type=NameType, value=Name}, N} | Tokens], File, First)
                                              [macro_name(Name)]);
                 true -> ok
             end,
-            App = ?ESG:create(#lex{type=subst, data=macro_name(Name)}),
-            ?ESG:insert(App, llex, First),
-            ?ESG:insert(App, llex, N),
-            ?GRAPH:mklink(App, mref, Def),
+            App = macro_app(Name, [First, N]),
+            ?Graph:mklink(App, mref, Def),
             %% Look for macro parameters only when the definition needs them
-            case ?GRAPH:path(Def, [marg]) of
+            case ?Graph:path(Def, [{flex, {type, '==', arg}}]) of
                 [] -> {App, [], Tokens};
-                _  -> macro(paramlist, Tokens, [], App)
+                _  -> macro_params(Tokens, App)
+            end;
+        [] when Name == "MODULE";
+                Name == "MODULE_STRING" ->
+            case ?Graph:data(File) of
+                #file{type=module, path=Path} ->
+                    ModName = filename:basename(Path, ".erl"),
+                    App = macro_app(Name, [First, N]),
+                    {done,
+                     [{if
+                           Name == "MODULE" ->
+                               #token{type=atom, value=list_to_atom(ModName)};
+                           true ->
+                               #token{type=string, value=ModName}
+                       end,
+                       virtual(none, App)}],
+                     Tokens};
+                _ -> skip
             end;
         [] when Name == "FILE" ->
-            App = ?ESG:create(#lex{type=subst, data=Name}),
-            #file{path=Path} = ?GRAPH:data(File),
+            App = macro_app(Name, [First, N]),
+            #file{path=Path} = ?Graph:data(File),
             {done,
              [{#token{type=string, value=Path}, virtual(none, App)}],
              Tokens};
         [] when Name == "LINE" ->
-            App = ?ESG:create(#lex{type=subst, data=Name}),
+            App = macro_app(Name, [First, N]),
             {done,
              [{#token{type=integer, value=42}, virtual(none, App)}],
              Tokens};
         [] ->
             error_logger:warning_msg("Non-local macro ~s in ~s~n",
                                      [macro_name(Name),
-                                      (?GRAPH:data(File))#file.path]),
+                                      (?Graph:data(File))#file.path]),
             skip
     end.
 
-macro(paramlist, [{#token{type=op_paren}, N} | Tokens], Params, App) ->
-    ?ESG:insert(App, llex, N),
-    macro(param, Tokens, Params, App);
+macro_app(Name, Tokens) ->
+    App = ?ESG:create(#lex{type=subst, data=macro_name(Name)}),
+    lists:foreach(fun(T) -> ?ESG:insert(App, llex, T) end, Tokens),
+    App.
 
-macro(param, Tokens, Params, App) ->
+macro_params([{#token{type=op_paren}, O},
+              {#token{type=cl_paren}, C} | Tokens], App) ->
+    ?ESG:insert(App, llex, O),
+    ?ESG:insert(App, llex, C),
+    {App, [], Tokens};
+
+macro_params([{#token{type=op_paren}, N} | Tokens], App) ->
+    ?ESG:insert(App, llex, N),
+    macro_param(Tokens, [], App).
+
+macro_param(Tokens, Params, App) ->
     Par = ?ESG:create(#lex{type=param}),
     ?ESG:insert(App, llex, Par),
     macro_param(Tokens, Par, [], [], Params, App).
@@ -341,7 +368,7 @@ macro_param([{#token{type=cl_paren}, N} | Tokens],
 macro_param([{#token{type=comma}, T} | Tokens],
             ParOb, Ps, [], Params, App) ->
     ?ESG:insert(ParOb, llex, T),
-    macro(param, Tokens, [lists:reverse(Ps)|Params], App);
+    macro_param(Tokens, [lists:reverse(Ps)|Params], App);
 
 macro_param([P={#token{}, T} | Tokens],
             ParOb, Ps, Paren, Params, App) ->
@@ -349,36 +376,40 @@ macro_param([P={#token{}, T} | Tokens],
     macro_param(Tokens, ParOb, [P|Ps], Paren, Params, App).
 
 
-%% @spec substitute(node(), [formTokens()]) -> formTokens()
+%% @spec substitute(node(), formTokens()) -> formTokens()
 %% @doc Generates the result of a macro substitution
 substitute(App, Params) ->
-    [Def] = ?GRAPH:path(App, [mref]),
-    Args = [((?GRAPH:data(Arg))#lex.data)#token.value ||
-               Arg <- ?GRAPH:path(Def, [marg])],
-    substitute(?GRAPH:path(Def, [mbody]), Args, Params, App).
+    [Def] = ?Graph:path(App, [mref]),
+    ArgTokens = [?Graph:data(A) ||
+                    A <- ?Graph:path(Def, [{flex, {type, '==', arg}}, llex])],
+    Args = [Var || #lex{data=#token{type=variable, value=Var}} <- ArgTokens],
+    Body = ?Graph:path(Def, [{flex, {type, '==', body}}, llex]),
+    substitute([{(?Graph:data(N))#lex.data, N} || N <- Body],
+               Args, Params, App).
 
-%% @spec substitute([node()], [string()], [formTokens()], node()) ->
+%% @spec substitute(Body::formTokens(), [string()], [formTokens()], node()) ->
 %%          formTokens()
-substitute([First | Rest], Args, Params, App) ->
-    case ?GRAPH:data(First) of
-        #lex{type=token, data=Token} ->
-            subs_token(First, Token, Args, Params, App) ++
-                substitute(Rest, Args, Params, App);
-        #lex{type=Type} ->
-            exit({substitution_error, Type})
-    end;
+substitute([{#token{type=variable, value=Arg}, N}|Rest], Args, Params, App) ->
+    [{Data, virtual(Node, App)} ||
+        {Data, Node} <- subs_arg(Arg, N, Args, Params)] ++
+        substitute(Rest, Args, Params, App);
+substitute([{#token{type=questionm}, _},
+            {#token{type=questionm}, _},
+            {#token{type=variable, value=Arg}, N}|Rest], Args, Params, App) ->
+    %% Proper text substitution could be implemented here if needed
+    [{#token{type=string, value=Arg}, virtual(N, App)} |
+     substitute(Rest, Args, Params, App)];
+substitute([{Data, Node} | Rest], Args, Params, App) ->
+    [{Data, virtual(Node, App)} | substitute(Rest, Args, Params, App)];
 substitute([], _, _, _) ->
     [].
 
-%% @spec subs_token(node(), #token{}, [string()],[formTokens()], node()) ->
-%%         formTokens()
-%% @doc Substitutes a macro argument with the corresponding parameter tokens
-subs_token(_, #token{type=variable, value=Name}, [Name|_], [Par|_], App) ->
-    [{Data, virtual(Node, App)} || {Data, Node} <- Par];
-subs_token(TN, T=#token{type=variable}, [_ | Args], [_ | Pars], App) ->
-    subs_token(TN, T, Args, Pars, App);
-subs_token(TN, T, _, _, App) ->
-    [{T, virtual(TN, App)}].
+subs_arg(Name, _, [Name|_], [Value|_]) ->
+    Value; 
+subs_arg(Name, Node, [_|Args], [_|Params]) ->
+    subs_arg(Name, Node, Args, Params);
+subs_arg(Name, Node, [], _) ->
+    [{#token{type=variable, value=Name}, Node}].
 
 
 macro_name(Atom) when is_atom(Atom) -> atom_to_list(Atom);
@@ -388,16 +419,20 @@ macro_name(Str)  when is_list(Str)  -> Str.
 %% Looks for the first existing include file in the list of include
 %% directories.
 find_include(include, Name, FileNode) ->
-    #file{path=FilePath} = ?GRAPH:data(FileNode),
-    Base = filename:dirname(FilePath),
-    Path = [{env, {name, '==', include}}],
-    Dirs = [(?GRAPH:data(Dir))#env.value ||
-               Dir <- ?GRAPH:path(?GRAPH:root(), Path)],
-    case [Filename ||   Dir      <- [Base | Dirs],
-                        Filename <- [filename:join(Dir, Name)],
-                        filelib:is_file(Filename)] of
-        [Filename|_] -> Filename;
-        []       -> throw({no_include_file, Name})
+    case ?Graph:path(?Graph:root(), ?File:find(Name)) of
+        [_InclFile] -> Name;
+        _ -> 
+            #file{path=FilePath} = ?Graph:data(FileNode),
+            Base = filename:dirname(FilePath),
+            Path = [{env, {name, '==', include}}],
+            Dirs = [(?Graph:data(Dir))#env.value ||
+                       Dir <- ?Graph:path(?Graph:root(), Path)],
+            case [Filename ||   Dir      <- [Base | Dirs],
+                                Filename <- [filename:join(Dir, Name)],
+                                filelib:is_file(Filename)] of
+                [Filename|_] -> Filename;
+                []       -> throw({no_include_file, Name})
+            end
     end;
 
 find_include(include_lib, Name, _) ->
@@ -406,8 +441,8 @@ find_include(include_lib, Name, _) ->
                           Name),
     Path = [{env, {name, '==', appbase}}],
     case [filename:join(AD, Dir) ||
-             #env{value=Base} <- [?GRAPH:data(E) ||
-                                     E <- ?GRAPH:path(?GRAPH:root(), Path)],
+             #env{value=Base} <- [?Graph:data(E) ||
+                                     E <- ?Graph:path(?Graph:root(), Path)],
              AD <- filelib:wildcard(filename:join(Base, App) ++ "*")] of
         [Filename|_] -> Filename;
         []           -> throw({no_include_file, Name})
@@ -417,23 +452,23 @@ find_include(include_lib, Name, _) ->
 %% @spec include(node(), string(), [node()]) ->
 %%         [{tokens,formTokens()} | {form, node()}]
 include(File, IncName, Tokens) ->
-    FileType = (?GRAPH:data(File))#file.type,
-    case ?FILEMAN:add_file(IncName) of
+    FileType = (?Graph:data(File))#file.type,
+    case ?FileMan:add_file(IncName) of
         {error, Reason} ->
             throw({include_error, IncName, Reason});
         {file, IncFile} ->
-            [?GRAPH:mklink(File, incl, Inc) ||
-                Inc <- ?GRAPH:path(IncFile, [incl])],
+            [?Graph:mklink(File, incl, Inc) ||
+                Inc <- ?Graph:path(IncFile, [incl])],
             if
                 FileType =:= header ->
                     Form = create_form(lex, include, Tokens),
-                    ?GRAPH:mklink(Form, iref, IncFile),
+                    ?Graph:mklink(Form, iref, IncFile),
                     [{form, Form}];
                 FileType =:= module ->
                     IncNode = ?ESG:create(#lex{type=incl}),
                     [?ESG:insert(IncNode, llex, T) || T <- Tokens],
                     IncForm = create_form(lex, include, [IncNode]),
-                    ?GRAPH:mklink(IncForm, iref, IncFile),
+                    ?Graph:mklink(IncForm, iref, IncFile),
                     [{form, IncForm} |
                      [{tokens, macro_subst(Form, File)} ||
                          Form <- include_forms(IncFile, IncNode)]]
@@ -445,21 +480,21 @@ include_forms(IncFile, IncNode) ->
     lists:flatmap(
       fun
           (Form) ->
-              include_form(?GRAPH:data(Form), Form, IncNode)
+              include_form(?Graph:data(Form), Form, IncNode)
       end,
-      ?GRAPH:path(IncFile, [form])).
+      ?Graph:path(IncFile, [form])).
 
 %% @spec include_form(#form{}, node(), node()) -> [formTokens()]
 include_form(#form{tag=store}, Form, IncNode) ->
-    [[include_token(T, IncNode) || T <- ?GRAPH:path(Form, [flex])]];
+    [[include_token(T, IncNode) || T <- ?Graph:path(Form, [flex])]];
 include_form(#form{tag=include}, Form, IncNode) ->
-    [File] = ?GRAPH:path(Form, [iref]),
+    [File] = ?Graph:path(Form, [iref]),
     include_forms(File, IncNode);
 include_form(#form{}, _Form, _IncNode) ->
     [].
 
 include_token(Token, IncNode) ->
-    #lex{type=token, data=TD} = ?GRAPH:data(Token),
+    #lex{type=token, data=TD} = ?Graph:data(Token),
     {TD, virtual(Token, IncNode)}.
 
 
@@ -468,25 +503,9 @@ virtual(Token, Source) ->
     VT = ?ESG:create(#lex{type=token, data=virtual}),
     if
         Token =/= none ->
-            ?GRAPH:mklink(VT, orig, Token)
+            ?Graph:mklink(VT, orig, Token);
+        true ->
+            ok
     end,
     ?ESG:insert(VT, llex, Source),
     VT.
-
-
-%% @spec clear(node()) -> ok
-%%
-%% @doc Removes all lexical information from `File'. This includes tokens,
-%% macros and macro substitutions.
-clear(File) ->
-  [clear_macro(Macro) || Macro <- ?GRAPH:path(File, [macro])].
-
-
-clear_macro(Macro) ->
-    case ?GRAPH:path(Macro, [{mref, back}]) of
-        [] -> ok;
-        _ ->
-            error_logger:warning_msg("Deleting used macro: ~s~n",
-                                     [(?GRAPH:data(Macro))#macro.name])
-    end,
-    ?GRAPH:delete(Macro).
