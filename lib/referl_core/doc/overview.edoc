@@ -1,0 +1,41 @@
+-*- coding: latin-1 -*-
+@title RefactorErl Core Modules
+@version 0.7
+@copyright 2006-2009 Eötvös Loránd University
+@doc
+
+== Exported interface ==
+<dl>
+  <dt>{@link refcore_syntax. `?Syn'}</dt>
+  <dd>Generic syntactical queries and manipulations. This is the primary
+  interface for transformations.</dd>
+
+  <dt>{@link refcore_fileman. `?FileMan'}</dt>
+  <dd>Manage file contents, add and remove complete files. Also handles
+  complete processing of textual forms.</dd>
+
+  <dt>{@link refcore_esg. `?ESG'}</dt>
+  <dd>Semantical analyser.</dd>
+
+  <dt>{@link refcore_preproc. `?PreProc'}</dt>
+  <dd>Implement Erlang preprocessor rules.</dd>
+
+  <dt>{@link refcore_graph. `?Graph'}</dt>
+  <dd>Low-level graph manipulation.</dd>
+
+</dl>
+
+== Internal modules ==
+<dl>
+  <dt>{@link refcore_erl_nodes. `?Nodes'}</dt>
+  <dd>Syntactic node type-based information.</dd>
+
+  <dt>{@link refcore_anal. `?Anal'}</dt>
+  <dd>Analyser module support.</dd>
+
+  <dt>{@link refcore_nodesync. `?NodeSync'}</dt>
+  <dd>Semantic node operation synchronisation for analyser modules.</dd>
+
+  <dt>{@link refcore_funprop. `?FunProp'}</dt>
+  <dd>Function property server (currently only handles side effects).</dd>
+</dl>

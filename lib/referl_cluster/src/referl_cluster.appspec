@@ -1,0 +1,6 @@
+% This is an -*- Erlang -*- application specification file.
+{description, "RefactorErl Clustering Component"}.
+{vsn, "0.7"}.
+{modSrc, ["*.erl"]}.
+{applications, [kernel, stdlib, referl_lib]}.
+{registered, []}.

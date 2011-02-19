@@ -1,0 +1,11 @@
+% This is an -*- erlang -*- file.
+{description, "Erlang Refactorer Prototype"}.
+{vsn, "0.7"}.
+{mod, {refanal_sup, []}}.
+{modSrc, ["*.erl"]}.
+{registered, [graph_server, esg_server]}.
+{applications, [kernel, stdlib, sasl, mnesia]}.
+{env, [{root_anal, refanal_root},
+       {form_anal, [refanal_expr, refanal_var, refanal_mod,
+                    refanal_fun, refanal_rec, refanal_dataflow,
+                    refanal_pp_anal]}]}.

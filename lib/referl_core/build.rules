@@ -1,0 +1,44 @@
+%%% This file has -*- Erlang -*- syntax.
+
+%% ===========================================================================
+%% Local rules
+%%
+%% syntax -- generates scanner, parser, node scructure, and schema info
+%%             Input files: specified by #source.files
+%%             Output dir: `src'
+
+
+#rule{name   = syntax,
+      output = [join("src", "refcore_erl_" ++ Name) ||
+                   Name <- ["scanner.erl", "parser.yrl",
+                            "nodes.erl", "schema.hrl"]],
+      action = refcore_gen_syn:file(File, join([Dir, src, "refcore_erl_"])),
+      deps   = [{mod, refcore_gen_syn} |
+                [{file, F} ||
+                    F <- filelib:wildcard(
+                           join([Dir, "src", "refcore_erl_*.*Src"]))]]}.
+
+#target{name=builder,
+        rules=[#source{files="src/refcore_gen_syn.yrl",   rule=yrl},
+               #source{files="src/refcore_gen_syn.erl",   rule=erl}]}.
+
+#target{name=source,
+        rules=[#source{files="src/refcore_erlang.syntax", rule=syntax},
+               #source{files="src/*.yrl",                 rule=yrl},
+               #source{files="src/*.appspec",             rule=app}]}.
+
+#target{name=tool,
+        rules=[#source{files="src/refcore_anal.erl", rule=erl},
+               #source{files="src/*.erl", rule=erl}]}.
+
+#target{name=doc,
+        rules=[#source{files="ebin/*.app", rule=doc}]}.
+
+#target{name=clean,
+        rules=[#apply{files=["ebin/*.{beam,app}",
+                             "src/refcore_gen_syn.erl",
+                             "src/refcore_erl_*.?rl",
+                             "doc/*.{html,png,css}", "doc/edoc-info"],
+                      skip_files=["doc/listcomp.png"],
+                      action=file:delete(File)}
+              ]}.

@@ -1,0 +1,7 @@
+%%% This file has -*- Erlang -*- syntax.
+#invoke{dir="referl_gen"}.
+#invoke{dir="referl_core"}.
+#invoke{dir="referl_lib"}.
+#invoke{dir="referl_user"}.
+#invoke{dir="referl_ui"}.
+#invoke{dir="referl_cluster"}.

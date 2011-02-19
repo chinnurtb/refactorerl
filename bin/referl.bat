@@ -20,6 +20,7 @@ if %1 == -wrangler goto wrangler
 if %1 == -name goto name
 if %1 == -server goto server
 if %1 == -emacs goto emacs
+if %1 == -build goto build
 if %1 == -client goto client
 if %1 == -help goto help
 shift
@@ -60,6 +61,15 @@ set CLIENT=emacs
 shift
 goto argloop
 
+:build
+set CLIENT=build
+set SERVER=no
+set NAME=build@localhost
+shift
+set TARGET=%1
+shift
+goto argloop
+
 :client
 set SERVER=no
 shift
@@ -72,42 +82,45 @@ echo Starts RefactorErl, using the current working directory as the data directo
 echo Recognised options:
 echo   -erl PATH        Path to the Erlang executable to use
 echo   -base PATH       Path to the RefactorErl base directory
-echo   -wrangler PATH   Path to a Wrangler installation
 echo   -name NAME       Erlang node name
 echo   -server          Start in server mode (no shell is started)
 echo   -client          Start in client mode (no server is started)
+echo   -build TARGET    Build TARGET (e.g. tool, doc, clean)
 echo   -emacs           Start as an Emacs client
 echo   -help            Print this help text
 
 goto exit
+REM echo   -wrangler PATH   Path to a Wrangler installation
 
 :endarg
 
 REM Set extra arguments
 if %CLIENT%==server set ARGS=%ARGS% -noinput
 if %CLIENT%==emacs set ARGS=%ARGS% -noshell -run referl_emacs
+if %CLIENT%==build set ARGS=%ARGS% -noshell -run referl_gen_build start %TARGET%
 
 :start
+
+SET ERL_LIBS=%BASE:"=%\lib
+
 if %SERVER%==yes goto server
 goto client
 
 :server
 %ERL% ^
   -sname  %NAME% ^
-  -pa     %BASE%\lib\refactorerl\ebin ^
-  -pa     %BASE%\lib\clustering\ebin ^
-  -pa     %BASE%\lib\test\ebin ^
-  -pa     %BASE%\build ^
-  -boot   %BASE%\refactorerl ^
   -config %BASE%\sys.config ^
+  -boot   %BASE%\refactorerl ^
   +W "w" ^
   %ARGS%
 goto exit
 
 :client
+
+if %CLIENT%==build %ERL% -make
+
 %ERL% ^
   -sname  %NAME% ^
-  -pa     %BASE%\lib\refactorerl\ebin ^
   %ARGS%
 
 :exit

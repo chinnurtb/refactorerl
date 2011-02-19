@@ -3,6 +3,25 @@
 # Unix shell script that starts RefactorErl. The same command line can be used
 # on all platforms to start the server.
 
+help_exit(){
+        cat <<HELP >&2
+Usage: $0 [Option]...
+Starts RefactorErl, using the current working directory as the data directory.
+
+Recognised options:
+  -erl PATH        Path to the Erlang executable to use
+  -base PATH       Path to the RefactorErl base directory
+  -name NAME       Erlang node name
+  -server          Start in server mode (no shell is started)
+  -client          Start in client mode (no server is started)
+  -build TARGET    Build TARGET (e.g. tool, doc, clean)
+  -emacs           Start as an Emacs client
+  -help            Print this help text
+HELP
+        exit
+#  -wrangler PATH   Path to a Wrangler installation
+}
+
 # Set defaults
 ERL=erl
 BASE=`pwd`
@@ -34,6 +53,13 @@ do
     then
         CLIENT=emacs
         shift
+    elif [ "$1" = -build ]
+    then
+        CLIENT=build
+        SERVER=no
+        NAME=build
+        TARGET="$2"
+        shift 2
     elif [ "$1" = -client ]
     then
         SERVER=no
@@ -44,31 +70,22 @@ do
         shift 2
     elif [ "$1" = -help ]
     then
-        cat <<HELP >&2
-Usage: $0 [Option]...
-Starts RefactorErl, using the current working directory as the data directory.
-
-Recognised options:
-  -erl PATH        Path to the Erlang executable to use
-  -base PATH       Path to the RefactorErl base directory
-  -wrangler PATH   Path to a Wrangler installation
-  -name NAME       Erlang node name
-  -server          Start in server mode (no shell is started)
-  -client          Start in client mode (no server is started)
-  -emacs           Start as an Emacs client
-  -help            Print this help text
-HELP
-        exit
+        help_exit
+    else
+        echo "error: unknown argument: '$1'!" >&2
+        echo >&2
+        help_exit
     fi
 done
 
 # Set extra arguments
 [ $CLIENT = server ] && ARGS="-noinput"
 [ $CLIENT = emacs ]  && ARGS="-noshell -run referl_emacs"
+[ $CLIENT = build ]  && ARGS="-noshell -run referl_gen_build start $TARGET"
 
 
 # The following feature appeared in R12B-2:
-# export ERL_LIBS="$BASE/lib"
+export ERL_LIBS="$BASE/lib"
 
 # Other possibility, which only works in Unix:
 # -pa "$BASE/lib"/*/ebin
@@ -77,18 +94,16 @@ if [ $SERVER = yes ]
 then
     "$ERL" \
         -sname  "$NAME" \
-        -pa     "$BASE/lib"/refactorerl/ebin \
-        -pa     "$BASE/lib"/clustering/ebin \
-        -pa     "$BASE/lib"/test/ebin \
-        -pa     "$BASE/build" \
-        -boot   "$BASE/refactorerl" \
         -config "$BASE/sys.config" \
+        -boot   "$BASE/refactorerl" \
         ${WRANGLER:+-pa} ${WRANGLER:+"$WRANGLER"} \
         +W "w" \
         $ARGS
 else
+
+    [ $CLIENT = build ]  && "$ERL" -make
+
     "$ERL" \
         -sname  "$NAME" \
-        -pa     "$BASE/lib"/refactorerl/ebin \
         $ARGS
 fi

@@ -1,4 +1,4 @@
-RefactorErl 0.6.2
+RefactorErl 0.7
 
 This is a prototype release from the development of RefactorErl, a
 refactoring tool for Erlang programs. It contains 22 refactoring steps, and
@@ -6,19 +6,23 @@ an analyser component that is capable of clustering modules.
 
 To get it working, do the following:
 
-1. Run `make' in the top level directory (you may have to adjust the path
-   settings in the Makefile).
+1. Run the following command in the top level directory:
 
-   If you do not have `make', you can compile the tool with the following
-   commands:
+     bin/referl -build tool
 
-     erlc -o build build/build.erl
-     erl -noshell -pa build -run build
+   On Windows, you should use a backslash instead of the forward slash:
 
-2. Edit your ~/.emacs file (or ~/.xemacs/init.el in case of XEmacs) and add
-   the following lines (changing "/path/to" to the real path):
+     bin\referl -build tool
 
-   (add-to-list 'load-path "/path/to/refactorerl-0.6.2/lib/refactorerl/emacs")
+   If you do not have the `erl' command in your PATH, or want to use a
+   different one, you may specify it:
+
+     bin/referl -erl /path/to/erl -build tool
+
+2. Edit your ~/.emacs file and add the following lines (changing "/path/to"
+   to the real path):
+
+   (add-to-list 'load-path "/path/to/refactorerl-0.7/lib/referl_ui/emacs")
    (require 'refactorerl)
 
 3. (Re)Start Emacs, and use `M-x customize-group' to customize the group

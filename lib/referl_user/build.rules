@@ -1,0 +1,18 @@
+%%% This file has -*- Erlang -*- syntax.
+#target{name=source,
+        rules=[#source{files="src/*.xrl",     rule=xrl},
+               #source{files="src/*.yrl",     rule=yrl},
+               #source{files="src/*.appspec", rule=app}]}.
+
+#target{name=tool,
+        rules=[#source{files="src/*.erl", rule=erl}]}.
+
+#target{name=doc,
+        rules=[#source{files="ebin/*.app", rule=doc}]}.
+
+#target{name=clean,
+        rules=[#apply{files=["src/*_{lexer,parser}.erl",
+                             "ebin/*.{beam,app}",
+                             "doc/*.{html,png,css}", "doc/edoc-info"],
+                      action=file:delete(File)}
+              ]}.

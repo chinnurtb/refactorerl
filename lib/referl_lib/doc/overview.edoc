@@ -1,0 +1,56 @@
+-*- coding: latin-1 -*-
+@title RefactorErl Refactoring Library
+@version 0.7
+@copyright 2006-2009 Eötvös Loránd University
+@doc
+
+<dl>
+  <dt>{@link referl_query. `?Query'}</dt>
+  <dd>High-level graph query interface</dd>
+
+  <dt>{@link referl_transform. `?Transform'}</dt>
+  <dd>Refactoring manager framework</dd>
+
+  <dt>{@link referl_ui. `?UI'}</dt>
+  <dd>User interface gateway</dd>
+
+  <dt>{@link referl_args. `?Args'}</dt>
+  <dd>Generic refactoring parameter handler</dd>
+
+  <dt>{@link referl_error. `?Error'}</dt>
+  <dd>Error message formatter</dd>
+
+  <dt>{@link referl_file. `?File'}</dt>
+  <dd>File-related queries</dd>
+
+  <dt>{@link referl_form. `?Form'}</dt>
+  <dd>Form-related queries</dd>
+
+  <dt>{@link referl_clause. `?Clause'}</dt>
+  <dd>Clause-related queries</dd>
+
+  <dt>{@link referl_expression. `?Expr'}</dt>
+  <dd>Expression-related queries</dd>
+
+  <dt>{@link referl_module. `?Mod'}</dt>
+  <dd>Module-related queries</dd>
+
+  <dt>{@link referl_function. `?Fun'}</dt>
+  <dd>Function-related queries</dd>
+
+  <dt>{@link referl_variable. `?Var'}</dt>
+  <dd>Variable-related queries</dd>
+
+  <dt>{@link referl_record. `?Rec'}</dt>
+  <dd>Record-related queries</dd>
+
+  <dt>{@link referl_macro. `?Macro'}</dt>
+  <dd>Macro-related queries</dd>
+
+  <dt>{@link referl_token. `?Token'}</dt>
+  <dd>Token-related queries</dd>
+
+  <dt>{@link referl_draw_graph. `?DrawGraph'}</dt>
+  <dd>Produces a drawing of the graph contents</dd>
+
+</dl>

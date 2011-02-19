@@ -1,0 +1,647 @@
+%%% -*- mode: Erlang; coding: latin-1 -*-
+
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
+%%%
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
+%%%
+%%% The Original Code is RefactorErl.
+%%%
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2009,
+%%% Eötvös Loránd University. All Rights Reserved.
+
+%%% This file describes the syntactic graph representation of Erlang. It
+%%% consists of five sections:
+%%%  1. Global parameters
+%%%  2. Syntax description
+%%%  3. Lexical description
+%%%  4. Keyword sets
+%%%  5. Keyword state machine
+%%%
+%%% Authors: Laszlo Lovei <lovei@inf.elte.hu>
+%%%          Robert Kitlei <kitlei@inf.elte.hu>
+
+%% =============================================================================
+%% 1. Global parameters
+
+% The root symbol of the grammar
+[RootSym='Form']
+
+% The initial state of the keyword fsm
+[KeywordStart='FormStart']
+
+% Link names used for lexical children of syntactic node classes
+[LexLinks={form:flex clause:clex expr:elex typexp:tlex}]
+
+
+%% =============================================================================
+%% 2. Syntax description
+
+%% Syntactic categories are named using variables. Rules either describe a
+%% syntactic graph node, or refer to another syntactic category (chain rule).
+%%
+%% Rule syntax:
+%% Ruleset  ::= Name '->' Rule { '|' Rule}
+%% Rule     ::= Name | Data '(' Children ')
+%% Data     ::= '#' Class '{' Attrib { ',' Attrib } '}'
+%% Attrib   ::= atom '=' Value | atom '<-' Token
+%% Children ::= Child { Child }
+%% Child    ::= Token | Link '->' Name | '{' Children '}' | '[' Children ']'
+%% Name     ::= variable
+%% Token    ::= atom
+%% Link     ::= atom
+%% Value    ::= atom | integer | string
+
+
+% ------------------------------------------------------------------------------
+% Top level constructs
+
+Form -> FModule | FExport | FImport | FTypDef | FRecord | FFunSpec | FFile
+      | FAttrib | FFunction | FEmpty
+
+
+FFunction ->
+    #form{type=func}
+    ( funcl->CFunction { ';' funcl->CFunction } 'stop' )
+
+CFunction ->
+    #clause{type=fundef}
+    (name->EAtom
+     '(' [pattern->Expr {',' pattern->Expr}] ')' ['when' guard->Guards]
+     '->' body->Expr {',' body->Expr})
+
+%% *** Note for attribute forms ***
+%%
+%% Somewhere between R12B and R12B3, a bug has been introduced into the syntax
+%% description of the standard Erlang parser. This bug makes the Erlang
+%% compiler accept any syntactic attribute without the enclosing pair of
+%% parentheses. (http://www.erlang.org/cgi-bin/ezmlm-cgi/4/50153)
+%%
+%% These attribute syntax descriptions explicitly accept these erroneous forms
+%% to closely follow the Erlang compiler. The `paren' attribute of forms
+%% contains information on the presence of parentheses, its default value of
+%% `default' selects the correct form.
+%%
+%% To remove this feature, simply remove the syntactic rules where the `paren'
+%% attribute value if not `default', and remove the `paren' attribute as well.
+%% ExpNoPar can also be removed, only FAttrib uses it.
+
+FModule ->
+    #form{type=module, paren=default, tag<-'atom'}
+    ('-' 'module' '(' 'atom' ')' 'stop')
+  | #form{type=module, paren=no,      tag<-'atom'}
+    ('-' 'module'     'atom'     'stop')
+
+FExport ->
+    #form{type=export, paren=default}
+    ('-' 'export' '(' '[' eattr->EAFunList ']' ')' 'stop')
+
+  | #form{type=export, paren=no}
+    ('-' 'export'     '[' eattr->EAFunList ']'     'stop')
+
+FImport ->
+    #form{type=import, paren=default}
+    ('-' 'import' '(' eattr->EAtom ',' '[' eattr->EAFunList ']' ')' 'stop')
+
+  | #form{type=import, paren=no}
+    ('-' 'import'     eattr->EAtom ',' '[' eattr->EAFunList ']'     'stop')
+
+FRecord ->
+    #form{type=record, paren=default, tag<-'atom'}
+    ('-' 'record' '(' 'atom' ','
+                  '{' [tattr->TFldSpec {',' tattr->TFldSpec}] '}' ')' 'stop')
+
+  | #form{type=record, paren=no,      tag<-'atom'}
+    ('-' 'record'     'atom' ','
+                  '{' [tattr->TFldSpec {',' tattr->TFldSpec}] '}'     'stop')
+
+TFldSpec ->
+    #typexp{type=spec_field, tag<-'atom'}
+    ('atom' ['=' texpr->Expr] ['::' tsub->TypSpec])
+
+
+FTypDef ->
+    #form{type=type, paren=default, tag=type}
+    ('-' 'type'      tattr->TAtom tattr->TFunArgs '::' tattr->TypSpec    'stop')
+
+  | #form{type=type, paren=default, tag=opaque}
+    ('-' 'opaque'    tattr->TAtom tattr->TFunArgs '::' tattr->TypSpec    'stop')
+
+  | #form{type=type, paren=yes,     tag=type}
+    ('-' 'type'  '(' tattr->TAtom tattr->TFunArgs '::' tattr->TypSpec ')''stop')
+
+  | #form{type=type, paren=yes,     tag=opaque}
+    ('-' 'opaque''(' tattr->TAtom tattr->TFunArgs '::' tattr->TypSpec ')''stop')
+
+TFunArgs ->
+    #typexp{type=varlist} ('(' [tsub->TVar {',' tsub->TVar}] ')')
+
+
+FFunSpec ->
+    #form{type='spec', paren=default, tag=name}
+    ('-' 'spec'     tattr->TypName      tattr->TypFunction     'stop')
+
+  | #form{type='spec', paren=yes,     tag=name}
+    ('-' 'spec' '(' tattr->TypName      tattr->TypFunction ')' 'stop')
+
+  | #form{type='spec', paren=default, tag=ref}
+    ('-' 'spec'     tattr->TFunRef '::' tattr->TypFunction     'stop')
+
+  | #form{type='spec', paren=yes,     tag=ref}
+    ('-' 'spec' '(' tattr->TFunRef '::' tattr->TypFunction ')' 'stop')
+
+FFile ->
+    #form{type=file, paren=default}
+    ('-' 'file' '(' eattr->EString ',' eattr->EInt ')' 'stop')
+  | #form{type=file, paren=no}
+    ('-' 'file'     eattr->EString ',' eattr->EInt     'stop')
+
+
+FAttrib ->
+    #form{type=attrib, paren=default, tag<-'atom'}
+    ('-' 'atom' '(' eattr->ExpAttr ')' 'stop')
+
+  | #form{type=attrib, paren=no,      tag<-'atom'}
+    ('-' 'atom'     eattr->ExpNoPar    'stop')
+
+
+% Note that `eol' tokens are removed during whitespace processing, only an
+% empty file contains an `eol' token.
+FEmpty ->
+    #form{type=lex, tag=empty}
+    ( 'eol' )
+
+% ------------------------------------------------------------------------------
+% Types
+
+TypFunction -> TSpecUnion | TypFunSpec
+TypFunSpec  -> TFunSig    | TGrdFunSig
+TypFunSig   -> TFunSig    | TPolySig
+
+TypSpec  -> TTypVar | TypUnion
+TypUnion -> TUnion  | Type
+Type     -> TTuple  | TRecord | TList | TBinary | TLimitInt  | TVar  | TAtom
+          | TFunc   | TParen  | TCall
+
+TypGuard -> TGuard | TGrdList
+TypName  -> TAtom  | TExtName
+
+
+TSpecUnion ->
+    #typexp{type=spec_union}
+    (tsub->TypFunSpec ';' tsub->TypFunSpec {';' tsub->TypFunSpec})
+
+TGrdFunSig -> #typexp{type=spec_guard} (tsub->TFunSig 'when' tsub->TypGuard)
+
+TFunSig  -> #typexp{type=fun_sig}  (tsub->TArgList      '->' tsub->TypSpec)
+TPolySig -> #typexp{type=poly_sig} ('(' '.' '.' '.' ')' '->' tsub->TypSpec)
+
+TArgList -> #typexp{type=arglist}  ('(' [tsub->TypSpec {',' tsub->TypSpec}] ')')
+
+TExtName -> #typexp{type=module_qualifier} (tsub->TAtom ':' tsub->TAtom)
+
+
+TFunRef ->
+    #typexp{type=arity_qualifier}  (tsub->TypName '/' tsub->TInt)
+
+TGrdList ->
+    #typexp{type=guardlist} (tsub->TGuard ',' tsub->TGuard {',' tsub->TGuard})
+
+TGuard ->
+    #typexp{type=guard} ('atom' tsub->TArgList)
+
+
+TTypVar ->
+    #typexp{type=vardef} (tsub->TVar '::' tsub->TypUnion)
+
+TUnion ->
+    #typexp{type=union}  (tsub->Type '|' tsub->Type {'|' tsub->Type})
+
+TTuple ->
+    #typexp{type=tuple}  ('{' [tsub->TypSpec {',' tsub->TypSpec}] '}')
+
+TRecord ->
+    #typexp{type=record, tag<-'atom'}
+    ('#' 'atom' '{' [tsub->TField {',' tsub->TField}] '}')
+TField ->
+    #typexp{type=field} (tsub->TAtom '::' tsub->TypSpec)
+
+TList ->
+    #typexp{type=list, tag=empty}    ('[' ']')
+  | #typexp{type=list, tag=any}      ('[' tsub->TypSpec ']')
+  | #typexp{type=list, tag=nonempty} ('[' tsub->TypSpec ',' '.' '.' '.' ']')
+
+TLimitInt ->
+    TSgnInt
+  | #typexp{type=interval} (tsub->TSgnInt '.' '.' tsub->TSgnInt)
+
+TSgnInt ->
+    TInt
+  | #typexp{type=negate} ('-' tsub->TInt)
+
+TFunc ->
+    #typexp{type=func, tag=any} ('fun' '(' ')')
+  | #typexp{type=func, tag=sig} ('fun' '(' tsub->TypFunSig ')')
+
+TParen ->
+    #typexp{type=paren} ('(' tsub->TypSpec ')')
+
+TCall ->
+    #typexp{type=call} (tsub->TypName tsub->TArgList)
+
+% In reality, the first must be base and the second unit
+TBinary ->
+    #typexp{type=binary}   ('<<' [tsub->TBinSpec [',' tsub->TBinSpec]] '>>')
+TBinSpec ->
+    #typexp{type=bin_base} (tsub->TVar ':' tsub->TInt)
+  | #typexp{type=bin_unit} (tsub->TVar ':' tsub->TVar '*' tsub->TInt)
+
+TAtom -> #typexp{type=atom,     tag<-'atom'}     ('atom')
+TInt  -> #typexp{type=integer,  tag<-'integer'}  ('integer')
+TVar  -> #typexp{type=variable, tag<-'variable'} ('variable')
+       | #typexp{type=joker}                     ('_')
+
+% ------------------------------------------------------------------------------
+% Expression precedence structure
+
+Guards  -> EDisj              | ExpGrd
+ExpGrd  -> EConj              | Expr
+Expr    -> ECatch             | Exp100
+Exp100  -> EMatch   | ESend   | Exp150
+Exp150  -> EOrelse            | Exp160
+Exp160  -> EAndalso           | Exp200
+Exp200  -> ECmpOp             | Exp300
+Exp300  -> ELstOp             | Exp400
+Exp400  -> EAddOp             | Exp500
+Exp500  -> EMulOp             | Exp600
+Exp600  -> EPreOp             | Exp700
+Exp700  -> ECall              | Exp750
+Exp750  -> ERecord            | Exp800
+Exp800  -> EColon             | ExpMax
+
+ExpMax    -> EParen    | ExpAtomic | ExpConst  | ExpComp
+ExpAttr   -> EAParen   | ExpAtomic | ExpAConst | EAFunRef
+ExpNoPar  ->             ExpAtomic | ExpAConst | EAFunRef
+
+ExpAtomic -> EString   | EAtom     | EChar | EInt  | EVar  | EFloat
+ExpConst  -> ETuple    | EList     | EBinary
+ExpAConst -> EATuple   | EAList    | EBinary
+ExpComp   -> EBlock    | EReceive  | EIf   | ECase | EFunc | ETry
+           | ELstCompr | EBinCompr
+
+%% A note for attribute expressions: attributes normally contain only term.
+%% There is one exception though: `atom/integer' syntax is accepted and is
+%% used in some places (e.g. -compile) to denote functions. ExpAttr and EA* is
+%% used to represent these "terms" as function references. Fortunately this
+%% only affects tuples and lists: records are not permitted in attributes, and
+%% binaries are not affected by this issue.
+
+% ------------------------------------------------------------------------------
+% Simple expressions
+
+EDisj  -> #expr{type=infix_expr, value=';'} (esub->ExpGrd ';' esub->Guards)
+EConj  -> #expr{type=infix_expr, value=','} (esub->Expr   ','   esub->ExpGrd)
+EMatch -> #expr{type=match_expr           } (esub->Exp150 '='   esub->Exp100)
+ESend  -> #expr{type=send_expr            } (esub->Exp150 '!'  esub->Exp100)
+
+ECmpOp -> % Exp200
+    #expr{type=infix_expr, value='==' } (esub->Exp300 '=='  esub->Exp300)
+  | #expr{type=infix_expr, value='/=' } (esub->Exp300 '/='  esub->Exp300)
+  | #expr{type=infix_expr, value='=<' } (esub->Exp300 '=<'  esub->Exp300)
+  | #expr{type=infix_expr, value='<'  } (esub->Exp300 '<'   esub->Exp300)
+  | #expr{type=infix_expr, value='>=' } (esub->Exp300 '>='  esub->Exp300)
+  | #expr{type=infix_expr, value='>'  } (esub->Exp300 '>'   esub->Exp300)
+  | #expr{type=infix_expr, value='=:='} (esub->Exp300 '=:=' esub->Exp300)
+  | #expr{type=infix_expr, value='=/='} (esub->Exp300 '=/=' esub->Exp300)
+
+ELstOp -> % Exp300
+    #expr{type=infix_expr, value='++'} (esub->Exp400 '++' esub->Exp300)
+  | #expr{type=infix_expr, value='--'} (esub->Exp400 '--' esub->Exp300)
+
+EAddOp -> % Exp400
+    #expr{type=infix_expr, value='+'   } (esub->Exp400 '+'    esub->Exp500)
+  | #expr{type=infix_expr, value='-'   } (esub->Exp400 '-'    esub->Exp500)
+  | #expr{type=infix_expr, value='bor' } (esub->Exp400 'bor'  esub->Exp500)
+  | #expr{type=infix_expr, value='bxor'} (esub->Exp400 'bxor' esub->Exp500)
+  | #expr{type=infix_expr, value='bsl' } (esub->Exp400 'bsl'  esub->Exp500)
+  | #expr{type=infix_expr, value='bsr' } (esub->Exp400 'bsr'  esub->Exp500)
+  | #expr{type=infix_expr, value='or'  } (esub->Exp400 'or'   esub->Exp500)
+  | #expr{type=infix_expr, value='xor' } (esub->Exp400 'xor'  esub->Exp500)
+
+EMulOp -> % Exp500
+    #expr{type=infix_expr, value='/'   } (esub->Exp500 '/'    esub->Exp600)
+  | #expr{type=infix_expr, value='*'   } (esub->Exp500 '*'    esub->Exp600)
+  | #expr{type=infix_expr, value='div' } (esub->Exp500 'div'  esub->Exp600)
+  | #expr{type=infix_expr, value='rem' } (esub->Exp500 'rem'  esub->Exp600)
+  | #expr{type=infix_expr, value='band'} (esub->Exp500 'band' esub->Exp600)
+  | #expr{type=infix_expr, value='and' } (esub->Exp500 'and'  esub->Exp600)
+
+EPreOp -> % Exp600
+    #expr{type=prefix_expr, value='+'   } ('+'    esub->Exp700)
+  | #expr{type=prefix_expr, value='-'   } ('-'    esub->Exp700)
+  | #expr{type=prefix_expr, value='bnot'} ('bnot' esub->Exp700)
+  | #expr{type=prefix_expr, value='not' } ('not'  esub->Exp700)
+
+ECall -> % Exp700
+    #expr{type=application}
+    ( esub->Exp800 esub->EArgList)
+
+EArgList -> #expr{type=arglist} ('(' [esub->Expr {',' esub->Expr}] ')')
+
+ERecord -> % Exp700
+    #expr{type=record_index, value<-'atom'} ('#' 'atom' '.' esub->EAtom)
+  | #expr{type=record_expr,  value<-'atom'} ('#' 'atom' esub->EFldList)
+
+  | #expr{type=record_access, value<-'atom'}
+    (esub->ExpMax '#' 'atom' '.' esub->EAtom)
+
+  | #expr{type=record_update, value<-'atom'}
+    (esub->ExpMax '#' 'atom' esub->EFldList)
+
+EFldList -> #expr{type=field_list} ('{' [esub->EField {',' esub->EField}] '}')
+EField   -> #expr{type=record_field, value<-'atom'} ('atom' ['=' esub->Expr])
+          | #expr{type=record_joker_field}          ('_'     '=' esub->Expr)
+
+% Exp750 needed in constructs like      try ... catch throw:#rec{} -> ... end
+EColon -> % Exp800
+    #expr{type=infix_expr, value=':'}
+    ( esub->ExpMax ':' esub->Exp750 )
+
+EParen -> % ExpMax
+    #expr{type=parenthesis}
+    ( '(' esub->Expr ')' )
+
+EAParen ->
+    #expr{type=parenthesis}
+    ( '(' esub->ExpAttr ')' )
+
+EList ->
+    #expr{type=cons}
+    ( '[' [ esub->ELstHead [ '|' esub->Expr ] ] ']' )
+EAList ->
+    #expr{type=cons}
+    ( '[' [ esub->EALstHead [ '|' esub->ExpAttr ] ] ']' )
+
+ELstHead ->
+    #expr{type=list}
+    (esub->Expr {',' esub->Expr})
+EALstHead ->
+    #expr{type=list}
+    (esub->ExpAttr {',' esub->ExpAttr})
+
+EAFunList -> #expr{type=funlist} ( [ esub->EAFunRef {',' esub->EAFunRef} ] )
+EAFunRef  -> #expr{type=funref}  ( esub->EAtom '/' esub->EInt )
+
+EBinary ->
+    #expr{type=binary}
+    ('<<' [esub->EBinElem {',' esub->EBinElem}] '>>')
+
+EBinElem ->
+    #expr{type=binary_field}
+    ( esub->ExpBin0 [ '/' esub->EBitT { '-' esub->EBitT } ] )
+
+ExpBin0 -> EBinSize | ExpBin1
+ExpBin1 -> EBinOp   | ExpMax
+
+EBinSize -> #expr{type=size_qualifier} (esub->ExpBin1 ':' esub->ExpMax)
+EBinOp   -> #expr{type=prefix_bit_expr, value='+'}    ('+'    esub->ExpMax)
+          | #expr{type=prefix_bit_expr, value='-'}    ('-'    esub->ExpMax)
+          | #expr{type=prefix_bit_expr, value='bnot'} ('bnot' esub->ExpMax)
+          | #expr{type=prefix_bit_expr, value='not'}  ('not'  esub->ExpMax)
+
+EBitT ->
+    EAtom
+  | #expr{type=bit_size_expr, value<-'integer'}
+    ( esub->EAtom ':' 'integer' )
+
+
+ETuple  -> #expr{type=tuple} ( '{' [ esub->Expr    { ',' esub->Expr    } ] '}' )
+EATuple -> #expr{type=tuple} ( '{' [ esub->ExpAttr { ',' esub->ExpAttr } ] '}' )
+
+EAtom   -> #expr{type=atom,     value<-'atom'    } ('atom')
+EInt    -> #expr{type=integer,  value<-'integer' } ('integer')
+EFloat  -> #expr{type=float,    value<-'float'   } ('float')
+EChar   -> #expr{type=char,     value<-'char'    } ('char')
+EVar    -> #expr{type=variable, value<-'variable'} ('variable')
+         | #expr{type=joker                      } ('_')
+EString -> #expr{type=string,   value<-'string'  } ('string')
+         | #expr{type=mstring,  value<-'string'  } ('string' esub->EString)
+
+% ------------------------------------------------------------------------------
+% Compound expressions
+
+ECatch -> #expr{type=catch_expr} ('catch' exprcl->CExp )
+EBlock -> #expr{type=block_expr} ('begin' exprcl->CBlock 'end')
+
+EOrelse -> % Exp150
+    #expr{type=infix_expr, value='orelse'}
+    ( exprcl->CE160 'orelse' exprcl->CE150 )
+
+EAndalso -> % Exp160
+    #expr{type=infix_expr, value='andalso'}
+    ( exprcl->CE200 'andalso' exprcl->CE160 )
+
+CE150 -> #clause{type=expr} ( body->Exp150 )
+CE160 -> #clause{type=expr} ( body->Exp160 )
+CE200 -> #clause{type=expr} ( body->Exp200 )
+
+
+ELstCompr ->
+    #expr{type=list_comp} ('['  exprcl->CHExp    '||' exprcl->CCompr ']')
+EBinCompr ->
+    #expr{type=bin_comp}  ('<<' exprcl->CHBinary '||' exprcl->CCompr '>>')
+
+CCompr ->
+    #clause{type=compr} (body->ECompr {',' body->ECompr})
+
+CHExp    -> #clause{type=hexpr} (body->Expr)
+CHBinary -> #clause{type=hexpr} (body->EBinary)
+
+ECompr  -> EFilter | ELstGen | EBinGen
+EFilter -> #expr{type=filter}     (exprcl->CExp)
+ELstGen -> #expr{type=list_gen}   (exprcl->CPExp    '<-' exprcl->CExp)
+EBinGen -> #expr{type=binary_gen} (exprcl->CPBinary '<=' exprcl->CExp)
+
+CPExp    -> #clause{type=pexpr} (pattern->Expr)
+CPBinary -> #clause{type=pexpr} (pattern->EBinary)
+
+
+EIf ->
+    #expr{type=if_expr}
+    ('if' exprcl->CGrd {';' exprcl->CGrd} 'end')
+
+ECase ->
+    #expr{type=case_expr}
+    ('case' headcl->CExp 'of' exprcl->CPattern {';' exprcl->CPattern} 'end')
+
+EReceive ->
+    #expr{type=receive_expr}
+    ('receive' [exprcl->CPattern {';' exprcl->CPattern}]
+               ['after' aftercl->CAfter]
+     'end')
+
+EFunc ->
+    #expr{type=fun_expr}     ('fun' exprcl->CFunExp {';' exprcl->CFunExp} 'end')
+  | #expr{type=implicit_fun} ('fun' esub->EFunName '/' esub->EInt)
+
+CFunExp ->
+    #clause{type=funexpr}
+    ('(' [pattern->Expr {',' pattern->Expr}] ')'
+     ['when' guard->Guards] '->' body->Expr {',' body->Expr})
+
+EFunName ->
+    EAtom
+  | #expr{type=infix_expr, value=':'}
+    (esub->EAtom ':' esub->EAtom)
+
+ETry ->
+    #expr{type=try_expr}
+    ('try'    headcl->CBlock
+     ['of'    exprcl->CPattern {';' exprcl->CPattern}]
+     ['catch' catchcl->CPattern {';' catchcl->CPattern}]
+     ['after' aftercl->CBlock]
+     'end')
+
+CExp   -> #clause{type=expr}  (body->Expr)
+CBlock -> #clause{type=block} (body->Expr {',' body->Expr})
+
+CGrd ->
+    #clause{type=guard}
+    (guard->Guards '->' body->Expr {',' body->Expr})
+
+CPattern ->
+    #clause{type=pattern}
+    (pattern->Expr ['when' guard->Guards] '->' body->Expr {',' body->Expr})
+
+CAfter ->
+    #clause{type=timeout}
+    (tmout->Expr '->' body->Expr {',' body->Expr})
+
+
+%% =============================================================================
+%% 3. Lexical description
+
+%% Lexical categories are named using atoms. Names starting with an upper case
+%% letter are treated as abbreviations which can be referred later using
+%% variables, only the remaining lexicals are used as categories. The
+%% categories are described with regular expressions.
+%%
+%% Syntax:
+%% Rule    ::= Name '->' Regexp
+%% Regexp  ::= Branch { '|' Regexp }
+%% Branch  ::= Piece { Branch }
+%% Piece   ::= Atomic [ '*' | '+' | '?' ]
+%% Atomic  ::= '.' | char | string | NameRef
+%%           | '[' Class '] | '[' '!' Class ']' | '(' Regexp ')'
+%% Class   ::= { char | string | char '-' char }
+%% Name    ::= atom
+%% NameRef ::= variable
+
+
+% Whitespace must include space, tab, and form feed. In practice, the Erlang
+% scanner ignores every control character, and no-break spaces.
+% WS excludes line terminators.
+'WS'         -> [$\1-$\11 $\13 $\14 $\16-$\40 $\240]
+% Note that \n\r is an incorrect line terminator
+'EOL'        -> ($\% [! "\n\r"]*)? ($\n | $\r | "\r\n" | "\n\r")
+'Upper'      -> [$A-$Z $\300-$\326 $\330-$\336]
+'Lower'      -> [$a-$z $\337-$\366 $\370-$\377]
+'Digit'      -> [$0-$9]
+'Octal'      -> [$0-$7]
+'Escape'     -> $\\ ([!$0-$7] | Octal (Octal Octal?)? | $^ [$\000-$\377])
+'Namechar'   -> (Digit|Lower|Upper|["_@"])
+
+'ws'         -> WS+
+'eol'        -> WS* EOL
+'stop'       -> $. (EOL | WS+ EOL?)
+'atom'       -> Lower Namechar*
+              | $' ([! $\\ $'] | Escape)* $'
+'variable'   -> Upper Namechar* | $_ Namechar+
+'string'     -> $" ([! $\\ $"] | Escape)* $"
+'integer'    -> ([$2-$9] $#)? Digit+
+              | [$1-$3][$0-$9] $# [$0-$9 $a-$z $A-$Z]+
+'float'      -> Digit+ $. Digit+ (["eE"] ["+-"]? Digit+)?
+'char'       -> $$ ([! $\\] | Escape)
+'symbol'     -> ["(){}[],;#*!?._"]
+              | $< | "<<" | "<-" | "<="
+              | $> | ">>" | ">="
+              | $: | "::"
+              | $- | "--" | "->"
+              | $| | "||"
+              | $/ | "/="
+              | $+ | "++"
+              | $= | "==" | "=<" | "=:=" | "=/="
+
+%% =============================================================================
+%% 4. Keyword sets
+
+%% The scanner is capable of switching between different sets of keywords.
+%% These sets are described here. Every set is named with a variable, and
+%% consists of a set of strings (the accepted keywords) and a mapping to a set
+%% of atoms (keyword names, the default is the keyword text). Sets may include
+%% other sets.
+%%
+%% Syntax:
+%% Set     ::= '<<' SetName Keyword { Keyword } { SetName } '>>'
+%% Keyword ::= string | string ':' atom
+%% SetName ::= variable
+
+<<Erlang
+  "after" "and" "andalso" "band" "begin" "bnot" "bor" "bsl" "bsr" "bxor"
+  "case" "catch" "div" "end" "fun" "if" "not" "of" "or" "orelse" "receive"
+  "rem" "try" "when" "xor"
+   "(" ")" "{" "}" "[" "]"
+   "," ";" "#" "*" "!" "?" "." "_"
+   "<" "<<" "<-" "<="
+   ">" ">>" ">="
+   ":" "::"
+   "-" "--" "->"
+   "|" "||"
+   "/" "/="
+   "=" "==" "=<" "=:="      "=/="
+   "+" "++"
+>>
+
+<<FormStart Erlang>>
+
+<<Attrib Erlang
+  "module" "export" "import" "record" "type" "opaque" "spec" "file"
+>>
+
+%% =============================================================================
+%% 5. Keyword state machine
+
+%% Active keyword sets are selected by a state machine. Valid states are
+%% keyword set names, transitions are final token names (i.e. keywords of the
+%% actual set are taken into account), and a catch-all transition must be
+%% provided for unspecified tokens. The initial state is given as a global
+%% parameter (`KeywordStart').
+%%
+%% Syntax:
+%% StateTrans ::= '<' State ':' { Transition } CatchAll  '>
+%% Transition ::= atom '->' State | variable
+%% CatchAll   ::= '*' '->' State
+
+<FormStart:
+    'ws'   -> FormStart
+    'eol'  -> FormStart
+    'stop' -> FormStart
+    '-'    -> Attrib
+     *     -> Erlang>
+
+<Attrib:
+    'ws'   -> Attrib
+    'eol'  -> Attrib
+    'stop' -> FormStart
+     *     -> Erlang>
+
+<Erlang:
+    'stop' -> FormStart
+     *     -> Erlang>
