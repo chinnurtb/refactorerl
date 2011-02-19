@@ -10,7 +10,7 @@
 (add-to-list 'load-path (concat refactorer-base-dir "/distel/elisp"))
 (require 'distel)
 (setq erl-nodename-cache
-      (intern (concat "refactorerl@" (erl-determine-hostname))))
+      (intern (concat "refactorerl@" (car (split-string (shell-command-to-string "hostname"))))))
 
 (add-to-list 'load-path (concat refactorer-base-dir "/refactor"))
 (require 'refactor)

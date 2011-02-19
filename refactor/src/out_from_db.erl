@@ -815,7 +815,6 @@ make_float(MId, Id) ->
 	  ++ " and id=" ++ integer_to_list(Id) ++";"),
     erl_syntax:set_pos(erl_syntax:float(Value), Pos).
 
-%%TODO : hibakezeles
 %% =====================================================================
 %% @spec make_form_list(MId::integer(), 
 %%            Id::integer()) -> syntaxTree()
@@ -1247,7 +1246,6 @@ make_operator(MId, Id) ->
 	  ++ " and id=" ++ integer_to_list(Id) ++";"),
     erl_syntax:set_pos(erl_syntax:operator(Name), Pos).
 
-%%%TODO: ez itt szerintem nem jo. A Body-t rekurzivan letre kene hozni???
 %% =====================================================================
 %% @spec make_parentheses(MId::integer(), 
 %%            Id::integer()) -> syntaxTree()

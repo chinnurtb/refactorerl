@@ -55,3 +55,4 @@
       ,{i, "../../mysql/src"}
       ,debug_info]}.
 {'../../mysql/src/*', [{outdir, "../ebin"}]}.
+{'../../tester/tester.erl', [{outdir, "../ebin"}]}.

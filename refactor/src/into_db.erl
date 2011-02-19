@@ -1106,12 +1106,6 @@ visib_fun_expr_clause(Pid, Pid2, MId, Clause) ->
     Pattern = erl_syntax:clause_patterns(Clause),
     split(Pid,normal),
     new_scope(Pid2,Clause),
-    %%TODO
-    %% PatternVars = lists:filter(fun(Element)->
-    %%			case erl_syntax:type(Element) of 
-    %%				variable -> true; 
-    %%				_ -> false end end, Pattern),
-    %%lists:map(fun(Element)->put_in_sh_check(Pid, Element) end,PatternVars),   
     lists:map(fun (Element)-> preorder_2(Pid, Pid2, MId, Element) end,
               Pattern),
     lists:map(fun (Element)-> 

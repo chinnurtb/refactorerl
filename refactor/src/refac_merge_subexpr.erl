@@ -107,28 +107,15 @@ merge_subexpression(File, Line1, Col1, Line2, Col2, NewName) ->
 
   refac_checks:check_if_bindings_are_unambiguous(MId, BoundIds, RootClause),
 
-  ExprInstances = get_expr_instances(MId, RootClause, ExprId, BoundIds),
-  Sideeffects = refac_common:get_sideeffects(MId, RootClause, ExprInstances),
+  AllExprInstances = get_expr_instances(MId, RootClause, ExprId, BoundIds),
+  Sideeffects = refac_common:get_sideeffects(MId, RootClause, AllExprInstances),
   {_, SideeffectIds, _} = lists:unzip3(Sideeffects),
-  ValidInstances = ExprInstances -- SideeffectIds,
+  ExprInstances = AllExprInstances -- SideeffectIds,
   {InsertionRoot, InsertionPoint} =
-    find_insertion_point(MId, BoundIds, RootClause, ValidInstances),
+    find_insertion_point(MId, BoundIds, RootClause, ExprInstances),
 
-
-AdditionalParam =
-if
-  InsertionPoint /= 0 ->
-    [{[InsertionPoint], "style=filled, color=\"lightsalmon1\""}];
-  true ->
-    []
-end,
-graph_printer:print("z.expr", MId, RootClause, [{ValidInstances, "style=filled, color=\"cadetblue1\""}
-			                       ,{BoundIds, "style=filled, color=\"gray\""}
-			                       ,{[InsertionRoot], "style=filled, color=\"lawngreen\""}
-                                               ] ++ AdditionalParam),
-
-  perform_refactoring(MId, InsertionRoot, ExprId, ValidInstances,
-                      NewName, InsertionPoint),
+  perform_refactoring(MId, InsertionRoot, ExprId, ExprInstances,
+                      NewName, InsertionPoint, BoundIds),
   {ok, NewName}.
 
 
@@ -137,7 +124,8 @@ graph_printer:print("z.expr", MId, RootClause, [{ValidInstances, "style=filled, 
 %%                           ExprId::integer(),
 %%                           ExprInstances::[integer()],
 %%                           NewName::string(),
-%%                           InsertionPoint::integer()) -> ok
+%%                           InsertionPoint::integer(),
+%%                           BoundIds::[integer()]) -> ok
 %%
 %% @doc
 %% Performs the refactoring, and commits the changes into the 
@@ -150,11 +138,12 @@ graph_printer:print("z.expr", MId, RootClause, [{ValidInstances, "style=filled, 
 %% <b>ExprInstances</b> : List of all the expression instances.
 %% <b>NewName</b> : The new name given for the variable.
 %% <b>InsertionPoint</b> : Id after which the new binding is to be.
+%% <b>BoundIds</b> : Ids bound in the expression.
 %% </pre>
 %% @end
 %% =====================================================================
 perform_refactoring(MId, RootClause, ExprId, ExprInstances,
-                    NewName, InsertionPoint) ->
+                    NewName, InsertionPoint, BoundIds) ->
   NewVar = create_nodes:create_variable(MId, NewName),
   create_nodes:init_scope(MId, RootClause, NewVar),
   create_nodes:connect_variables(MId, [NewVar], [NewVar]),
@@ -165,7 +154,8 @@ perform_refactoring(MId, RootClause, ExprId, ExprInstances,
   insert_new_expression(MId, NewMatchExpr, RootClause, InsertionPoint),
 
   RemainingInstances = delete_instance_if_insertion_acquires_it(
-                           MId, RootClause, ExprInstances, InsertionPoint),
+                           MId, RootClause, ExprInstances, InsertionPoint,
+			   BoundIds),
 
   replace_instances(MId, NewVar, NewName, RootClause, RemainingInstances),
 
@@ -176,7 +166,8 @@ perform_refactoring(MId, RootClause, ExprId, ExprInstances,
 %% @spec delete_instance_if_insertion_acquires_it(
 %%                           MId::integer(), RootClause::integer(), 
 %%                           ExprInstances::[integer()],
-%%                           InsertionPoint::integer()) -> [integer()]
+%%                           InsertionPoint::integer(),
+%%                           BoundIds::[integer()]) -> [integer()]
 %%
 %% @doc
 %% Deletes the instance if it was replaced.
@@ -187,30 +178,29 @@ perform_refactoring(MId, RootClause, ExprId, ExprInstances,
 %% <b>RootClause</b> : Id of the clause containing the expressions.
 %% <b>ExprInstances</b> : List of all the expression instances.
 %% <b>InsertionPoint</b> : Id after which the new binding is to be.
+%% <b>BoundIds</b> : Ids bound in the expression.
 %% </pre>
 %% @end
 %% =====================================================================
-delete_instance_if_insertion_acquires_it(MId, RootClause, ExprInstances, InsertionPoint) ->
+delete_instance_if_insertion_acquires_it(MId, RootClause, ExprInstances,
+                                         InsertionPoint, BoundIds) ->
+  MaybeToBeRemoved =
+  if
+    InsertionPoint == ?NO_PREVIOUS_NODE ->
+      lists:nth(2, erl_syntax_db:clause_body(MId, RootClause));
+    true ->
+      InsertionPoint
+  end,
+  Remove = lists:member(MaybeToBeRemoved, ExprInstances) orelse
+           lists:member(MaybeToBeRemoved, BoundIds),
   Deleted =
   if
-    InsertionPoint /= ?NO_PREVIOUS_NODE ->
-      [];
+    Remove ->
+      delete_nodes:detach_node(MId, MaybeToBeRemoved, RootClause),
+      delete_nodes:delete_node(MId, MaybeToBeRemoved),
+      [MaybeToBeRemoved];
     true ->
-      FirstNode = lists:nth(2, erl_syntax_db:clause_body(MId, RootClause)),
-
-      InsertionAcquires = lists:member(FirstNode, ExprInstances),
-      if
-        not InsertionAcquires ->
-	  [];
-	true ->
-
-%graph_printer:print("z.kinyir.expr", MId, RootClause, [{[FirstNode], "style=filled, color=\"lawngreen\""}
-%                                               ]),
-
-          delete_nodes:detach_node(MId, FirstNode, RootClause),
-          delete_nodes:delete_node(MId, FirstNode),
-	  [FirstNode]
-      end
+      []
   end,
   ExprInstances -- Deleted.
 
@@ -337,18 +327,12 @@ find_insertion_point(MId, BoundIds, RootClause, ExprIds) ->
     true ->
       PossibleLocation = hd(LastSubtreeWithPossibleBinding),
       Subtrees = refac_common:get_subtrees(MId, PossibleLocation, with_root),
-%      HasExpr = Subtrees -- ExprIds,
       HasBinding = Subtrees -- BoundIds,
 
       if
         HasBinding /= Subtrees -> % andalso HasExpr /= Subtrees ->
           {InsertionRoot, PreviousNode} =
             find_insertion_point(MId, BoundIds, PossibleLocation, ExprIds),
-
-%graph_printer:print("z.2.expr", MId, RootClause, [{[InsertionRoot], "style=filled, color=\"lawngreen\""}
-%			                         ,{[PreviousNode], "style=filled, color=\"red\""}
-%                                                 ]),
-
 	  InsertionRootType = erl_syntax_db:type(MId, InsertionRoot),
 	  case InsertionRootType of
 	    ?CLAUSE ->

@@ -49,10 +49,12 @@
 %%% --------------------------------------------------------------------------
 
 %% @copyright 2007 Eötvös Loránd University and Ericsson Hungary
+%% @author Robert Kitlei <kitlei@elte.hu>
 %% @author Tamas Nagy <lestat@elte.hu>
 %% @author Aniko Vig <viganiko@inf.elte.hu>
+%% @author Melinda Toth <toth_m@inf.elte.hu>
 
-%% @doc This is a package with various usefull library functions for the
+%% @doc This is a package with various useful library functions for the
 %%      refactorings. It stores all the precondition checks which are common
 %%      between the refactorings.
 %% @end
@@ -83,7 +85,11 @@
 	 check_found_expression/1,
 	 check_if_bindings_are_unambiguous/3,
 	 check_send/2,
-	 check_non_binding_in_match_pattern/3
+	 check_non_binding_in_match_pattern/3,
+	 check_all_var_bound_ok/1,
+         check_is_legal_body/8,
+         check_not_in_head_pattern_guard_macro/3,
+         check_is_legal_function_name/4
          ]).
 
 -include("node_type.hrl").
@@ -961,8 +967,6 @@ check_for_length_overrun(EndPos, MaxPos, Length) ->
 	    error_handler({too_big_number_error,Length})
     end.
 
-%%%TODO minek kell a fun() -> ok end parameter???
-%%%SOLVED: removed superfluous parameter from both _inner and _outer _name_clash
 %% =====================================================================
 %% @spec check_name_clash(MId::integer(), FunId::integer(),
 %%             FunName::string(), OldArity::integer(), 
@@ -1319,3 +1323,122 @@ check_non_binding_in_match_pattern(MId, Root, VarName) ->
     _ ->
       refac_checks:error_handler({non_binding_pattern_occurrence, []})
   end.
+
+%% =====================================================================
+%% @spec check_is_legal_function_name (NewName::string(),
+%%              Arity::integer(), FunctionData:: [{string(), integer()}],
+%%              ImportFunction::[{string(), string(), integer()}]  ) -> ok
+%%
+%% @doc
+%% Checks that the function name is a legal function name,
+%% is not autoimported, is not exists and is not imported.
+%%
+%% Parameter description:<pre>
+%% <b>NewName</b> : The exported function name.
+%% <b>Arity</b> : The exported function arity.
+%% <b>FunctionData</b> : The used functions name and arity.
+%% <b>ImportFunction</b> : The imported functcion datas.
+%% </pre>
+%% @end
+%% =====================================================================
+
+check_is_legal_function_name(NewName,Arity,FunctionData,ImportFunctions) ->
+    check_isFunctionName(NewName),
+    check_is_autoimported(NewName),
+    check_the_name_already_exists(NewName,Arity, FunctionData),
+    check_the_name_is_imported(NewName, Arity, ImportFunctions).
+
+%% =====================================================================
+%% @spec check_not_in_head_pattern_guard_macro( MId::integer(),
+%%                     Ids:: {integer(), integer()} | integer(),
+%%                     Path::[integer()])-> ok
+%%
+%% @doc
+%% Checks the expression id are not a part of  a guard sequence
+%% or a pattern or a macro or a list_comprehension node.
+%%
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Path</b> : The path to the root of the selected sequence of expression.
+%% <b>Ids</b> : Ids of the first and the last expression or NotBounVarLis
+%%              id of the expression.
+%% </pre>
+%% @end
+%% =====================================================================
+
+check_not_in_head_pattern_guard_macro(MId, Ids, Path) ->
+    case Ids of
+      {_Id1, _Id2} -> ok;
+      ExprId ->
+	  ExprParent = hd(tl(lists:reverse(Path))),
+	  ExprSideeffects =
+	      refac_common:get_sideeffects_by_parent(MId, [ExprId],
+						     ExprParent),
+	  check_sideeffects(ExprId, ExprSideeffects)
+    end.
+
+%% =====================================================================
+%% @spec check_is_legal_body(Found::atom(),FromLine::integer(),
+%%             FromCol::integer(), ToLine::integer(), ToCol::integer(), 
+%%             MId::integer(), Ids:: {integer(), integer()} | integer(),
+%%             Path::[integer()]) -> ok
+%%
+%% @doc
+%% Checks the starting and ending positions delimit a sequence of expression.
+%%
+%% Parameter description:<pre>
+%% <b>Found</b> : Description of what was found (not_found etc.).
+%% <b>FromLine</b> : The pointed first line number in the editor.
+%% <b>FromCol</b> : The pointed first column number in the editor.
+%% <b>ToLine</b> : The pointed last line number in the editor.
+%% <b>ToCol</b> : The pointed last column number in the editor.
+%% <b>MId</b> : The id of the module.
+%% <b>Ids</b> : Ids of the first and the last expressions or 
+%%              id of the expression.
+%% <b>Path</b> : The path to the root of the selected sequence of expression.
+%% </pre>
+%% @end
+%% =====================================================================
+
+check_is_legal_body(Found,FromLine,FromCol,ToLine,ToCol,MId,Ids,Path)->
+    case Found of
+      found_body -> ok;
+      found_expr -> ok;
+      _ ->
+	  error_handler({invalid_body,
+			{{FromLine, FromCol}, {ToLine, ToCol}}})
+    end,
+    Root = case Ids of
+                {_Id1, _Id2} -> lists:last(Path);
+                _ExprId -> hd(tl(lists:reverse(Path)))
+           end,
+    case erl_syntax_db:type(MId, Root) of
+      ?CASE_EXPR ->
+	  error_handler({invalid_body,
+		       {{FromLine, FromCol}, {ToLine, ToCol}}});
+      ?IF_EXPR ->
+	  error_handler({invalid_body,
+		       {{FromLine, FromCol}, {ToLine, ToCol}}});
+      _ -> ok
+    end.
+
+ %% =====================================================================
+%% @spec check_all_var_bound_ok(List::[integer()]) -> ok
+%%
+%% @doc
+%% Checks that all variables with binding occurence in the selected sequence 
+%% of expression not appear outside of this seqence.
+%%
+%% Parameter description:<pre>
+%% <b>List</b> : The list of the outsideused insidebounded variables.
+%% </pre>
+%% @end
+%% =====================================================================
+
+ check_all_var_bound_ok(List) ->
+    case List of
+      [] -> ok;
+      _ ->
+	  refac_checks:error_handler({not_all_var_bound_ok,
+				      [List]})
+    end.

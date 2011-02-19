@@ -184,7 +184,12 @@
 	 put_scope_visib_in_database/2,
 	 get_form_list_id_from_mid/1,
 	 simple_member_b/3,
-	 get_containing_scope_id/2]).
+	 get_containing_scope_id/2,
+	 insert_fun_cache/5, insert_fun_call/3,
+	 insert_var_visib/3, update_scope_visibility/3, 
+	 update_var_visib/3, update_scope/4, 
+	 get_fun_expr_clause_from_fun_id/2,
+	 get_scope_visib/2]).
 
 -export([create_condition_list/1, create_condition_list/2, 
 	 create_condition_list3/2]).
@@ -1587,7 +1592,7 @@ matcher(List,Last) ->
 	    Pid ! {got_value , self()},
 	    matcher([Pair]++List, element(2,Pair));
 	_ ->
-	    matcher(List, Last) % TODO hibakezeles
+	    matcher(List, Last)
     end.
 	    
 %% =====================================================================
@@ -1607,7 +1612,7 @@ stop(Pid) ->
 	{ok , Pid} ->
 	    ok;
 	_  ->
-	    ok % TODO hibakezeles
+	    ok
     end.
 
 %% =====================================================================
@@ -2771,8 +2776,6 @@ get_argument_nearest_position_and_type_from_clause_id_and_pos(
 	  ++ " and col<=" ++ integer_to_list(Col) ++ ");"),
     NearPosType.			       
 
-%%% TODO: ...position__and... kitorolni az egyik _ -t
-%%% DONE
 %% =====================================================================
 %% @spec 
 %% get_argument_nearest_position_and_type_from_application_id_and_pos(
@@ -4981,3 +4984,187 @@ get_containing_scope_id(MId, ScopeId) ->
 	    " mid=" ++ integer_to_list(MId) ++ " and "
 	    " id=" ++ integer_to_list(ScopeId) ++ " ;"),
     OuterScope.
+
+%% =====================================================================
+%% @spec get_fun_expr_clause_from_fun_id(
+%%         MId::integer(), Id::integer()) -> ok
+%%
+%% @doc
+%% Gets fun_expression clauses id from fun_expression id.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Id</b> : Id of the fun_expression.
+%% </pre>
+%% @end
+%% origin: refac_extract_fun:get_fun_expr_clauses_from_fun_ids/2
+%% ===================================================================== 
+
+get_fun_expr_clause_from_fun_id(MId, Id)->
+    [{Clause }] = refactor_db:select(
+			"select clause from fun_expr where mid=" 
+			++ integer_to_list(MId) ++ " and id=" 
+			++ integer_to_list(Id) ++ " and pos!=0;"),
+    Clause.
+
+
+%% =====================================================================
+%% @spec update_scope(MId::integer(),Id::integer(),
+%%                   OldScope::integer(), NewScope::integer()) -> ok
+%% @doc
+%% Update the element's scope .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Id/b> : Id.
+%% <b>OldScope</b> : The old scope id.
+%% <b>NewScope</b> : The new scope id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_scope(MId, Id, OldScopeId, NewScopeId)->
+    refactor_db:update(
+      "update scope set scope=" ++ integer_to_list(NewScopeId) 
+      ++ " where mid=" ++ integer_to_list(MId) ++ " and id=" 
+      ++ integer_to_list(Id) ++  " and scope=" 
+      ++ integer_to_list(OldScopeId) ++ ";").
+
+
+%% =====================================================================
+%% @spec update_var_visib(MId::integer(),VarId::integer(),
+%%                   NewBindingId::integer()) -> ok
+%% @doc
+%% Update the variable's visibility .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>VarId</b> : The id of the variable.
+%% <b>NewBindingId</b> : The new visibility.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_var_visib(MId, VarId, NewBindingId)->
+    refactor_db:update(
+      "update var_visib set target=" ++ integer_to_list(NewBindingId) 
+      ++ " where mid=" ++ integer_to_list(MId) ++ " and id=" 
+      ++ integer_to_list(VarId) ++ ";").
+
+
+%% =====================================================================
+%% @spec update_scope_visib(MId::integer(),Id::integer(),
+%%                   NewVisibId::integer()) -> ok
+%% @doc
+%% Update the scope's visibility .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Id</b> : The scopeid.
+%% <b>NewVisibId</b> : The new visibility.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_scope_visibility(MId, Id, NewVisibId)->
+    refactor_db:update(
+      "update scope_visib set target=" ++ integer_to_list(NewVisibId) 
+      ++ " where mid=" ++ integer_to_list(MId) ++ " and id=" 
+      ++ integer_to_list(Id) ++ ";").
+
+
+%% =====================================================================
+%% @spec insert_var_visib(MId::integer(),Id::integer(),
+%%                   Target::integer()) -> ok
+%% @doc
+%% Insert the variable's visibility .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Id</b> : The id of the variable.
+%% <b>Target</b> : The visibility.
+%% </pre>
+%% @end
+%% =====================================================================
+
+insert_var_visib(MId, Id, Target)->
+    refactor_db:insert(
+      "insert into var_visib (mid,id,target) values (" 
+      ++ integer_to_list(MId) ++ "," 
+      ++ integer_to_list(Id) ++ "," ++ integer_to_list(Target) ++ ");").
+
+
+%% =====================================================================
+%% @spec insert_fun_call(MId::integer(),CallId::integer(),
+%%                   FunId::integer()) -> ok
+%% @doc
+%% Insert function call.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>CallId</b> : The id of the application.
+%% <b>FunId</b> : The function.
+%% </pre>
+%% @end
+%% =====================================================================
+
+insert_fun_call(MId, CallId, FunId)->
+    refactor_db:insert(
+      "insert into fun_call (mid,id,tmid, target) values (" 
+      ++ integer_to_list(MId) ++ "," 
+      ++ integer_to_list(CallId) ++ "," ++ integer_to_list(MId)
+      ++ "," ++ integer_to_list(FunId) ++ ");").
+
+
+%% =====================================================================
+%% @spec insert_fun_cache(MId::integer(),Arity::integer(), FunName::atom(),
+%%                   ApplicationId::integer(), Clause::integer()) -> ok
+%% @doc
+%% Insert function call.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Arity</b> : The arity of the function.
+%% <b>FunName</b> : The name of the function.
+%% <b>ApplicationId</b> : The id of the application.
+%% <b>Clause</b> : The id of the function clause.
+%% </pre>
+%% @end
+%% =====================================================================
+
+insert_fun_cache(MId, Arity, FunName, ApplicationId,  Clause)->
+    Module = refactor:get_module_name(MId),
+    refactor_db:insert(
+      "insert into fun_cache(mid,id,module,fun,arity,type) values (" 
+      ++ integer_to_list(MId) ++ "," 
+      ++ integer_to_list(ApplicationId) ++ "," ++ io_lib:write_string(Module)
+      ++ "," ++ io_lib:write_string(FunName) ++ "," 
+      ++ integer_to_list(Arity) ++ ",1);"),
+    refactor_db:insert(
+      "insert into fun_cache(mid,id,module,fun,arity,type) values (" 
+      ++ integer_to_list(MId) ++ "," 
+      ++ integer_to_list(Clause) ++ "," ++ io_lib:write_string(Module)
+      ++ "," ++ io_lib:write_string(FunName) ++ "," 
+      ++ integer_to_list(Arity) ++ ",0);").
+
+%% =====================================================================
+%% @spec get_scope_visib(
+%%         MId::integer(), Scope::integer()) -> ok
+%%
+%% @doc
+%% Gets the scope visibility.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Scope</b> : Id of the scope.
+%% </pre>
+%% @end
+%% origin: refac_extract_fun:get_outer_scope/2
+%% ===================================================================== 
+
+get_scope_visib(MId, Scope)->
+  [{Visib}] = refactor_db:select(
+	"select target from scope_visib where mid=" 
+	 ++ integer_to_list(MId) ++ " and id=" 
+	 ++ integer_to_list(Scope) ++ ";"),
+  Visib.

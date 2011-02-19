@@ -334,14 +334,11 @@ merge_subexpression(File, FromLine, FromCol, ToLine, ToCol,NewName) ->
 %% @end
 %% =====================================================================
 extract_function(File, FromLine, FromCol, ToLine, ToCol,NewName) ->
-    Result =
     do_refactoring(
       File, fun() -> 
 		    refac_extract_fun:extract_function(
 		      File, FromLine, FromCol, ToLine, ToCol, NewName) 
-	    end),
-    db_tofrom(File),
-    Result.
+	    end).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

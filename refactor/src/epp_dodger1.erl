@@ -39,7 +39,6 @@
 %% @end
 %% =====================================================================
 
-%% TODO: document the quick-parse functions properly.
 
 -module(epp_dodger1).
 

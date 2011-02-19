@@ -49,29 +49,30 @@
 %%% --------------------------------------------------------------------------
 
 %% @copyright 2007 Eötvös Loránd University and Ericsson Hungary
+
 %% @author Melinda Toth <toth_m@inf.elte.hu>
 
-%% @doc 
+%% @doc
 %% This module implements the extract function refactoring.
-%% 
-%% @end
+%%
 -module(refac_extract_fun).
+
 -export([extract_function/6]).
 
 -include("node_type.hrl").
 
 %% =====================================================================
-%% @spec extract_function(File::string(), FromLine::integer(), 
+%% @spec extract_function(File::string(), FromLine::integer(),
 %%                      FromCol::integer(), ToLine::integer(),
 %%                         ToCol::integer(), NewName::string()) -> none()
 %%
 %% @doc
-%% Performs the precondition checks and collects all the 
+%% Performs the precondition checks and collects all the
 %% necessary information for the refactoring.
 %% It throws various terms when there is an error, with this structure:
-%% {atom(), term()}. If the atom is ok, the refactoring has been 
+%% {atom(), term()}. If the atom is ok, the refactoring has been
 %% preformed without a problem.
-%% 
+%%
 %% Parameter description:<pre>
 %% <b>File</b> : The path of the module.
 %% <b>FromLine</b> : The pointed first line number in the editor.
@@ -83,84 +84,159 @@
 %% @end
 %% =====================================================================
 
-extract_function(File, FromLine, FromCol, ToLine, ToCol, NewName)->	
-  MId = refac_common:get_module_id(File),
-  {FromCLine, FromCCol} = 
-	   refactor:get_true_pos_from_pointed_pos( MId, FromLine, FromCol),
-  {ToCLine, ToCCol} = 
-	   refactor:get_true_pos_from_pointed_pos( MId, ToLine, ToCol),
-  FromId = refac_common:
-     get_lowest_id(MId, refactor:get_id_from_pos( MId, FromCLine,FromCCol)),
-  ToId = refac_common:
-     get_lowest_id(MId, refactor:get_id_from_pos( MId, ToCLine,ToCCol)),
- % [{FromId}] = refactor:get_id_from_pos( MId, FromCLine, FromCCol),
- % [{ToId}] = refactor:get_id_from_pos( MId, ToCLine, ToCCol),
-  FromIdScope = refactor:get_scope_from_id(MId, FromId),
-  {Found, Path, Ids} = 
-        refac_common:find_expression_root_id(MId, FromIdScope, FromId, ToId),
+extract_function(File, FromLine, FromCol, ToLine, ToCol, NewName) ->
 
-  check_is_legal_body(Found,FromLine, FromCol, ToLine, ToCol, MId, Path, Ids), 
+    MId = refac_common:get_module_id(File),
 
-  Root = hd(Path),
-  IdList=get_idlist(MId, Root, Ids),
+    {Found, Path, Ids} = 
+                 get_selected_data(MId, FromLine, FromCol, ToLine, ToCol),
 
-  check_not_in_head_pattern_guard_macro( MId, Ids, Path),
+    refac_checks:check_is_legal_body(Found,FromLine,FromCol,ToLine,ToCol,
+                                     MId,Ids,Path),
 
-  VarList = get_used_variable( MId, IdList, Ids),
-  BoundVarList = get_bound_varlist(MId, VarList, Root),
-  VarNameList =lists:usort(lists:map(fun(Elem)->
-                              refactor:get_name_from_name_id(MId, Elem)
-		        end, VarList)),
-  BoundVarNameList = lists:map(fun(Elem)->
-                                  refactor:get_name_from_name_id(MId, Elem)
-			       end, BoundVarList),
-  NotBoundVarNameList = VarNameList -- BoundVarNameList,
+    Root = hd(Path),
+    IdList = get_idlist(MId, Root, Ids),
 
-  check_all_var_bound_ok(MId, Root, VarList, BoundVarNameList),
-  NotBoundVarList= 
-   lists:usort(
-     lists:flatten
-	(lists:map(fun(VarName)->
-          {_Found, BId} = 
-	     binding:get_binding_occurrence_candidates(MId, VarName, Root),
-             BId
-                   end,NotBoundVarNameList))),
-   Arity = length(NotBoundVarList),
-  {_ExportListIds, FunctionData, ImportFunctions, _FunIsImportedMIds} = 
-		                    refac_common:get_data(MId,NewName,Arity),
-  check_is_legal_function_name(NewName, Arity, FunctionData, ImportFunctions),
-  RootIn = get_root_id(Path, Ids),
-  perform_refactoring(MId, NewName, IdList, NotBoundVarList, RootIn),
-  {ok, done}.
+    refac_checks:check_not_in_head_pattern_guard_macro(MId, Ids, Path),
+
+    VarList = get_used_variable(MId, IdList, Ids),
+
+    VarNameList = get_namelist_from_nameid(MId, VarList),
+    BoundVarList = get_bound_varlist(MId, VarList),
+    BoundVarNameList = get_namelist_from_nameid(MId, BoundVarList),
+
+
+    OutList = 
+        get_outsideused_var_bining_data(MId, Root, VarList, BoundVarList),
+    refac_checks:check_all_var_bound_ok(OutList),
+
+    NotBoundVarListName = VarNameList -- BoundVarNameList,
+    NotBoundVarListId = get_not_bound_varlist_id_from_name(MId, 
+                                                         NotBoundVarListName,
+                                                         Root),
+
+    Arity = length(NotBoundVarListName),
+    {_ExportListIds, FunctionData, ImportFunctions,_FunIsImportedMIds} =
+	                    refac_common:get_data(MId,NewName,Arity),
+
+    refac_checks:check_is_legal_function_name(NewName,Arity,FunctionData,ImportFunctions),
+ 
+    perform_refactoring(MId, NewName, IdList, BoundVarList,
+			NotBoundVarListName, Root , VarList, 
+			NotBoundVarListId),
+    {ok, done}.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% =====================================================================
-%% @spec get_root_id(Path::[integer()],
-%%                  Ids:: {integer(), integer()} | integer()) -> [integer()]
-%%
+%% @spec get_namelist_from_nameid(MId::integer(),IdList::[integer()])
+%%                                                              -> [atom()]
 %% @doc
-%% Gets the root of the selected sequence of expression.
-%%
+%% Returns the name from the nameid.
+%% 
 %% Parameter description:<pre>
-%% <b>Path</b> : The path to the root of the selected sequence of expression.
-%% <b>Ids</b> : Ids of the first and the last expression or 
-%%              id of the expression.
+%% <b>MId</b> : The id of the module.
+%% <b>IdList</b> : List of the nameids.
 %% </pre>
 %% @end
 %% =====================================================================
-get_root_id(Path, Ids)->
-    case Ids of
-	{_Id1, _Id2}->
-	    lists:last(Path);
-	_ExprId ->
-	    hd(tl(lists:reverse(Path)))
-    end.
 
+get_namelist_from_nameid(MId, IdList)->
+    lists:usort(lists:map(fun (Id) ->
+			      refactor:get_name_from_name_id(MId, Id)
+			  end,
+			  IdList)).
+
+%% =====================================================================
+%% @spec get_not_bound_varlist_id_from_name(MId::integer(),
+%%                                          NotBoundVarListName::[atom()],
+%%                                          Root::integer())   -> [integer()]
+%% @doc
+%% Returns the name from the nameid.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>NotBoundVarListName</b> : List of the names.
+%% <b>Root </b> : The root of the expression.
+%% </pre>
+%% @end
+%% =====================================================================
+
+get_not_bound_varlist_id_from_name(MId, NotBoundVarListName, Root)->
+    lists:usort( lists:flatten(
+      lists:map(fun (VarName) ->
+		 {_Found, BId} =
+		    binding:get_binding_occurrence_candidates(MId, 
+							      VarName, Root),
+		 hd(BId)
+		end,
+		NotBoundVarListName))).
+
+%% =====================================================================
+%% @spec get_selected_data(MId::integer(),
+%%                         FromLine::integer(), FromCol::integer(), 
+%%                         ToLine::integer(), ToCol::integer())
+%%                            -> {Found::atom(),
+%%                                PathFromRootClause::[integer()],
+%%                                ExprId::integer()|{integer(),integer()}}
+%% @doc
+%% Returns the important datas of the selected sequence of expression.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>FromLine</b> : The beginning line number pointed in the editor.
+%% <b>FromCol</b> : The beginning column number pointed in the editor.
+%% <b>ToLine</b> : The ending line number pointed in the editor.
+%% <b>ToCol</b> : The ending column number pointed in the editor.
+%% </pre>
+%% @end
+%% =====================================================================
+
+get_selected_data(MId, FromLine, FromCol, ToLine, ToCol )->
+    {FromCLine, FromCCol} =
+	refactor:get_true_pos_from_pointed_pos(MId, FromLine, FromCol),
+    {ToCLine, ToCCol} =
+	refactor:get_true_pos_from_pointed_pos(MId, ToLine, ToCol),
+    FromId = 
+      refac_common:get_lowest_id(MId,
+		refactor:get_id_from_pos(MId, FromCLine,FromCCol)),
+    ToId = 
+      refac_common:get_lowest_id(MId,
+		refactor:get_id_from_pos(MId, ToCLine, ToCCol)),
+    ScopeId = refactor:get_scope_from_id(MId, FromId),
+
+    RootClause = get_root_clause(MId, ScopeId),
+
+    refac_common:find_expression_root_id(MId, RootClause, FromId, ToId).
+
+%% =====================================================================
+%% @spec get_root_clause(MId::integer(), Id::integer()) -> integer()
+%%
+%% @doc
+%% Returns the root clause of an id.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Id</b> : Id in the syntax tree.
+%% </pre>
+%% @end
+%% =====================================================================
+
+get_root_clause(MId, Id) ->
+  Type = erl_syntax_db:type(MId, Id),
+  case Type of
+    ?CLAUSE ->
+      Id;
+    _Other ->
+      OuterScope = refactor:get_containing_scope_id(MId, Id), 
+      get_root_clause(MId, OuterScope)
+  end.
 
 %% =====================================================================
 %% @spec get_bound_varlist(MId::integer(),VarList::[integer()],
-%%                          Root:: integer()) -> [integer()]
+%%                         VarNameList::[atom()], Root:: integer()) 
+%%                                                           -> [integer()]
 %%
 %% @doc
 %% Gets the variables which bounded in the selected sequence of expression.
@@ -168,76 +244,41 @@ get_root_id(Path, Ids)->
 %% Parameter description:<pre>
 %% <b>MId</b> : Id of the module.
 %% <b>VarList</b> : The ids of the used variables.
-%% <b>Root</b> : Id of the root of the subbtree which contain the
-%%               selected sequence of expression.
 %% </pre>
 %% @end
 %% =====================================================================
 
-get_bound_varlist(MId, VarList, Root)->
-  VarNameList = lists:map(fun(VarId)->
-                                 refactor:get_name_from_name_id(MId, VarId) 
-                           end, VarList),
-  AllBoundList= 
-   lists:usort(
-     lists:flatten
-	(lists:map(fun(VarName)->
-          {_Found, BId} = 
-	     binding:get_binding_occurrence_candidates(MId, VarName, Root),
-             BId
-                   end,VarNameList))),
-  BoundList = lists:filter(fun(Elem)->
-                              lists:member(Elem, AllBoundList)
-                           end, VarList),
-  BoundList.
+get_bound_varlist(MId, VarList) ->
+    AllBoundList = get_unique_binding(MId, VarList),
+    BoundList = lists:filter(fun (Elem) ->
+				     lists:member(Elem, AllBoundList)
+			     end,
+			     VarList),
+    BoundList.
 
 %% =====================================================================
-%% @spec check_is_legal_body(Found::atom(),FromLine::integer(), 
-%%             FromCol::integer(), ToLine::integer(), ToCol::integer(),
-%%             MId::integer(), Path::[integer()], 
-%%             Ids:: {integer(), integer()} | integer()) -> ok
+%% @spec get_root_id(Path::[integer()],(
+%%                  Ids:: {integer(), integer()} | integer()) -> [integer()]
 %%
 %% @doc
-%% Checks the starting and ending positions delimit a sequence of expression.
+%% Gets the root of the selected sequence of expression.
 %%
 %% Parameter description:<pre>
-%% <b>FromLine</b> : The pointed first line number in the editor.
-%% <b>FromCol</b> : The pointed first column number in the editor.
-%% <b>ToLine</b> : The pointed last line number in the editor.
-%% <b>ToCol</b> : The pointed last column number in the editor.
-%% <b>MId</b> : Id of the module.
 %% <b>Path</b> : The path to the root of the selected sequence of expression.
-%% <b>Ids</b> : Ids of the first and the last expression or 
+%% <b>Ids</b> : Ids of the first and the last expression or
 %%              id of the expression.
 %% </pre>
 %% @end
 %% =====================================================================
 
-check_is_legal_body(Found, FromLine, FromCol, ToLine, ToCol, MId, Path, Ids)->
-  case Found of
-    found_body->
-               ok;
-    found_expr->
-	       ok;
-    _ ->
-      refac_checks:
-	  error_handler({invalid_body, {{FromLine, FromCol},{ToLine,ToCol}}})
-  end,
-  Root = get_root_id(Path, Ids),
-  case erl_syntax_db:type(MId, Root) of
-    ?CASE_EXPR ->
-       refac_checks:
-	  error_handler({invalid_body, {{FromLine, FromCol},{ToLine,ToCol}}});
-    ?IF_EXPR ->
-       refac_checks:
-          error_handler({invalid_body, {{FromLine, FromCol},{ToLine,ToCol}}});	  
-    _  ->
-	  ok
-  end.
-    
+get_root_id(Path, Ids) ->
+    case Ids of
+      {_Id1, _Id2} -> lists:last(Path);
+      _ExprId -> hd(tl(lists:reverse(Path)))
+    end.
 
 %% =====================================================================
-%% @spec get_idlist(MId::integer(),Root::integer(),
+%% @spec get_idlist(Root::integer(),
 %%               Ids::{integer(), integer()} | integer()) -> [integer()]
 %%
 %% @doc
@@ -247,25 +288,26 @@ check_is_legal_body(Found, FromLine, FromCol, ToLine, ToCol, MId, Path, Ids)->
 %% <b>MId</b> : Id of the module.
 %% <b>Root</b> :Id of the root of the subbtree which contain the
 %%               selected sequence of expression.
-%% <b>Ids</b> : Ids of the first and the last expression or 
+%% <b>Ids</b> : Ids of the first and the last expression or
 %%              id of the expression.
 %% </pre>
 %% @end
 %% =====================================================================
 
-get_idlist(MId, Root, Ids)->
-  case Ids of
-      {Id1, Id2}->
+get_idlist(MId, Root, Ids) ->
+    case Ids of
+      {Id1, Id2} ->
 	  ClauseBody = erl_syntax_db:clause_body(MId, Root),
-	  ReverseList = lists:reverse(lists:dropwhile(fun(Elem1)->
-						         not (Elem1 == Id1)	     
-						      end, ClauseBody)),
-          lists:reverse(lists:dropwhile(fun(Elem2)->
-					   not (Elem2 == Id2)	     
-					end, ReverseList));
-       ExprId ->
-	  [ExprId]
-  end.
+	  ReverseList = lists:reverse(lists:dropwhile(fun(Elem1) ->
+							 not (Elem1 == Id1)
+						      end,
+						      ClauseBody)),
+	  lists:reverse(lists:dropwhile(fun (Elem2) ->
+					   not (Elem2 == Id2)
+					end,
+					ReverseList));
+      ExprId -> [ExprId]
+    end.
 
 %% =====================================================================
 %% @spec get_used_variable(MId::integer(),IdList::[integer()],
@@ -282,155 +324,523 @@ get_idlist(MId, Root, Ids)->
 %% @end
 %% =====================================================================
 
-get_used_variable( MId, IdList, Ids)->
-  case Ids of
+get_used_variable(MId, IdList, Ids) ->
+    case Ids of
       {_Id1, _Id2} ->
-          lists:flatten(lists:map( fun(Id) ->
-                           refac_common:get_variables(MId,Id,with_root)
-                         end, IdList ));
+	  lists:flatten(
+            lists:map(fun (Id) ->
+			 refac_common:get_variables(MId, Id, with_root)
+		      end,
+		      IdList));
       ExprId ->
-	  lists:flatten(refac_common:get_variables(MId,ExprId,with_root))
-  end.
-
+	  lists:flatten(refac_common:get_variables(MId, ExprId, with_root))
+    end.
 
 %% =====================================================================
-%% @spec check_all_var_bound_ok(MId::integer(), Root::integer(),
-%%             VarList::[integer()], BoundVarNameList::[integer()]) -> ok
+%% @spec get_outsideused_var_binding_data(MId::integer(), Root::integer(),
+%%             VarList::[integer()], BoundVarList::[integer()]) -> [integer()]
 %%
 %% @doc
-%% Checks that all variables in the selected sequnce of expression not
-%% appear outside of this seqence.
+%% Get outsideused variables binding data.
 %%
 %% Parameter description:<pre>
 %% <b>MId</b> : Id of the module.
 %% <b>Root</b> : Id of the root of the subtree which contain the
 %%               selected sequence of expression.
 %% <b>VarList</b> : The variables of the expressions.
-%% <b>BoundVarNamelist</b> : The names of the bounded variables 
+%% <b>BoundVarList</b> : The ids of the bounded variables
 %%                        in the selected expressions.
 %% </pre>
 %% @end
 %% =====================================================================
 
-check_all_var_bound_ok( MId, Root, VarList, BoundVarNameList)->
-  All = lists:flatten(erl_syntax_db:subtrees(MId, Root)),
-  AllVarList = 
-     lists:flatten(lists:map(fun(Elem)->
-			  refac_common:get_variables(MId, Elem,with_root)
-		       end, All)),
-  OutVarList = AllVarList -- VarList,
-  OutVarNameList = lists:map(fun(VarId)->
-			       refactor:get_name_from_name_id(MId, VarId)				      
-			     end, OutVarList),
-  OutsideUsedName = OutVarNameList -- (OutVarNameList -- BoundVarNameList),
-  case OutsideUsedName of
-     [] ->
-	 ok;
-     _ ->
-	 refac_checks:error_handler({not_all_var_bound_ok, [OutsideUsedName]})
-  end.
+ get_outsideused_var_bining_data(MId, Root, VarList, BoundVarList) ->
+    All = lists:flatten(erl_syntax_db:subtrees(MId, Root)),
+    AllVarList = 
+        lists:flatten(
+          lists:map(fun (Elem) ->
+		       refac_common:get_variables(MId, Elem, with_root)
+		    end,
+		    All)),
+    OutVarList = AllVarList -- VarList,
+    OutBinding = get_unique_binding(MId,OutVarList),
+    InBinding = BoundVarList,
+    OutBinding -- (OutBinding -- InBinding).
 
 %% =====================================================================
-%% @spec check_not_in_head_pattern_guard_macro( MId::integer(), 
-%%                     Ids:: {integer(), integer()} | integer(),
-%%                     Path::[integer()])-> ok
-%%
+%% @spec get_unique_binding(MId::integer(),
+%%                          VarList::[integer()])  -> [integer()]
 %% @doc
-%% Checks the expression id are not a part of  a guard sequence 
-%% or a pattern or a macro or a list_comprehension node.
+%% Returns the name from the nameid.
 %% 
 %% Parameter description:<pre>
-%% <b>MId</b> : Id of the module.
-%% <b>Path</b> : The path to the root of the selected sequence of expression.
-%% <b>Ids</b> : Ids of the first and the last expression or 
-%%              id of the expression.
+%% <b>MId</b> : The id of the module.
+%% <b>VarList</b> : List of the variable id.
 %% </pre>
 %% @end
 %% =====================================================================
-
-check_not_in_head_pattern_guard_macro( MId, Ids, Path)->
-  case Ids of
-     {_Id1, _Id2}->
-	          ok;
-     ExprId ->
-        ExprParent = hd(tl(lists:reverse(Path))),
-        ExprSideeffects = 
-	  refac_common:get_sideeffects_by_parent(MId, [ExprId], ExprParent),
-          refac_checks:check_sideeffects(ExprId, ExprSideeffects)
-  end.
-
-%% =====================================================================
-%% @spec check_is_legal_function_name (NewName::string(), 
-%%              Arity::integer(), FunctionData:: [{string(), integer()}], 
-%%              ImportFunction::[{string(), string(), integer()}]  ) -> ok
-%%
-%% @doc
-%% Checks that the function name is a legal function name, 
-%% is not autoimported, is not exists and is not imported.
-%%
-%% Parameter description:<pre>
-%% <b>NewName</b> : The exported function name.
-%% <b>Arity</b> : The exported function arity.
-%% <b>FunctionData</b> : The used functions name and arity.
-%% <b>ImportFunction</b> : The imported functcion datas.
-%% </pre>
-%% @end
-%% ===================================================================== 
-
-check_is_legal_function_name( NewName, Arity, FunctionData, ImportFunctions)->	
-  refac_checks:check_isFunctionName( NewName),
-  refac_checks:check_is_autoimported( NewName),
-  refac_checks:check_the_name_already_exists( NewName, Arity, FunctionData),
-  refac_checks:check_the_name_is_imported( NewName, Arity, ImportFunctions).
-
+get_unique_binding(MId, VarList)->
+    lists:usort( lists:flatten(
+      lists:map(fun (Var) ->
+                 VarName=refactor:get_name_from_name_id(MId, Var),
+                 Scope = refactor:get_scope_from_id(MId, Var),
+		 {_Found, BId} =
+		    binding:get_binding_occurrence_candidates(MId, 
+							      VarName, Scope),
+		 BId
+		end,
+		VarList))).
 
 %% =====================================================================
 %% @spec perform_refactoring( MId::integer(), NewName::string(),
-%%             IdList::[integer()], NotBoundVarList::[integer()],
-%%             Root::integer()) -> ok
+%%             IdList::[integer()], BoundVarList::[integer()],
+%%             NotBoundVarListName::[atom()],Root::integer(),
+%%             VarList::[integer()], NotBoundVarList::[integer()]) -> ok
 %%
 %% @doc
-%% Performs the refactoring, and commits the changes into the 
+%% Performs the refactoring, and commits the changes into the
 %% refactoring system.
-%% 
+%%
 %% Parameter description:<pre>
 %% <b>MId</b> : Id of the module.
 %% <b>NewName</b> : The name of the extracted function.
 %% <b>IdList</b> : Ids of the selected expressions.
-%% <b>NotBoundVarList</b> : Ids of the not bounded variables.
+%% <b>BoundVarList</b> : Ids of the bounded variables.
+%% <b>NotBoundVarListName</b> : Names of the not bounded variables.
 %% <b>Root</b> : Id of the root of the subbtree which contain the
 %%                selected sequence of expression.
+%% <b>VarList</b> : Ids of the used variables.
+%% <b>NotBoundVarList</b> : Ids of the not bounded variables.
 %% </pre>
 %% @end
 %% =====================================================================
 
-perform_refactoring( MId, NewName, IdList, NotBoundVarList, Root)->
-  NameId = create_nodes:create_atom(MId, NewName),
-  ApplicationNameId = create_nodes:create_atom(MId, NewName),
-  Id=hd(IdList),
-  case length(IdList) of
-    1 ->
-      ScopeId = refactor:get_scope_from_id(MId, Id),
-      BodyId = refactor:replicate_subtree(MId, Id, ScopeId),
-      Clauses = create_nodes:create_clause(MId,NotBoundVarList,none,[BodyId]),
-      FunId= create_nodes:create_function(MId, NameId, [Clauses]),
-      delete_nodes:delete_node(MId, Id),
-      create_nodes:
-             create_application(MId, ApplicationNameId, NotBoundVarList, Id);
-    _ ->
-      Clauses = create_nodes:create_clause(MId,NotBoundVarList,none,IdList),
-      FunId= create_nodes:create_function(MId, NameId, [Clauses]),
-      ApplicationId = 
-	create_nodes:create_application(MId,ApplicationNameId,NotBoundVarList),
-      create_nodes:attach_subtree_to_node(MId, ApplicationId, Root, Id),
-      lists:foreach(fun(Elem)->
-	              delete_nodes:detach_node(MId, Elem, Root)
-	             end,IdList)
-  end,
-  To = refactor:get_form_list_id_from_mid(MId),
-  After = lists:last(erl_syntax_db:form_list_elements(MId, To)),
-  create_nodes:attach_subtree_to_node(MId, FunId, To, After),
-  refactor:commit().
+perform_refactoring(MId, NewName, IdList, BoundVarList,
+		    NotBoundVarListName, Root, VarList, NotBoundVarList) ->
+    UseVarList = VarList -- BoundVarList,
+    NameId = create_nodes:create_atom(MId, NewName),
+    create_nodes:init_scope(MId, Root, NameId),
+    ApplicationNameId = create_nodes:create_atom(MId, NewName),
+    create_nodes:init_scope(MId, Root, ApplicationNameId),
+    NewVarList = var_id_from_name( MId, NotBoundVarListName),
+    insert_new_variables_visib(MId, NewVarList),
+    Id = hd(IdList),
+    case length(IdList) of
+      1 ->
+	FunId = change_expr(MId, NewName,NameId, IdList, Id, NewVarList, 
+	                    UseVarList,NotBoundVarListName, Root, 
+			    ApplicationNameId,VarList, NotBoundVarList);
+      _ ->
+	FunId = change_seq_expr(MId,NewName,NameId,IdList,Id,NewVarList,
+				UseVarList,NotBoundVarListName,Root,
+				ApplicationNameId,VarList, NotBoundVarList)
+    end,
+    To = refactor:get_form_list_id_from_mid(MId),
+    OuterScope=get_outer_scope(MId, Root),
+    [{After}] = refactor:get_fun_id_from_clause_id(MId, OuterScope),
+    create_nodes:attach_subtree_to_node(MId, FunId, To, After),
+    refactor:commit().
 
 
+%% =====================================================================
+%% @spec change_expr(MId::integer(),Name::atom(),NameId::integer(),
+%%         IdList::[integer()], Id::integer(), NewVarList::[integer()],
+%%         UseVarList::[integer()],NotBoundVarListName::[atom()],
+%%         Root::integer(),ApplicationNameId::integer(),VarList::[integer()], 
+%%         NotBoundVarList::[integer()]) -> integer()
+%%
+%% @doc
+%% Performs the changes in datebase.
+%%
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Name</b> : The new function's name.
+%% <b>NameId</b> : The new name's id.
+%% <b>IdList</b> : Ids of the selected expressions.
+%% <b>Id</b> : The id of the subtree's root.
+%% <b>NewVarList</b> : The ids of the new functions parameters.
+%% <b>UseVarList</b> : The ids of the used variables.
+%% <b>NotBoundVarListName</b> : Names of the not bounded variables.
+%% <b>Root</b> : Id of the root of the subbtree which contain the
+%%                selected sequence of expression.
+%% <b>ApplicationNameId</b> : The new application name's id.
+%% <b>VarList</b> : Ids of the used variables.
+%% <b>NotBoundVarList</b> : Ids of the not bounded variables.
+%% </pre>
+%% @end
+%% =====================================================================
 
+change_expr(MId, Name, NameId, _IdList, Id, NewVarList, _UseVarList,
+            NotBoundVarListName, Root, ApplicationNameId, 
+            _VarList, NotBoundVarList) ->
+
+    ScopeId = refactor:get_scope_from_id(MId, Id), 
+    BodyId = refactor:replicate_subtree(MId, Id, ScopeId),
+    Clauses = create_nodes:create_clause(MId, NewVarList, none, [BodyId]),
+    insert_new_scope_and_scope_visib(MId, Clauses, Clauses),
+
+    ReplicVarList= 
+       lists:flatten(refac_common:get_variables(MId, BodyId, with_root)),
+    FunId = create_nodes:create_function(MId, NameId, [Clauses]),
+    Arity = length(NewVarList),
+
+    refactor:insert_fun_visib_data(MId, FunId, Arity, [Clauses]),
+    create_nodes:init_scope(MId, Clauses, NewVarList),
+
+    update_varlist_scope(MId, ReplicVarList, Root, Clauses),
+    connect_body_to_parameters(MId, ReplicVarList, NewVarList),
+
+    delete_nodes:delete_node(MId, Id),
+
+    Parameters = var_id_from_name(MId, NotBoundVarListName),
+    connect_parameters(MId, Parameters, Root, NotBoundVarList),
+    create_nodes:create_application(MId, ApplicationNameId, Parameters, Id),
+    refactor:insert_scope(MId, Id, Root),
+    refactor:insert_fun_call(MId, Id, FunId),
+    update_expr_scope(MId, [BodyId], Root, Clauses),
+    refactor:insert_fun_cache(MId, Arity, Name, Id,  Clauses),
+    FunId.
+
+%% =====================================================================
+%% @spec change_seq_expr(MId::integer(),Name::atom(),NameId::integer(),
+%%         IdList::[integer()], Id::integer(), NewVarList::[integer()],
+%%         UseVarList::[integer()],NotBoundVarListName::[atom()],
+%%         Root::integer(),ApplicationNameId::integer(),VarList::[integer()], 
+%%         NotBoundVarList::[integer()]) -> integer()
+%%
+%% @doc
+%% Performs the changes in datebase.
+%%
+%% Parameter description:<pre>
+%% <b>MId</b> : Id of the module.
+%% <b>Name</b> : The new function's name.
+%% <b>NameId</b> : The new name's id.
+%% <b>IdList</b> : Ids of the selected expressions.
+%% <b>Id</b> : The id of the subtree's root.
+%% <b>NewVarList</b> : The ids of the new functions parameters.
+%% <b>UseVarList</b> : The ids of the used variables.
+%% <b>NotBoundVarListName</b> : Names of the not bounded variables.
+%% <b>Root</b> : Id of the root of the subbtree which contain the
+%%                selected sequence of expression.
+%% <b>ApplicationNameId</b> : The new application name's id.
+%% <b>VarList</b> : Ids of the used variables.
+%% <b>NotBoundVarList</b> : Ids of the not bounded variables.
+%% </pre>
+%% @end
+%% =====================================================================
+
+change_seq_expr(MId, Name,NameId, IdList, Id, NewVarList, UseVarList,
+		NotBoundVarListName, Root, ApplicationNameId, 
+                VarList, NotBoundVarList) ->
+
+    Clauses = create_nodes:create_clause(MId, NewVarList, none, IdList),
+    insert_new_scope_and_scope_visib(MId, Clauses, Clauses),
+    FunId = create_nodes:create_function(MId, NameId,[Clauses]),
+    Arity = length(NewVarList),
+
+    refactor:insert_fun_visib_data(MId, FunId, Arity, [Clauses]),
+    create_nodes:init_scope(MId, Clauses, NewVarList),
+    update_varlist_scope(MId, VarList, Root, Clauses),
+    connect_body_to_parameters(MId, UseVarList, NewVarList),
+
+    Parameters = var_id_from_name(MId, NotBoundVarListName),
+    connect_parameters(MId, Parameters, Root, NotBoundVarList ),
+    ApplicationId = create_nodes:create_application(MId,
+						    ApplicationNameId,
+						    Parameters),
+    refactor:insert_scope(MId, ApplicationId, Root),
+    create_nodes:attach_subtree_to_node(MId, ApplicationId, Root, Id),
+    lists:foreach(fun (Elem) ->
+			  delete_nodes:detach_node(MId, Elem, Root)
+		  end,
+		  IdList),
+    refactor:insert_fun_call(MId, ApplicationId, FunId),
+    update_expr_scope(MId, IdList, Root, Clauses),
+    refactor:insert_fun_cache(MId, Arity,Name, ApplicationId,  Clauses),
+    FunId.
+
+%% =====================================================================
+%% @spec var_id_from_name(MId::integer(),
+%%                        VarListName::[integer()]) -> [integer()]
+%% @doc
+%% Create new variables with the given names.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>VarListName</b> : List of the variable's name.
+%% </pre>
+%% @end
+%% =====================================================================
+
+var_id_from_name( MId, VarListName)->
+    List = lists:map(fun (VarName) ->
+                        create_nodes:create_variable(MId, VarName)
+	             end,
+	             VarListName),
+    List.
+
+%% =====================================================================
+%% @spec connect_parameters(MId::integer(),Parameters::[integer()],
+%%             Root::integer(), VarListId::[integer()]) -> ok
+%% @doc
+%% Connects the new parameters  to the binding occurence.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Parameters</b> : The id of the new function parameters.
+%% <b>Root</b> : The root of the selected part.
+%% <b>VarListId</b> : List of the variable's id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+connect_parameters(MId, Parameters, Root, VarListId)->
+   create_nodes:connect_variables(MId, VarListId, Parameters),
+   create_nodes:init_scope(MId, Root, Parameters).
+
+%% =====================================================================
+%% @spec connect_body_to_parameters(MId::integer(),VarList::[integer()],
+%%                            NewVarList::[integer()]) -> ok
+%% @doc
+%% Connects the selected body's variables to the new function's parameters.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>VarList</b> : Ids of the body's variables.
+%% <b>NewVarList</b> : List of the new variables.
+%% </pre>
+%% @end
+%% =====================================================================
+
+connect_body_to_parameters( MId, VarList, NewVarList)->
+     lists:foreach(fun(Id)->
+		   connect_variables_to_parameter( MId, VarList, Id)
+		end, 
+		NewVarList).
+
+%% =====================================================================
+%% @spec connect_variables_to_parameters(MId::integer(),VarList::[integer()],
+%%                            NewBindingId::integer()) -> ok
+%% @doc
+%% Connects the variables to the new binding.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>VarList</b> : Ids of the variables.
+%% <b>NewBindindId</b> : The new binding's id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+connect_variables_to_parameter( MId, VarList, NewBindingId)->
+   BindingName = refactor:get_name_from_name_id(MId, NewBindingId),
+   ConnectList = 
+    lists:filter(fun(Elem)->
+                    Name = refactor:get_name_from_name_id(MId, Elem),
+		    if 
+		      Name == BindingName 
+		                    -> true;
+		      true 
+				    -> false
+		    end
+		 end,
+                 VarList),
+
+   lists:foreach(fun(VarId)->
+		  refactor:update_var_visib(MId, VarId, NewBindingId)
+		end, 
+                ConnectList).
+
+%% =====================================================================
+%% @spec insert_new_scope_and_scope_visib(MId::integer(),Node::integer(),
+%%                            ScopeId::integer()) -> ok
+%% @doc
+%% Insert scope and scope visibility.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Node</b> : Id.
+%% <b>ScopeId</b> : The new scope id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+insert_new_scope_and_scope_visib(MId, Node, ScopeId)->
+    refactor:insert_scope(MId, Node, ScopeId),
+    refactor:put_scope_visib_in_database(MId, [{Node, ScopeId}]).
+
+%% =====================================================================
+%% @spec insert_new_variables_visib(MId::integer(),
+%%                            VarList::[integer()]) -> ok
+%% @doc
+%% Insert variables visibility.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>VarList</b> : The variables id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+insert_new_variables_visib(MId, VarList)->
+    lists:foreach(fun(VarId)->
+			refactor:insert_var_visib(MId, VarId, VarId) 
+		  end,
+		  VarList).
+
+%% =====================================================================
+%% @spec update_varlist_scope(MId::integer(),VarList::[integer()],
+%%                   Old::integer(), Clauses::integer()) -> ok
+%% @doc
+%% Update the variables scope.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>VarlList/b> : Id of the variables.
+%% <b>Old</b> : The old scope id.
+%% <b>Clauses</b> : The new scope id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_varlist_scope(MId, VarList, Old, Clauses)->
+    lists:foreach(fun(VarId)->
+			refactor:update_scope(MId, VarId, Old, Clauses) 
+		  end,
+		  VarList).
+
+
+%% =====================================================================
+%% @spec update_expr_scope(MId::integer(),List::[integer()],
+%%                   OldScope::integer(), Scope::integer()) -> ok
+%% @doc
+%% Update the subtree element's scope .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>List/b> : Ids.
+%% <b>OldScope</b> : The old scope id.
+%% <b>Scope</b> : The new scope id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_expr_scope(MId, List, OldScope, Scope)->
+   IdList = 
+      lists:flatten(
+          lists:map(fun(Id)->
+		       refac_common:get_subtrees(MId, Id, with_root)
+		    end,
+		    List)),
+   update_idlists_scope(MId, IdList,OldScope, Scope),
+
+
+   FunExprList = select_id(MId, IdList, ?FUN_EXPR),
+   ScopeList = get_fun_expr_clauses_from_fun_ids(MId, FunExprList),
+   update_idlists_scope_visib(MId, ScopeList, Scope),
+
+   ListCompList = select_id(MId, IdList, ?LIST_COMP),
+   update_idlists_scope_visib(MId, ListCompList, Scope).
+
+
+%% =====================================================================
+%% @spec select_id(MId::integer(),IdList::[integer()],
+%%                   Type::atom()) -> ok
+%% @doc
+%% Selects the given type ids from the list.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>IdList/b> : Ids.
+%% <b>Type</b> : The type.
+%% </pre>
+%% @end
+%% =====================================================================
+
+select_id(MId, IdList, Type)->
+   lists:filter(fun(Id)->
+                     erl_syntax_db:type(MId, Id) == Type
+		end,
+                IdList).
+
+%% =====================================================================
+%% @spec update_idlists_scope(MId::integer(),IdList::[integer()],
+%%                   OldScope::integer(), Scope::integer()) -> ok
+%% @doc
+%% Update the subtree element's scope .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>IdList/b> : Ids.
+%% <b>OldScope</b> : The old scope id.
+%% <b>Scope</b> : The new scope id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_idlists_scope(MId, IdList, OldScope, Scope)->
+    lists:foreach(fun(Id)->
+			refactor:update_scope(MId, Id, OldScope, Scope) 
+		  end,
+		  IdList).
+
+%% =====================================================================
+%% @spec update_idlists_scope_visib(MId::integer(),IdList::[integer()],
+%%                   Scope::integer()) -> ok
+%% @doc
+%% Update the element's scope visibility .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>IdList/b> : Ids.
+%% <b>Scope</b> : The new scope id.
+%% </pre>
+%% @end
+%% =====================================================================
+
+update_idlists_scope_visib(MId, IdList, Scope)->
+    lists:foreach(fun(Id)->
+			refactor:update_scope_visibility(MId, Id, Scope) 
+		  end,
+		  IdList).  
+
+%% =====================================================================
+%% @spec get_fun_expr_clauses_from_fun_ids(MId::integer(),
+%%                   List::[integer()]) -> ok
+%% @doc
+%% Get fun expressions clauses ids. .
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>List/b> : Fun expressions ids.
+%% </pre>
+%% @end
+%% =====================================================================
+
+get_fun_expr_clauses_from_fun_ids(MId, List)->  
+    lists:flatten(lists:map(fun(Id)->
+			        refactor:get_fun_expr_clause_from_fun_id(MId, Id) 
+		            end,
+		            List)).    
+
+%% =====================================================================
+%% @spec get_outer_scope(MId::integer(),
+%%                       Scope::integer()) -> integer()
+%% @doc
+%% Gets the outer scope of the scope.
+%% 
+%% Parameter description:<pre>
+%% <b>MId</b> : The id of the module.
+%% <b>Scope</b> : Id of the scope.
+%% </pre>
+%% @end
+%% =====================================================================
+
+get_outer_scope(MId, Scope)->
+    Id = refactor:get_scope_visib(MId, Scope),
+    if
+      Id == Scope ->
+		     Id;
+      true ->
+	       get_outer_scope(MId, Id)
+    end.

@@ -6,7 +6,7 @@ Installation instructions on Unix
 installed and working:
 
   - Erlang/OTP R11B (http://www.erlang.org/download.html)
-  - GNU Emacs 21    (ftp://ftp.gnu.org/gnu/emacs/)
+  - Aquamacs 1.1    (http://aquamacs.org/)
   - MySQL 5.0       (http://dev.mysql.com/downloads/mysql/5.0.html)
 
 Newer versions will most probably work, older versions have not been tried.

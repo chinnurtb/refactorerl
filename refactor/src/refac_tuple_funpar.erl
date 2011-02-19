@@ -388,7 +388,7 @@ preorder(MId,Tree,Id)->
 %% @end
 %% =====================================================================
 find_the_function(MId, Id, ?APPLICATION) ->
-    {MId2, FunId} = refactor:get_fun_id_from_implicit_fun_id_or_application(
+    [{MId2, FunId}] = refactor:get_fun_id_from_implicit_fun_id_or_application(
                      MId, Id),
     FunName = refactor:get_fun_name(MId2, FunId),
     {MId2, FunId, FunName};
@@ -432,7 +432,6 @@ refresh_export_list(MId, FunId, Arity, NewArity) ->
       end,
       refactor:get_export_list_id(MId)).
 
-%%%TODO: ezt lehetne altalanositani (refactor modulba vele)
 %% =====================================================================
 %% @spec refresh_import_list(MId::integer(), FunId::integer(),
 %%               Arity::integer(), NewArity::integer()) -> ok
@@ -490,7 +489,6 @@ refresh_import_list(ModuleName, FunName, Arity, NewArity,
 refresh_import_list(ModuleName, FunName, Arity, NewArity,[_X | Xs]) ->
     refresh_import_list(ModuleName, FunName, Arity, NewArity, Xs).
 
-%%%TODO: lehetne helyette lists:append. + meg ez nem tul hatekony a ++ miatt    
 %% =====================================================================
 %% @spec my_flatten(List::[[term()]]) -> [term()]
 %%

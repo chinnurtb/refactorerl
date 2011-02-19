@@ -49,6 +49,7 @@
 %%% --------------------------------------------------------------------------
 
 %% @copyright 2007 Eötvös Loránd University and Ericsson Hungary
+%% @author Robert Kitlei <kitlei@elte.hu>
 %% @author Tamas Nagy <lestat@elte.hu>
 %% @author Aniko Vig <viganiko@inf.elte.hu>
 
@@ -105,8 +106,7 @@ get_module_id(File) ->
 %% </pre>
 %% @end
 %% ===================================================================== 
-%% find_the_function(MId, []) ->
-%%     refac_checks:handle_erro
+
 find_the_function(MId, [{Id, Number}]) ->
     case Number of
 	?CLAUSE ->
@@ -124,8 +124,6 @@ find_the_function(MId, [{Id, Number}]) ->
             end
     end.
 
-%%%TODO: tok ures sor eseten CCol is ures
-%%SOLVED: + modified because of change in get_true_pos_from_pointed_pos
 %% =====================================================================
 %% @spec get_id_from_pos(MId::integer(), 
 %%                Line::integer(), Col::integer(),
@@ -241,15 +239,6 @@ warn_for_apply() ->
         [] -> ok;
         _ -> refac_checks:error_handler({warning, apply})
     end.
-%%REMOVED: better solution
-%%     ApplyApplication = refactor:get_all_apply_pos_in_applications(),
-%%     ApplyImplicitFun = refactor:get_all_apply_pos_in_implicit_fun(),
-%%     case ( ApplyApplication /= [] ) or ( ApplyImplicitFun /= [] ) of
-%% 	true ->
-%% 	    refac_checks:error_handler({warning, apply});
-%% 	false ->
-%% 	    ok
-%%     end.
 
 %% =====================================================================
 %% @spec warn_for_spawn() -> ok
@@ -265,15 +254,6 @@ warn_for_spawn() ->
         [] -> ok;
         _ -> refac_checks:error_handler({warning, spawn})
     end.
-%%REMOVED: better solution
-%%     SpawnApplication = refactor:get_all_spawn_pos_in_applications(),
-%%     SpawnImplicitFun = refactor:get_all_spawn_pos_in_implicit_fun(),
-%%     case ( SpawnApplication /= [] ) or ( SpawnImplicitFun /= [] ) of
-%% 	true ->
-%% 	    refac_checks:error_handler({warning, spawn});
-%% 	false ->
-%% 	    ok
-%%     end.
 
 %% =====================================================================
 %% @spec warn_for_hibernate() -> ok
@@ -289,15 +269,6 @@ warn_for_hibernate() ->
         [] -> ok;
         _ -> refac_checks:error_handler({warning, hibernate})
     end.
-%%REMOVED: better solution
-%%     HibernateApplication = refactor:get_all_hibernate_pos_in_applications(),
-%%     HibernateImplicitFun = refactor:get_all_hibernate_pos_in_implicit_fun(),
-%%     case ( HibernateApplication /= [] ) or ( HibernateImplicitFun /= [] ) of
-%% 	true ->
-%% 	    refac_checks:error_handler({warning, hibernate});
-%% 	false ->
-%% 	    ok
-%%     end.
 
 %% =====================================================================
 %% @spec warn_for_dynamic() -> ok
@@ -560,7 +531,7 @@ filter_by_type( Type, CallIdandTypeList ) ->
 %%                                   {Found, PathFromRootClause, ExprId} 
 %%                            Found = atom()
 %%               PathFromRootClause = [integer()]
-%%                           ExprId = integer()
+%%                           ExprId = integer()|{integer(),integer()}
 %%
 %% @doc
 %% Returns the root of the expression and the path to it from the root.
@@ -575,7 +546,8 @@ filter_by_type( Type, CallIdandTypeList ) ->
 %%                Possible values: not_found, found_expr, found_body,
 %%                                 found_first, found_last.
 %% <b>PathFromRootClause</b> : Ids from the root to the expression.
-%% <b>ExprId</b> : Id of the expression. </pre>
+%% <b>ExprId</b> : Id of the expression, 
+%%                 or the first and last id of the expressions. </pre>
 %% @end
 %% ===================================================================== 
 find_expression_root_id(MId, NodeId, FromId, ToId) ->
@@ -583,8 +555,29 @@ find_expression_root_id(MId, NodeId, FromId, ToId) ->
   if
     FromId == ToId andalso FromId == NodeId ->
       {found_expr, [NodeId], NodeId};
+    NodeId == FromId ->
+      {Found, _, _} = find_expression_root_id(MId, NodeId, 0, ToId),
+      if Found == found_last ->
+        {found_expr, [NodeId], NodeId};
+      true ->
+        {found_first, not_used, not_used}
+      end;
+    NodeId == ToId ->
+      {Found, _, _} = find_expression_root_id(MId, NodeId, FromId, 0),
+      if Found == found_first ->
+        {found_expr, [NodeId], NodeId};
+      true ->
+        {found_last, not_used, not_used}
+      end;
     Children == [] ->
-      {not_found, not_used, not_used};
+      if
+        NodeId == FromId ->
+          {found_first, not_used, not_used};
+        NodeId == ToId ->
+          {found_last, not_used, not_used};
+	true ->
+          {not_found, not_used, not_used}
+      end;
     true ->
       ChildrenList = lists:flatten(Children),
 
@@ -603,7 +596,7 @@ find_expression_root_id(MId, NodeId, FromId, ToId) ->
           {found_expr, [NodeId], NodeId};
         NodeId == FromId andalso LastState == found_last ->
           {found_expr, [NodeId], NodeId};
-        FirstChild == FromId ->
+        FirstState == FromId andalso NodeType /= ?CLAUSE ->
           if
             LastState == found_last ->
               {found_expr, [NodeId], NodeId};
@@ -612,7 +605,7 @@ find_expression_root_id(MId, NodeId, FromId, ToId) ->
             true ->
               {found_first, not_used, not_used}
           end;
-        LastChild == ToId ->
+        LastState == ToId andalso NodeType /= ?CLAUSE ->
           if
             FirstState == found_first ->
               {found_expr, [NodeId], NodeId};
@@ -637,8 +630,8 @@ find_expression_root_id(MId, NodeId, FromId, ToId) ->
                   {found_body, [NodeId], {Id1, Id2}};
                 [{_ActualId, {found_expr, Path, ExprId}}] ->
                   {found_expr, [NodeId] ++ Path, ExprId};
-                [{_Id, Other}] ->
-                  Other;
+                [{Id, Info={Pos,_,_}}] ->
+		  find_helper(Pos, Id, Info, FirstChild, LastChild);
                 _Other ->
                   {not_found, not_used, not_used}
               end;
@@ -652,14 +645,38 @@ find_expression_root_id(MId, NodeId, FromId, ToId) ->
                   {found_expr, [NodeId] ++ Path, ExprId};
                 [{_ActualId, {found_body, Path, ExprId}}] ->
                   {found_body, [NodeId] ++ Path, ExprId};
-                [{_Id, Other}] ->
-                  Other;
+                [{Id, Info={Pos,_,_}}] ->
+		  find_helper(Pos, Id, Info, FirstChild, LastChild);
                 _Other ->
                   {not_found, not_used, not_used}
               end
           end
       end
   end.
+
+
+%% =====================================================================
+%% @spec find_helper(Pos::atom(), Id::integer(),
+%%                   Info::{atom(),atom(),atom()},
+%%                   FirstChild::integer(), LastChild::integer())
+%%                      -> {atom(),atom(),atom()}
+%%
+%% @doc
+%% A common case in the search for the expression root.
+%% 
+%% Parameter description:<pre>
+%% <b>Pos</b> : The position found below the node (found_expr etc.).
+%% <b>Id</b> : Id of the actual node.
+%% <b>Info</b> : Result information when appropriate.
+%% <b>FirstChild</b> : Id of the first child node.</pre>
+%% <b>LastChild</b> : Id of the last child node.</pre>
+%% @end
+%% ===================================================================== 
+find_helper(found_first, Id, Info, Id, _) -> Info;
+find_helper(found_last, Id, Info, _, Id) -> Info;
+find_helper(found_expr, _, Info, _, _) -> Info;
+find_helper(found_body, _, Info, _, _) -> Info;
+find_helper(_, _, _, _, _) -> {not_found, not_used, not_used}.
 
 
 %% =====================================================================
