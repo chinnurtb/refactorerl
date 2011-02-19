@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Primary syntax tree interface. This module is intended to contain
 %%% every operation that primarily works with the syntax tree representation
@@ -29,13 +29,13 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_syntax).
--vsn("$Rev: 2756 $").
+-vsn("$Rev: 3429 $").
 
 %%% ============================================================================
 %%% Exports
 
 -export([node_type/1]).
--export([children/1, parent/1, leaves/1, tree_text/1,
+-export([children/1, children_idx/1, parent/1, leaves/1, tree_text/1,
          root_path/1, root_path/2, get_file/1]).
 -export([create/2, replace/3, replace/2, copy/1]).
 -export([build/2]).
@@ -50,8 +50,9 @@
 
 %% @spec node_type(Node::node()) -> atom()
 %% @doc  The type of the given syntax node.
-node_type({'$gn', Type, _}) ->
-    Type.
+%% @deprecated Use {@link referl_graph:class/1} instead.
+node_type(Node) ->
+    ?Graph:class(Node).
 
 %% =============================================================================
 %% Queries
@@ -82,8 +83,8 @@ leaf_down_(Node, DownFun) ->
 %% Comment handling
 
 %% @spec get_comments(node() | [node()]) -> comments()
-%% @doc Strips comments from the parameter nodes and stroes them in a
-%%      special container.
+%% @doc Strips comments from the parameter nodes and stores them in a special
+%% container. The stripped comment part is replaced with a single newline.
 get_comments(Nodes) when is_list(Nodes) ->
     [{_Tag, Parent}] = parent(hd(Nodes)),
     Children = [N || {_T, N} <- children(Parent)],
@@ -93,22 +94,15 @@ get_comments(Node) ->
     First = ?Query:exec1(Node, first_leaf(), error),
     Last  = ?Query:exec1(Node, last_leaf(),  error),
 
-    case ?ESG:data(First) of
-        FLex = #lex{data = FData = #token{prews = Pre}} ->
-            ?ESG:update(First, FLex#lex{data = FData#token{prews = filter(Pre)}})
-    end,
+    {update_ws(First, #token.prews,  fun remcomment/1),
+     update_ws(Last,  #token.postws, fun remcomment/1)}.
 
-    case ?ESG:data(Last) of
-        LLex = #lex{data = LData = #token{postws = Post}} ->
-            ?ESG:update(Last, LLex#lex{data = LData#token{postws = filter(Post)}})
-    end,
-
-    {Pre, Post}.
 
 %% @spec put_comments(node() | [node()], comments()) -> ok
 %% @doc The given nodes are decorated with the comments in the second
-%%      parameter. The comments should come from the same number of
-%%      nodes and made by {@link get_comments/1}.
+%% parameter. The comments should come from the same number of nodes and made
+%% by {@link get_comments/1}. Formatting of nodes is preserved, comments are
+%% inserted in place of newline characters if possible.
 put_comments(Nodes, WS) when is_list(Nodes) ->
     [{_Tag, Parent}] = parent(hd(Nodes)),
     Children = [N || {_T, N} <- children(Parent)],
@@ -118,15 +112,9 @@ put_comments(Node, {Pre, Post}) ->
     First = ?Query:exec1(Node, first_leaf(), error),
     Last  = ?Query:exec1(Node, last_leaf(),  error),
 
-    case ?ESG:data(First) of
-        FLex = #lex{data = FData} ->
-            ?ESG:update(First, FLex#lex{data = FData#token{prews = Pre}})
-    end,
-
-    case ?ESG:data(Last) of
-        LLex = #lex{data = LData} ->
-            ?ESG:update(Last, LLex#lex{data = LData#token{postws = Post}})
-    end.
+    update_ws(First, #token.prews, fun (WS) -> addcomment(WS, Pre, pre) end),
+    update_ws(Last, #token.postws, fun (WS) -> addcomment(WS, Post, post) end),
+    ok.
 
 cut(From, To, List) ->
     %% cut garbage from the front
@@ -134,8 +122,43 @@ cut(From, To, List) ->
     %% cut garbage from the end
     lists:reverse(lists:dropwhile(fun(E) -> E =/= To end, Temp)).
 
-filter(S) ->
-    lists:filter(fun(C) -> lists:member(C, " \t\n") end, S).
+update_ws(Node, WSI, Fun) ->
+    Data = #lex{data = Token} = ?ESG:data(Node),
+    {WS, Rem} = Fun(element(WSI, Token)),
+    ?ESG:update(Node, Data#lex{data = setelement(WSI, Token, WS)}),
+    Rem.
+
+remcomment(WS) ->
+    {W,R} = rcpre(WS, ""),
+    {lists:flatten(W), lists:flatten(R)}.
+
+%% Find first comment sign
+rcpre([],            Pre) -> {Pre, ""};
+rcpre([$\% | _]=Cmt, Pre) -> rcmid(Cmt, "", [Pre, $\n]);
+rcpre([C   | Tail],  Pre) -> rcpre(Tail, [Pre, C]).
+
+%% Find end of comment
+rcmid([],           Cmt, Pre) -> {Pre, Cmt};
+rcmid([$\n | Tail], Cmt, Pre) -> rcpost(Tail, "", [Cmt, $\n], Pre);
+rcmid([C   | Tail], Cmt, Pre) -> rcmid(Tail, [Cmt, C], Pre).
+
+%% Find next comment or end of string
+rcpost([],             Post, Cmt, Pre) -> {[Pre, Post], Cmt};
+rcpost([$\% | _]=Next, Post, Cmt, Pre) -> rcmid(Next, [Cmt, Post], Pre);
+rcpost([C   | Tail],   Post, Cmt, Pre) -> rcpost(Tail, [Post, C], Cmt, Pre).
+
+addcomment(WS, Cmt, Place) ->
+    {Post, Pref} = lists:splitwith(fun (C) -> C =/= $\n end,
+                                   lists:reverse(WS)),
+    {case Pref of
+         "" when Place =:= pre ->
+             Cmt ++ lists:reverse(Post);
+         "" when Place =:= post ->
+             lists:reverse(Post) ++ Cmt;
+         [$\n|Tail] ->
+             lists:reverse(Tail) ++ Cmt ++ lists:reverse(Post)
+     end,
+     ""}.
 
 
 %%% ============================================================================
@@ -154,7 +177,24 @@ class(Node) ->
     ?Graph:class(Node).
 
 
-%% @spec children(node()) -> [{atom(), node()}]
+%% @spec children_idx(Node::node()) -> 
+%%           [{LikTag::atom(), Children::node(), LinkIndex::natural()}]
+%% @doc Returns the childrens of the node in the order as they appear in the
+%%      real syntax tree.
+children_idx(Node) ->
+    element(1, lists:mapfoldl(
+        fun({T,N}, Dict) ->
+            I = case dict:find(T, Dict) of
+                {ok, LastIdx} -> LastIdx+1;
+                _ -> 1
+            end,
+            {{T,N,I}, dict:update_counter(T,1,Dict)}
+        end,
+        dict:new(),
+        children(Node))).
+
+
+%% @spec children(Node::node()) -> [{LinkTag::atom(), Children::node()}]
 %% @doc Returns the children of the node in the order as they appear in the
 %% real syntax tree.
 children(Node) ->

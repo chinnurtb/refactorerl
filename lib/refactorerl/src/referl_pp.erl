@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
@@ -32,9 +32,6 @@
 -include("refactorerl.hrl").
 -include("referl_pp_types.hrl").
 
--define(PPR, referl_pp_rules).
-
-
 
 %%% ============================================================================
 %%% Exports/imports
@@ -45,8 +42,12 @@
 -export([format/4, format_default/0, format_validator/0]).
 
 
-%-export([trim_lines/2, trim_lines/4, is_comment_lines/1]).
 
+%%% ============================================================================
+%%% Defines
+
+% Module of rules
+-define(PPR, referl_pp_rules).
 
 
 
@@ -55,21 +56,14 @@
 
 
 
-%% @ type indent().
-%% Indentation informations.
--record(indent, {
-    level,          % Level in the syntax tree
-    diff,           % Indentation different between the parent en this node
-    str             % Indentation string on the line begin (optional)
-    }).
-
 %% @ type tokenInfo().
 %% Informations about a token.
 -record(tokenInfo, {
     indent,         % Indentation record (see below)
     charIdx,        % Pair: Index of first and last visible character
     lineCharCnt,    % Number of caharcters in the line to this token
-    rules = []      % Formating rules
+    rules = [],     % Formating rules
+    data            % The data of the lexical node in the graph (a #lex record)
     }).
 
 %% @ type multiInfo().
@@ -92,7 +86,7 @@
     }).
 
 
-%% @ type ppState().
+%% @type ppState().
 %% Informatins about tokens colected by Pretty Printer.
 -record(ppState, {
     tokenFrom,      % Index: first token of selected part
@@ -108,11 +102,11 @@
 
 %% @private
 %% @spec create_ppState() -> ppState()
-%% @doc  Create a new ppState record.
+%% @doc  Create a new ppState record and create ETS tables.
 create_ppState() ->
     #ppState{
         etc      = ets:new(pp_etc,     []),
-        tokens   = ets:new(pp_tokens,  [ordered_set]),
+        tokens   = ets:new(pp_tokens,  []),
         longNl   = ets:new(pp_longNl,  []),
         multiNl  = ets:new(pp_multiNl, [ordered_set]),
         subst    = ets:new(pp_subst,   []),
@@ -120,7 +114,7 @@ create_ppState() ->
 
 %% @private
 %% @spec delete_ppState(State::ppState()) -> ok
-%% @doc  Delete all ets tables from a ppState record.
+%% @doc  Delete all ETS tables from a ppState record.
 delete_ppState(State=#ppState{}) ->
     ets:delete(State#ppState.etc),
     ets:delete(State#ppState.tokens),
@@ -150,13 +144,13 @@ error_text(not_token_leaves, [FirstToken,LastToken]) ->
     ?MISC:format("The ~p or ~p syntax leaf node is not token.",
                  [FirstToken,LastToken]);
 error_text(part_macro, Wrongs) ->
-    ?MISC:format("The following macro subsituations({Node, macro name}) are "
+    ?MISC:format("The following macro subsituations ({Node, macro name}) are "
         "partial in the selcted part: ~p.", Wrongs);
 error_text(not_has_tokens, [Node]) ->
     ?MISC:format("There is no order for the tokens of ~p node or "
         "it doesn't have tokens.", [Node]);
 error_text(invalid_options, Wrongs) ->
-    ?MISC:format("The following format options are invalid({Key, Value}): ~p",
+    ?MISC:format("The following format options are invalids ({Key, Value}): ~p",
         Wrongs).
 
 
@@ -209,6 +203,12 @@ format_default() ->
 %%   <li>longline = boolean(): Break long lines.</li>
 %%   <li>multiline = boolean(): Do extra line breaks for multiple line terms.
 %%     </li>
+%%   <li>graph = {FilePath_prefix::string(), Mode::atom()}: Draw graph in
+%%     `Mode' mode. For more information about `Mode' see 
+%%     {@link referl_draw_graph:draw_file/2} function.
+%%     The actual time and the formatting phase name will be concated after the
+%%     `FilePath_prefix' string.
+%%     Example: graph_MegaSec-Sec-MicroSec_before.dot</li>
 %% </ul>
 %% In general the values `false' and `no' are same.
 format_validator() ->
@@ -216,37 +216,71 @@ format_validator() ->
      {newline,   fun(V) -> lists:member(V, [check,      false,no]) end},
      {space,     fun(V) -> lists:member(V, [check,reformat,reset,false,no])end},
      {longline,  fun is_boolean/1},
-     {multiline, fun is_boolean/1}].
+     {multiline, fun is_boolean/1},
+     {debug,     fun(V) -> proplist_is_valid(V, format_validator(debug)) end}].
+
+% Validator for debug options
+format_validator(debug) ->
+    [{graph,    fun({F,M}) when is_list(F), is_atom(M) -> true;
+                (_) -> false end}].
+
+
+% Validate a proplist
+proplist_is_valid(Options, ValidatorList) when is_list(Options), 
+        is_list(ValidatorList) ->
+    FindRet = ?MISC:list_find(
+        fun(E) ->
+            not is_tuple(E) orelse 2/=tuple_size(E) orelse 
+            not is_atom(element(1,E))
+        end,
+        Options),
+    case FindRet of
+        {0,_} ->
+            {_Misses,Wrongs} = ?MISC:proplist_validate(Options, ValidatorList),
+            [] == Wrongs;
+        {_,_} -> false
+    end;
+proplist_is_valid(_Options, _ValidatorList) -> false.
 
 
 %% @spec format(Node1::node(), Node2::node(), Options::proplist(),
-%%               Config::ppConfig()) -> ok
+%%              Config_Rules::{Config::ppConfig(), ConfigRulesFun::RulesFun}) ->
+%%           ok
+%%       RulesFun = (() -> {IndentRules, WhiteSpaceRules, LongLineRules,
+%%                          MultipleLineTermRules})
+%%       IndentRules = [indentRule()]
+%%       WhiteSpaceRules = [tokenRule()]
+%%       LongLineRules = [tokenRule()]
+%%       MultipleLineTermRules = [tokenRule()]
 %% @throws {ModuleName::atom, ErrorCode::atom(), ErrorDetails::[term()]}
 %% @doc  Format a part of source Erlang code. The part that should be formatted
 %%       is specified by `Node1' and `Node2' syntactical nodes as the first and
 %%       last node. The line prefix before the first token of `Node1', the
 %%       line postfix after the last token of the `Node2', the previous line
 %%       last and the next line first tokens are also will be formatted. But
-%%       the required spaces and recommended line breakers will be bodified
+%%       the required spaces and recommended line breakers will be modified
 %%       just on the `Node1'..`Node2' interval.
 %%
-%%       The `Options' direct the formatting method. For the legal oprtions see
+%%       The `Options' control the formatting method. For the legal oprtions see
 %%       {@link format_validator/0}. {@link format_default/0} returns the
 %%       default options.
 %%
-%%       The `Config' contains the formatiing rules and configurations.
+%%       The `Config' contains the ETS table identifiers of formatiing rules
+%%       and configurations. If the ETS tables specified in `Config' are
+%%       invalids the rules returned by `ConfigRulesFun' are loaded into the
+%%       ETS tables.
 %%       For Erlang language the {@link referl_pp_rules:erlang/0} function
-%%       supply the default configurations.
+%%       supply the default configurations and the rule provider function.
 %% @see format_default/0
 %% @see format_validator/0
 %% @see referl_pp_rules:erlang/0
-format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
-        is_list(Options) ->
+format(Node1, Node2, Options, {Config0=#ppConfig{general=ConfigGen}, RulesFun})
+        when is_list(Options) ->
     % Check the options
     Options1 = ?MISC:proplist_merge_def(Options, format_default()),
     case ?MISC:proplist_validate(Options1, format_validator()) of
-        [] -> ok;
-        Wrongs -> throw(?LocalError(invalid_options, Wrongs))
+        {[],[]} -> ok;
+        {Misses,Wrongs} -> throw(?LocalError(invalid_options, Misses++Wrongs))
     end,
     % Get the options
     InMode      = proplists:get_value(indent,    Options1),
@@ -254,54 +288,72 @@ format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
     SpMode      = proplists:get_value(space,     Options1),
     LongLnMode  = proplists:get_value(longline,  Options1),
     MultiLnMode = proplists:get_value(multiline, Options1),
+    % Debug options
+    DbgOpts   = proplists:get_value(debug, Options1, []),
+    Dbg_Graph = draw_graph_init(proplists:get_value(graph, DbgOpts, undefined)),
+    draw_graph(Dbg_Graph, start),
+    % Check formatting rules
+    Config = ?PPR:check_load({Config0, RulesFun}),
     % Downpropagate the indentation iformations and collect real tokens
-    State0 = create_ppState(),
-    State = downProp(Node1, Node2, Config, State0),
+    State = downProp(Node1,Node2, Config,create_ppState()),
+    % Some simple variable to simplify code
+    TokensETS = State#ppState.tokens,
+    DummyTokInfo = #tokenInfo{rules=[], 
+                    data=#lex{data=#token{text="",prews="",postws=""}}},
     % Add spaces and new lines to the white spaces between tokens
-    Idxs = ?MISC:ets_keys(State#ppState.tokens),
     case lists:member(SpMode, [check,reformat,reset]) orelse
             lists:member(NlMode, [check]) of
         true ->
             % Format the begin of file
+            DummyTokRec = {no,no, DummyTokInfo}, % Node=no : Idx=no isn't used
             if
                 1==State#ppState.tokenFrom andalso
                 (not State#ppState.hasPrevLine) ->
-                    [{_,TokenF,InfoF}] = ets:lookup(State#ppState.tokens, 1),
-                    format_sp_nl({no,#tokenInfo{rules=[]}}, {TokenF,InfoF},
+                    [{1,TokenF,InfoF}] = ets:lookup(TokensETS, 1),
+                    format_space([DummyTokRec, {1,TokenF,InfoF}],
                         SpMode, NlMode, ConfigGen#ppConfig_general.nlStr,
-                        ConfigGen#ppConfig_general.commentLines);
+                        ConfigGen#ppConfig_general.commentLines, TokensETS);
                 true -> ok
             end,
             % Format the selected part
-            [{tokensCount,Cnt}] = ets:lookup(State#ppState.etc, tokensCount),
+            Cnt = ets:info(TokensETS, size),
             SpaceIdx1 = lists:max([1,   State#ppState.tokenFrom-1]),
             SpaceIdx2 = lists:min([Cnt, State#ppState.tokenTo+1]),
-            SpaceIdxs = lists:sublist(Idxs, SpaceIdx1, SpaceIdx2-SpaceIdx1+1),
-            format_space(SpaceIdxs, SpMode, NlMode,
+            TokRecs = lists:usort(ets:select(TokensETS, [{{'$1','_','_'},
+                    [{'=<',SpaceIdx1,'$1'},{'=<','$1',SpaceIdx2}], ['$_']}])),
+            format_space(TokRecs, SpMode, NlMode,
                          ConfigGen#ppConfig_general.nlStr,
-                         ConfigGen#ppConfig_general.commentLines, State),
+                         ConfigGen#ppConfig_general.commentLines, TokensETS),
             % Format the end of file
             if
                 Cnt==State#ppState.tokenTo andalso
                 (not State#ppState.hasNextLine) ->
-                    [{_,TokenL,InfoL}] = ets:lookup(State#ppState.tokens, Cnt),
-                    format_sp_nl({TokenL,InfoL}, {no,#tokenInfo{rules=[]}},
+                    [{Cnt,TokenL,InfoL}] = ets:lookup(TokensETS, Cnt),
+                    format_space([{Cnt,TokenL,InfoL}, DummyTokRec],
                         SpMode, NlMode, ConfigGen#ppConfig_general.nlStr,
-                        ConfigGen#ppConfig_general.commentLines);
+                        ConfigGen#ppConfig_general.commentLines, TokensETS);
                 true -> ok
             end;
         _ -> ok
     end,
-    % Calculate initial indices
-    [{_,Token1,_}] = ets:lookup(State#ppState.tokens, hd(Idxs)),
+    % Get the line prefix of first line that contain tokens to format and
+    % create dummy {idx, node, tokenInfo} tuples
+    [{_,Token1,_}] = ets:lookup(TokensETS, 1),
     {_,_,LineBegin0} = reallineBegin(Token1, 2),
-    DummyList = lists:duplicate(length(LineBegin0),ok),
-    Indices0 = calc_indices_tokrec(lists:zip3(DummyList,LineBegin0,DummyList),
-        {0,0,0,""}, {0,0}, {false,false},
-        ConfigGen#ppConfig_general.tabSize, State),
-    calc_indices_tokrec(ets:tab2list(State#ppState.tokens), Indices0,
-        {hd(Idxs),hd(Idxs)}, {true,true},
-        ConfigGen#ppConfig_general.tabSize, State),
+    LineBegin0TokRecs = lists:map(
+        fun(TokNode) ->
+            {no, TokNode, DummyTokInfo} % Idx=no won't be used
+        end,
+        LineBegin0),
+    % Calculate initial indices
+    % DummyList = lists:duplicate(length(LineBegin0),ok),
+    % Indices0 = calc_indices_tokrec(lists:zip3(DummyList,LineBegin0,DummyList),
+        % {0,0,0,""}, {0,0}, {false,false},
+        % ConfigGen#ppConfig_general.tabSize, State),
+    Indices0 = calc_indices_tokrec(LineBegin0TokRecs, {0,0,0,""}, {0,0}, 
+                {false,false}, ConfigGen#ppConfig_general.tabSize, State),
+    calc_indices_tokrec(lists:usort(ets:tab2list(TokensETS)), Indices0,
+        {1,1},{true,true}, ConfigGen#ppConfig_general.tabSize, State),
     % Set initial indentations
     case lists:member(InMode, [check,reset]) of
         true ->
@@ -320,9 +372,37 @@ format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
     end,
     % Multiple line terms and long lines
     format_ml_ll(InMode, MultiLnMode,LongLnMode, ConfigGen,State),
+    % Store back the datas of tokens
+    store_token_data(TokensETS),
     % Delete state
     delete_ppState(State),
+    % Draw graph after the formation
+    draw_graph(Dbg_Graph, stop),
     ok.
+
+
+% Initialize graph drawing
+draw_graph_init({FilePathPrefrix, Mode}) ->
+    {MegaSec,Sec,MicroSec} = erlang:now(),
+    {?MISC:format("~s_~b-~b-~b",[FilePathPrefrix,MegaSec,Sec,MicroSec]), Mode};
+draw_graph_init(_) ->
+    undefined.
+
+% Draw a graph
+draw_graph({FilePathPrefix, Mode}, StepName) ->
+    FilePath = ?MISC:format("~s_~p.dot", [FilePathPrefix, StepName]),
+    ?DRAW_GRAPH:draw_graph_tooltip(FilePath, Mode);
+draw_graph(_, _StepName) ->
+    ok.
+
+
+% Store back the datas of nodes into the ESG
+store_token_data(TokensETS) ->
+    ets:foldl(
+        fun({_Idx,Token,#tokenInfo{data=Data}}, _Acc) ->
+            ?Graph:update(Token, Data)
+        end,
+        ok, TokensETS).
 
 
 
@@ -331,8 +411,7 @@ format(Node1, Node2, Options, Config=#ppConfig{general=ConfigGen}) when
 %% Multiple line terms and long lines
 
 
-%%
-%%
+% Apply the multiple line term and the long line formattion
 format_ml_ll(InMode, MultiLnMode, LongLnMode, ConfigGen=#ppConfig_general{},
         State=#ppState{}) ->
     % Do multiple line terms  or long lines formation
@@ -350,14 +429,14 @@ format_ml_ll(InMode, MultiLnMode, LongLnMode, ConfigGen=#ppConfig_general{},
             format_ml_ll(InMode, MultiLnMode, LongLnMode, ConfigGen, State)
     end.
 
-%
+% Apply the multiple line term formattion as many times as it possible
 format_ml_(InMode, ConfigGen=#ppConfig_general{}, State, ModCount) ->
     case format_multi(InMode, ConfigGen, State) of
         [] -> ModCount;
         _  -> format_ml_(InMode, ConfigGen, State, ModCount+1)
     end.
 
-%
+% Apply the long line formattion as many times as it possible
 format_ll_(InMode, ConfigGen=#ppConfig_general{}, State, ModCount) ->
     case format_long(InMode, ConfigGen, State) of
         [] -> ModCount;
@@ -365,10 +444,10 @@ format_ll_(InMode, ConfigGen=#ppConfig_general{}, State, ModCount) ->
     end.
 
 
-%%
-%%
-format_multi(InMode, ConfigGen=#ppConfig_general{},
-        State=#ppState{etc=EtcETS, lines=LinesETS, multiNl=MultiETS}) ->
+% Apply the multiple line term formattion
+format_multi(InMode, ConfigGen=#ppConfig_general{}, 
+        State=#ppState{tokens=TokensETS, etc=EtcETS, lines=LinesETS, 
+                       multiNl=MultiETS}) ->
     % Find the real multiple line terms
     [{minLineIdx, MinLineIdx}] = ets:lookup(EtcETS, minLineIdx),
     [{maxLineIdx, MaxLineIdx}] = ets:lookup(EtcETS, maxLineIdx),
@@ -378,101 +457,121 @@ format_multi(InMode, ConfigGen=#ppConfig_general{},
             LineIdx1 = get_token_line(Idx1, MinLineIdx, LinesETS),
             LineIdx2 = get_token_line(Idx2, MaxLineIdx, LinesETS),
             if
-                LineIdx1/=LineIdx2 -> [{Idx,PlusRules}|AccBreaks];
-                true               -> AccBreaks
+                LineIdx1/=LineIdx2 -> 
+                    [{Idx,Token,Info}] = ets:lookup(TokensETS,Idx),
+                    [{{Idx,Token,Info},PlusRules}|AccBreaks];
+                true -> AccBreaks
             end
         end,
         [], MultiETS),
     % Apply extra rules and return the indices of the modified lines
-    lists:foldl(fun({Idx,PlusRules}, ModLineIdxs) ->
-            ets:delete(MultiETS, Idx),    % It is processed now
-            {PlusDiff, ModLnIdxs} = format_plusNl(Idx, PlusRules, InMode,
-                ConfigGen, State),
-            ModLineIdxs2 = lists:map(fun(Id) -> Id+PlusDiff end, ModLineIdxs),
-            ModLnIdxs++ModLineIdxs2
-        end,
-        [], Breaks).
+    format_plusWsRules(Breaks, MultiETS, InMode, ConfigGen, State).
 
 
-% Get the available line breakers in priority order
-% Two level order:
-%   - Level 1: token is better if it is in a higher position in the syntax tree
-%   - Level 2: token is better if it closer to the line end
-% PrioBreaks=[{Priority,TokIdx,Rules}], Priority={Syntax level, LineEnd-TokIdx}
+% Apply the long line formattion
 format_long(InMode, ConfigGen=#ppConfig_general{optLineLength=OptLineLength,
         minTextChars=MinTextChars, maxTextChars=MaxTextChars},
         State=#ppState{tokens=TokensETS, lines=LinesETS, longNl=LongETS}) ->
+    % Find the long line breaker tokens
     Breaks = ets:foldl(
         fun({_LnIdx, #lineInfo{tokenFirst=Idx1,tokenLast=Idx2,charCnt=CharCnt,
                 lengthVisible=LengthV}}, AccBreaks) ->
             if
                 (OptLineLength<LengthV andalso MinTextChars=<CharCnt) orelse
                  MaxTextChars<CharCnt ->
-                    PriorBreaks = lists:sort(ets:select(LongETS,
-                        [{{'$1','$2','$3'}, [{'=<',Idx1,'$1'},{'=<','$1',Idx2}],
-                          [{{ {{'$2',{'-',0,'$1'}}}, '$1','$3' }}] }])),
-                    OrdBreakStats = lists:map(fun({_Prior,Idx,PlusRules}) ->
-                            [{Idx,_Token,Info}] = ets:lookup(TokensETS,Idx),
-                            LastCharIdx = element(2,Info#tokenInfo.charIdx),
-                            TokCharCnt  = Info#tokenInfo.lineCharCnt,
-                            {Idx,PlusRules, {LastCharIdx,TokCharCnt}}
-                        end,
-                        PriorBreaks),
-                    format_long_(OrdBreakStats, OptLineLength, MinTextChars,
-                                 MaxTextChars, AccBreaks);
+                    OrdBreakStats = 
+                        format_long_sort_breaks(Idx1, Idx2, LongETS, TokensETS),
+                    format_long_find_break(OrdBreakStats, OptLineLength, 
+                        MinTextChars, MaxTextChars, AccBreaks);
                  true ->
                     AccBreaks
             end
         end,
         [], LinesETS),
     % Apply extra rules and return the indices of the modified lines
-    lists:foldl(fun({Idx,PlusRules}, ModLineIdxs) ->
-            ets:delete(LongETS, Idx),    % It is processed now
-            {PlusDiff, ModLnIdxs} = format_plusNl(Idx, PlusRules, InMode,
-                ConfigGen, State),
-            ModLineIdxs2 = lists:map(fun(Id) -> Id+PlusDiff end, ModLineIdxs),
-            ModLnIdxs++ModLineIdxs2
+    format_plusWsRules(Breaks, LongETS, InMode, ConfigGen, State).
+
+
+% Sort the line breaker tokens in the line
+% Two level order:
+%   - Level 1: token is better if it is in a higher position in the syntax tree
+%   - Level 2: token is better if it closer to the line end
+format_long_sort_breaks(Idx1, Idx2, LongETS, TokensETS) ->
+    lists:sort(lists:map(
+        fun({Idx,SynLevel,PlusRules}) ->
+            [{Idx,Token,Info}] = ets:lookup(TokensETS,Idx),
+            {FirstCharIdx,LastCharIdx} = Info#tokenInfo.charIdx,
+            {{ % Priority
+              0+SynLevel,    % Higher in syntax tree
+              0-LastCharIdx  % Closer to line end
+             }, 
+             {Idx,Token,Info}, % TokRec
+             PlusRules,        % PlusRules
+             { % Textual indices
+              {FirstCharIdx,LastCharIdx},   % first/last character index
+              Info#tokenInfo.lineCharCnt}}  % character in the line
         end,
-        [], Breaks).
+        ets:select(LongETS,
+            [{ {'$1','_','_'}, % {ChildIdx,SynLevel,LongRule}
+               [{'=<',Idx1,'$1'}, {'=<','$1',Idx2}], % in the line
+               ['$_'] % {ChildIdx,SynLevel,LongRule}
+             }]) )).
+
 
 % Find the best long line breaker
-format_long_(OrdBreakStats, OptLineLength,MinTextChars,MaxTextChars,
+format_long_find_break(OrdBreakStats, OptLineLength,MinTextChars,MaxTextChars,
         AccBreaks) ->
-    case ?MISC:list_find(fun({_,_, {LastCharIdx,TokCharCnt}}) ->
+    case ?MISC:list_find(
+            fun({_Pr,_TR,_R,{{_FCIdx,LastCharIdx},TokCharCnt}}) ->
                 LastCharIdx=<OptLineLength andalso
                 MinTextChars=<TokCharCnt andalso
                 TokCharCnt=<MaxTextChars
             end,
             OrdBreakStats) of
         {0,_} ->
-            case ?MISC:list_find(fun({_,_, {LastCharIdx,_}}) ->
-                    LastCharIdx=<OptLineLength end, OrdBreakStats) of
+            case ?MISC:list_find(
+                    fun({_Pr,_TR,_R,{{_FCIdx,LastCharIdx},_CC}}) ->
+                        LastCharIdx=<OptLineLength 
+                    end, 
+                    OrdBreakStats) of
                 {0,_} ->
                     case OrdBreakStats of
                         [] -> AccBreaks;
-                        _  ->
-                            {Idx,PlusRules,_} = lists:min(OrdBreakStats),
-                            [{Idx,PlusRules} | AccBreaks]
+                        [{_Pr,TokRec,PlusRules,_TxtIdxs}|_]  ->
+                            [{TokRec,PlusRules} | AccBreaks]
                     end;
-                {_, {Idx,PlusRules,_}} -> [{Idx,PlusRules} | AccBreaks]
+                {_, {_Pr,TokRec,PlusRules,_TxtIdxs}} -> 
+                    [{TokRec,PlusRules} | AccBreaks]
             end;
-        {_, {Idx,PlusRules,_}} -> [{Idx,PlusRules} | AccBreaks]
+        {_, {_Pr,TokRec,PlusRules,_TxtIdxs}} -> 
+            [{TokRec,PlusRules} | AccBreaks]
     end.
 
 
+% Apply the extra white space & new line formattion rules for a token    
+format_plusWsRules(Breaks, EtsTableId, InMode, ConfigGen=#ppConfig_general{}, 
+        State=#ppState{}) ->
+    lists:foldl(fun({{Idx,Token,Info},PlusRules}, ModLineIdxs) ->
+            ets:delete(EtsTableId, Idx),    % It is processed now
+            {PlusDiff, ModLnIdxs} = 
+                format_plusWsRules_({Idx,Token,Info}, PlusRules, InMode, 
+                                    ConfigGen, State),
+            ModLineIdxs2 = lists:map(fun(Id) -> Id+PlusDiff end, ModLineIdxs),
+            ModLnIdxs++ModLineIdxs2
+        end,
+        [], Breaks).
 
-%%
-%%
-format_plusNl(IdxB, Rules, InMode, #ppConfig_general{useTab=UseTab,
-        tabSize=TabSize, nlStr=NlStr, commentLines=CmLns},
+% Apply the extra white space & new line formattion rules for a token
+format_plusWsRules_({IdxB,TokenB,InfoB}, Rules, InMode, 
+        #ppConfig_general{useTab=UseTab, tabSize=TabSize, nlStr=NlStr, 
+                          commentLines=CmLns},
         State=#ppState{tokens=TokensETS, lines=LinesETS}) ->
     % Add extra rules to the originals
-    [{IdxB, TokenB, InfoB}] = ets:lookup(TokensETS, IdxB),
-    InfoB2 = InfoB#tokenInfo{rules=?PPR:merge_token_rules(InfoB#tokenInfo.rules,
-                                                          Rules)},
+    InfoB2 = InfoB#tokenInfo{
+                rules=?PPR:merge_token_rules(InfoB#tokenInfo.rules,Rules)},
     ets:insert(TokensETS, {IdxB,TokenB,InfoB2}),
     % Get previous/next tokens and information about lines
-    [{tokensCount, TokensCnt}] = ets:lookup(State#ppState.etc, tokensCount),
+    TokensCnt = ets:info(State#ppState.tokens, size),
     IdxA = lists:max([1,        IdxB-1]),
     IdxC = lists:min([TokensCnt,IdxB+1]),
     LineIdxA1 = get_token_line(IdxA, -1, LinesETS), % all exist
@@ -483,17 +582,21 @@ format_plusNl(IdxB, Rules, InMode, #ppConfig_general{useTab=UseTab,
     LineDiffAB1 = LineIdxB1 - LineIdxA1,
     LineDiffBC1 = LineIdxC1 - LineIdxB1,
     % Apply extra new line rules and get the new different between lines
-    [{_, TokenA, InfoA}] = ets:lookup(TokensETS, IdxA),
-    LineDiffAB2 = if
+    {LineDiffAB2, ModLineIdxsB} = if
         IdxA<IdxB ->
-            format_sp_nl({TokenA,InfoA},{TokenB,InfoB2},no,check,NlStr,CmLns);
-        true -> 0
+            [{IdxA,TokenA,InfoA}] = ets:lookup(TokensETS, IdxA),
+            {LDB,_} = format_sp_nl({IdxA,TokenA,InfoA},{IdxB,TokenB,InfoB2},
+                                   no,check, NlStr,CmLns, TokensETS),
+            {LDB, [LineIdxA1+LDB]};
+        true -> {0, []}
     end,
-    LineDiffBC2 = if
+    {LineDiffBC2, ModLineIdxsC} = if
         IdxB<IdxC ->
-            [{_, TokenC, InfoC}] = ets:lookup(TokensETS, IdxC),
-            format_sp_nl({TokenB,InfoB2},{TokenC,InfoC},no,check,NlStr,CmLns);
-        true -> 0
+            [{IdxC,TokenC,InfoC}] = ets:lookup(TokensETS, IdxC),
+            {LDC,_} = format_sp_nl({IdxB,TokenB,InfoB2},{IdxC,TokenC,InfoC},
+                                   no,check, NlStr,CmLns, TokensETS),
+            {LDC, [LineIdxA1+LineDiffAB2+LDC|ModLineIdxsB]};
+        true -> {0, ModLineIdxsB}
     end,
     % Modify lines and return the indices of modified lines
     PlusDiff = (LineDiffAB2+LineDiffBC2) - (LineDiffAB1+LineDiffBC1),
@@ -509,13 +612,10 @@ format_plusNl(IdxB, Rules, InMode, #ppConfig_general{useTab=UseTab,
             % Recalculate indices
             recalc_indices_byfirst({IdxA,LineInfoC1#lineInfo.tokenLast},
                 {LineIdxA1,LineInfoA1#lineInfo.tokenFirst}, TabSize, State),
-            ModLineIdxs = ets:select(LinesETS, [{{'$1','_'},
-                [{'<',LineIdxA1,'$1'},
-                 {'=<','$1',LineIdxA1+LineDiffAB2+LineDiffBC2}],
-                ['$1']}]),
+            ModLineIdxs = lists:usort(ModLineIdxsC) -- [LineIdxA1],
             % Indent modified lines
             case lists:member(InMode, [check,reset]) of
-                true -> format_indent(ModLineIdxs,InMode,UseTab,TabSize,State);
+                true -> format_indent(ModLineIdxs,check,UseTab,TabSize,State);
                 _    -> ok
             end,
             {PlusDiff, ModLineIdxs}
@@ -528,8 +628,7 @@ format_plusNl(IdxB, Rules, InMode, #ppConfig_general{useTab=UseTab,
 %% Indentation
 
 
-%%
-%%
+% Apply the indentation formattion for lines
 format_indent([], _InMode, _UseTab, _TabSize, _State) -> ok;
 format_indent([LineIdx|LineIdxs], InMode, UseTab, TabSize,
         State=#ppState{tokens=TokensETS, lines=LinesETS}) ->
@@ -538,7 +637,7 @@ format_indent([LineIdx|LineIdxs], InMode, UseTab, TabSize,
         ets:lookup(LinesETS,  LineIdx),
     [{LineFirstIdx,Token1,Info1}] = ets:lookup(TokensETS, LineFirstIdx),
     % Get current indentation
-    LexData1 = ?Graph:data(Token1),
+    LexData1 = Info1#tokenInfo.data,
     TokData1 = LexData1#lex.data,
     {Parts1,_} = ?MISC:string_lines(TokData1#token.prews),
     {PreWsFirstLines, [PreWsLastLine]} = lists:split(length(Parts1)-1,Parts1),
@@ -551,42 +650,44 @@ format_indent([LineIdx|LineIdxs], InMode, UseTab, TabSize,
         (check==InMode andalso CurrInSize1<InSize1) orelse
          reset==InMode ->
             % Indent prews
-            PreWsLastLine2 = if
+            IndentString = if
                 UseTab -> lists:duplicate(InLevel1, 9);
                 true   -> lists:duplicate(InSize1, 32)
             end,
             PreWsFirstLines2 = lists:map(
-                fun(Ln) -> PreWsLastLine2 ++ ?MISC:string_trim(Ln,left) end,
+                fun(Ln) -> IndentString ++ ?MISC:string_trim(Ln,left) end,
                 PreWsFirstLines),
-            % Update prews
-            TokData1B = TokData1#token{prews =
-                lists:flatten(PreWsFirstLines2++[PreWsLastLine2])},
-            LexData1B = LexData1#lex{data = TokData1B},
-            ?Graph:update(Token1, LexData1B),
+            % Updates prews
+            update_token_ws({LineFirstIdx,Token1,Info1},
+                {#token.prews,[PreWsFirstLines2,IndentString]},TokensETS),
+            % Info1B = update_token_info(Info1, #token.prews,
+                                       % [PreWsFirstLines2,IndentString]),
             % Indent postws
-            [{LineLastIdx,Token2,_Info2}] = ets:lookup(TokensETS, LineLastIdx),
-            LexData2 = ?Graph:data(Token2),
+            [{LineLastIdx,Token2,Info2}] = ets:lookup(TokensETS, LineLastIdx),
+            LexData2 = Info2#tokenInfo.data,
             TokData2 = LexData2#lex.data,
             {Parts2,_} = ?MISC:string_lines(TokData2#token.postws),
-            {[PostWsFirstLine], PostWsLastLines} = lists:split(1,Parts2),
-            PostWsLastLines2 = lists:map(fun(Ln) ->
-                    case ?MISC:string_strs(Ln, ?MISC:string_EOLs()) of
-                        {0,_} -> Ln;
-                        {_,_} -> PreWsLastLine2 ++ ?MISC:string_trim(Ln,left)
-                    end
-                end,
-                PostWsLastLines),
+            {[PostWsFirstLine], PostWsLastLines0} = lists:split(1,Parts2),
+            {PostWsMiddleLines, [PostWsLastLine]} =
+                lists:split(length(PostWsLastLines0)-1,PostWsLastLines0),
+            PostWsMiddleLines2 = lists:map(
+                    fun(TrimLn) ->
+                        case ?MISC:list_find(TrimLn, ?MISC:string_EOLs()) of
+                            {0,_} -> IndentString ++ TrimLn;
+                            {_,_} -> TrimLn
+                        end
+                    end,
+                    trim_lines(PostWsMiddleLines, left)),
             % Update postws
-            TokData2B = TokData2#token{postws =
-                lists:flatten([PostWsFirstLine|PostWsLastLines2])},
-            LexData2B = LexData2#lex{data = TokData2B},
-            ?Graph:update(Token2, LexData2B),
+            update_token_ws({LineLastIdx,Token2,Info2}, {#token.postws,
+                [PostWsFirstLine,PostWsMiddleLines2,PostWsLastLine]},TokensETS),
             % Update token indices
+            [{LineFirstIdx,Token1,Info1C}] = ets:lookup(TokensETS,LineFirstIdx),
             {_,{FirstCharIdx,LastCharIdx},CharCnt,_} =
-                get_token_indices({0, 0, 0, ""}, Token1, TabSize),
-            Info1B = Info1#tokenInfo{charIdx={FirstCharIdx,LastCharIdx},
-                                   lineCharCnt=CharCnt},
-            ets:insert(TokensETS, {LineFirstIdx, Token1, Info1B}),
+                get_token_indices({0, 0, 0, ""}, Info1C, TabSize),
+            Info1D = Info1C#tokenInfo{charIdx={FirstCharIdx,LastCharIdx},
+                                      lineCharCnt=CharCnt},
+            ets:insert(TokensETS, {LineFirstIdx, Token1, Info1D}),
             % Update the other token indices in the line
             recalc_indices_byfirst({LineFirstIdx,LineLastIdx},
                 {LineIdx,LineFirstIdx}, TabSize, State);
@@ -597,41 +698,39 @@ format_indent([LineIdx|LineIdxs], InMode, UseTab, TabSize,
 
 
 
-
 %% -----------------------------------------------------------------------------
 %% Spaces and new lines: set spaces and required line breakers between tokens
 
 
-%%
-%%
-format_space(Idxs, SpMode, NlMode, NlStr, CommentLines, State=#ppState{}) ->
-    [{_,Token1,Info1}] = ets:lookup(State#ppState.tokens, hd(Idxs)),
-    lists:foldl(
-        fun(IdxB, {TokenA,InfoA}) ->
-            [{IdxB,TokenB,InfoB}] = ets:lookup(State#ppState.tokens, IdxB),
-            format_sp_nl({TokenA,InfoA}, {TokenB,InfoB}, SpMode, NlMode,
-                         NlStr, CommentLines),
-            {TokenB,InfoB}
+% Apply the white space & new line formattion
+format_space([], _SpMode, _NlMode, _NlStr, _CommentLines,_TokensETS) -> 0;
+format_space([TokRec1|TokRecs], SpMode,NlMode, NlStr,CommentLines, TokensETS) ->
+    {LineNumDiff, _} = lists:foldl(
+        fun({IdxB,TokenB,InfoB}, {AccLineNumDiff, TokRecA}) ->
+            {PlusLineNumDiff, InfoB2} =
+                format_sp_nl(TokRecA,{IdxB,TokenB,InfoB}, SpMode,NlMode,
+                             NlStr,CommentLines, TokensETS),
+            {AccLineNumDiff+PlusLineNumDiff, {IdxB,TokenB,InfoB2}}
         end,
-        {Token1,Info1},
-        tl(Idxs)).
+        {0, TokRec1},
+        TokRecs),
+    LineNumDiff.
 
 
-%%
-%%
-format_sp_nl({TokenA,InfoA}, {TokenB,InfoB}, SpMode, NlMode,
-        NlStr, _CommentLines) ->
+% Apply the white space & new line formattion for two following token
+format_sp_nl({IdxA,TokenA,InfoA=#tokenInfo{rules=RulesA, data=DataA}},
+        {IdxB,TokenB,InfoB=#tokenInfo{rules=RulesB, data=DataB}},
+        SpMode, NlMode, NlStr, _CommentLines, TokensETS) ->
     % Get the newline rule value between tokens
-    RulesA = InfoA#tokenInfo.rules,
-    RulesB = InfoB#tokenInfo.rules,
-    {WsMax,_,WsA,WsB} = ?PPR:get_token_rule_between(ws, RulesA, RulesB),
+    {WsMax,WsSum,WsA,WsB} = ?PPR:get_token_rule_between(ws, RulesA, RulesB),
     {NlMax,_,_,  _  } = ?PPR:get_token_rule_between(nl, RulesA, RulesB),
+    WsBetween = (DataA#lex.data)#token.postws ++ (DataB#lex.data)#token.prews,
     % Get the white space between tokens
     {LinesA,LinesB, NlCount,WsLen} = case SpMode of
             reset    -> split_tokens_ws("", WsA, WsB, fun(Lns) -> Lns end);
-            reformat -> split_tokens_ws(ws_between(TokenA, TokenB), WsA, WsB,
+            reformat -> split_tokens_ws(WsBetween, WsA, WsB,
                                         fun(Lns) -> trim_lines(Lns, both) end);
-            _        -> split_tokens_ws(ws_between(TokenA, TokenB), WsA, WsB,
+            _        -> split_tokens_ws(WsBetween, WsA, WsB,
                                         fun(Lns) -> Lns end)
         end,
     % Broke the current white spaces into lines
@@ -654,7 +753,7 @@ format_sp_nl({TokenA,InfoA}, {TokenB,InfoB}, SpMode, NlMode,
         % Only spaces
         (reset==SpMode orelse reformat==SpMode orelse check==SpMode) andalso
          0==NlCount andalso WsLen<WsMax ->
-            WsLenA = round(WsA/WsMax*(WsMax-WsLen)),
+            WsLenA = round(WsA/WsSum*(WsMax-WsLen)),
             WsLenB = (WsMax-WsLen)-WsLenA,
             {FirstLinesA++[LastLineA++lists:duplicate(WsLenA,32)],
              [lists:duplicate(WsLenB,32)++FirstLineB|LastLinesB],
@@ -664,19 +763,18 @@ format_sp_nl({TokenA,InfoA}, {TokenB,InfoB}, SpMode, NlMode,
             {LinesA, LinesB, NlCount}
     end,
     % Updete tokens white spaces
-    update_tokens_ws(TokenA, remove_lines1_ends(LinesA1),
-                     TokenB, remove_lines_ends(LinesB1)),
+    InfoB2 = update_tokens_ws({IdxA,TokenA,InfoA, remove_lines1_ends(LinesA1)},
+                {IdxB,TokenB,InfoB, remove_lines_ends(LinesB1)}, TokensETS),
     % Return difference between the line numbers of tokens
-    LineNumDiff.
-
+    {LineNumDiff, InfoB2}.
 
 
 
 %%% ----------------------------------------------------------------------------
 %%% White space partitions
 
-%%
-%%
+% Remove line end white spaces.
+% The first line handled in different mode.
 remove_lines1_ends([Line|Lines]) ->
     case string:strip(Line) of
         "" -> [Line|remove_lines_ends(Lines)];
@@ -689,23 +787,19 @@ remove_lines1_ends([Line|Lines]) ->
             end
     end.
 
-%%
-%%
+% Remove line end white spaces
 remove_lines_ends(Lines) -> trim_lines(Lines, right, true, false).
 
 
-%%
-%%
+% Check the `Line' is a comment line
 is_comment_lines(Lines) when is_list(Lines) ->
     lists:map(fun(TrimLn) -> ""=/=TrimLn end,
               trim_lines(Lines, both, false, true)).
 
-%%
-%%
+% Trim lines
 trim_lines(Lines, Mode) -> trim_lines(Lines, Mode, true, true).
 
-%%
-%%
+% Trim lines
 trim_lines(Lines, Mode, LineEnd, NotLine) when is_atom(Mode),
         is_boolean(LineEnd), is_boolean(NotLine) ->
     lists:map(fun(Ln) ->
@@ -726,8 +820,7 @@ trim_lines(Lines, Mode, LineEnd, NotLine) when is_atom(Mode),
         Lines).
 
 
-%%
-%%
+% Split white space between two following token
 split_tokens_ws(String, WsVal1, WsVal2, LinesFun) when is_list(String),
         is_integer(WsVal1), 0=<WsVal1, is_integer(WsVal2), 0=<WsVal2,
         is_function(LinesFun) ->
@@ -735,73 +828,71 @@ split_tokens_ws(String, WsVal1, WsVal2, LinesFun) when is_list(String),
     Lines = LinesFun(Lines0),
     WsLen = lists:foldl(fun(Ln, Acc) -> Acc+length(Ln) end, 0, Lines),
     {LinesA, LinesB} = case length(Lines) of
-        1 -> % Only spaces (Token1   Token2)
+        1 -> % Only spaces (Token1 Token2)
             WsLen1 = case WsVal1+WsVal2 of
                 0     -> 0;
                 WsSum -> round((WsVal1/WsSum)*WsLen)
             end,
             {Str1, Str2} = lists:split(WsLen1, hd(Lines)),
             {[Str1], [Str2]};
-        2 -> % One one line (Token1  % comment line\n   Token2)
+        2 -> % One one line (Token1 <comment>\n Token2)
             {[hd(Lines)], tl(Lines)};
-        _ -> % More lines (Token1 %comment1\n %comment1\n\n %comment2\n Token2)
+        _ -> % More lines (Token1 <comment>\n ... <comment>\n Token2)
             {L1,      LTail} = lists:split(1, Lines),
             {LMiddle, LLast} = lists:split(length(LTail)-1, LTail),
             CmLines = is_comment_lines(LMiddle),
-            case ?MISC:list_find(false, lists:reverse(CmLines)) of
-                {0,_} -> {L1, LMiddle++LLast};
+            % % Comments on middle are belong to the previous lines
+            % case ?MISC:list_find(false, lists:reverse(CmLines)) of
+                % {0,_} -> {L1, LMiddle++LLast};
+                % {N,_} ->
+                    % {LM1,LM2} = lists:split(length(LMiddle)-N+1,LMiddle),
+                    % {L1++LM1, LM2++LLast}
+            % end
+            % Comments on middle are belong to the follow lines
+            case ?MISC:list_find(false, CmLines) of
+                {0,_} -> {L1, LTail};
                 {N,_} ->
-                    {LM1,LM2} = lists:split(length(LMiddle)-N+1,LMiddle),
-                    {L1++LM1, LM2++LLast}
+                    case ?MISC:list_find(true, lists:nthtail(N,CmLines)) of
+                        {0,_} -> {L1++LMiddle, LLast};
+                        {M,_} ->
+                            {LM1,LM2} = lists:split(N+M-1,LMiddle),
+                            {L1++LM1, LM2++LLast}
+                    end
             end
     end,
     {LinesA,LinesB, NlCount, WsLen}.
 
 
+% Store the formatted white space between two following token
+update_tokens_ws({IdxA,TokenA,InfoA,LinesA}, {IdxB,TokenB,InfoB,LinesB},
+        TokensETS) when is_integer(IdxA), 0<IdxA, is_integer(IdxB), 0<IdxB ->
+    update_token_ws({IdxA,TokenA,InfoA}, {#token.postws,LinesA}, TokensETS),
+    update_token_ws({IdxB,TokenB,InfoB}, {#token.prews, LinesB}, TokensETS);
+update_tokens_ws({IdxA,TokenA,InfoA,LinesA}, {_IdxB,_TokenB,_InfoB,LinesB},
+        TokensETS) when is_integer(IdxA), 0<IdxA ->
+    update_token_ws({IdxA,TokenA,InfoA},
+                    {#token.postws, [LinesA|LinesB]}, TokensETS);
+update_tokens_ws({_IdxA,_TokenA,_InfoA,LinesA}, {IdxB,TokenB,InfoB,LinesB},
+        TokensETS) when is_integer(IdxB), 0<IdxB ->
+    update_token_ws({IdxB,TokenB,InfoB},
+                    {#token.prews, [LinesA|LinesB]}, TokensETS).
 
-%% @spec ws_between(Token1::node(), Token2::node()) -> string()
-%% @doc  White spaces between `Token1' and `Token2'. `Token2' must follow
-%%       `Token1'.
-ws_between(Token1, Token2) ->
-    Ws1 = case Token1 of
-        no -> "";
-        _  -> ((?Graph:data(Token1))#lex.data)#token.postws
-    end,
-    Ws2 = case Token2 of
-        no -> "";
-        _  -> ((?Graph:data(Token2))#lex.data)#token.prews
-    end,
-    Ws1 ++ Ws2.
+% Store the formatted white space of a token before or after the token
+update_token_ws({Idx,Token,TokInfo}, {TokenField,Lines}, TokensETS) ->
+    TokInfo2 = update_token_info(TokInfo, TokenField, Lines),
+    ets:insert(TokensETS, {Idx,Token,TokInfo2}),
+    TokInfo2.
+
+% Modify the TokenInfo of the token with the formatted white space of a token
+% before or after the token
+update_token_info(TokInfo, TokenField, Lines) ->
+    LexData1 = TokInfo#tokenInfo.data,
+    TokData1 = LexData1#lex.data,
+    TokData2 = setelement(TokenField, TokData1, lists:flatten(Lines)),
+    LexData2 = LexData1#lex{data=TokData2},
+    TokInfo#tokenInfo{data=LexData2}.
 
 
-%%
-%%
-update_tokens_ws(no, LinesA, TokenB, LinesB) when is_list(LinesA),
-        is_tuple(TokenB), is_list(LinesB) ->
-    LexDataB  = ?Graph:data(TokenB),
-    TokDataB  = LexDataB#lex.data,
-    TokDataB2 = TokDataB#token{prews=lists:flatten(LinesA++LinesB)},
-    LexDataB2 = LexDataB#lex{data=TokDataB2},
-    ?Graph:update(TokenB, LexDataB2);
-update_tokens_ws(TokenA, LinesA, no, LinesB) when is_tuple(TokenA),
-        is_list(LinesA), is_list(LinesB) ->
-    LexDataA  = ?Graph:data(TokenA),
-    TokDataA  = LexDataA#lex.data,
-    TokDataA2 = TokDataA#token{postws=lists:flatten(LinesA++LinesB)},
-    LexDataA2 = LexDataA#lex{data=TokDataA2},
-    ?Graph:update(TokenA, LexDataA2);
-update_tokens_ws(TokenA, LinesA, TokenB, LinesB) when is_tuple(TokenA),
-        is_tuple(TokenB), is_list(LinesA), is_list(LinesB) ->
-    LexDataA  = ?Graph:data(TokenA),
-    TokDataA  = LexDataA#lex.data,
-    TokDataA2 = TokDataA#token{postws=lists:flatten(LinesA)},
-    LexDataA2 = LexDataA#lex{data=TokDataA2},
-    LexDataB  = ?Graph:data(TokenB),
-    TokDataB  = LexDataB#lex.data,
-    TokDataB2 = TokDataB#token{prews=lists:flatten(LinesB)},
-    LexDataB2 = LexDataB#lex{data=TokDataB2},
-    ?Graph:update(TokenA, LexDataA2),
-    ?Graph:update(TokenB, LexDataB2).
 
 
 
@@ -810,8 +901,7 @@ update_tokens_ws(TokenA, LinesA, TokenB, LinesB) when is_tuple(TokenA),
 %% Line and charcter index operations
 
 
-%%
-%%
+% Find the line that contain the token and give back the index of the line
 get_token_line(Idx, DefaultLineIdx, LinesETS) ->
     Select = [{{'$1','$2'},
                [{'=<',{element,#lineInfo.tokenFirst,'$2'},Idx},
@@ -823,8 +913,7 @@ get_token_line(Idx, DefaultLineIdx, LinesETS) ->
     end.
 
 
-%%
-%%
+% Find the index of a token
 get_token_idx(Token, DefaultIdx, TokensETS) ->
     case ets:select(TokensETS, [{{'$1','$2','_'}, [{'==','$2',{const,Token}}],
             ['$1']}]) of
@@ -833,8 +922,7 @@ get_token_idx(Token, DefaultIdx, TokensETS) ->
     end.
 
 
-%%
-%%
+% Set the indices of the first and last token of the multiple line terms
 calc_multi_indices(#ppState{tokens=TokensETS, multiNl=MultiETS}) ->
     MultiRecs2 = ets:foldl(
         fun({Idx,MultiInfo=#multiInfo{tokenFirst=TokenA, tokenLast=TokenB}},
@@ -851,8 +939,7 @@ calc_multi_indices(#ppState{tokens=TokensETS, multiNl=MultiETS}) ->
         MultiRecs2).
 
 
-%%
-%%
+% Shift lines (Shift the line indices)
 shift_lines(FromLineIdx, Diff, _LinesETS) when
         is_integer(FromLineIdx), 0=<FromLineIdx, is_integer(Diff), 0==Diff ->
     ok;
@@ -871,25 +958,23 @@ shift_lines(FromLineIdx, Diff, LinesETS) when
         LineRecs).
 
 
-%%
-%% @ doc Recalculate the indices of the tail of line. Use the indices of the
-%%       first token to calculate the indices of the other tokens in the line
+% Recalculate the indices of the tail of line. Use the indices of the
+% first token to calculate the indices of the other tokens in the line
 recalc_indices_byfirst({Idx1,Idx2}, {LineIdx,LineFirstIdx},
-        TabSize, State=#ppState{}) ->
-    [{Idx1,Token1,Info1}] = ets:lookup(State#ppState.tokens, Idx1),
+        TabSize, State=#ppState{tokens=TokensETS}) ->
+    [{Idx1,_Token1,Info1}] = ets:lookup(TokensETS, Idx1),
     LastCharIdx1 = element(2,Info1#tokenInfo.charIdx),
-    LastPostWs1  = ((?Graph:data(Token1))#lex.data)#token.postws,
+    PostWs1      = ((Info1#tokenInfo.data)#lex.data)#token.postws,
     CharCnt1     = Info1#tokenInfo.lineCharCnt,
-    TokRecs = ets:select(State#ppState.tokens,
-        [{{'$1','_','_'}, [{'<',Idx1,'$1'},{'=<','$1',Idx2}], ['$_']}]),
-    calc_indices_tokrec(TokRecs, {LineIdx,LastCharIdx1,CharCnt1,LastPostWs1},
+    TokRecs = lists:usort(ets:select(TokensETS,
+        [{{'$1','_','_'}, [{'<',Idx1,'$1'},{'=<','$1',Idx2}], ['$_']}])),
+    calc_indices_tokrec(TokRecs, {LineIdx,LastCharIdx1,CharCnt1,PostWs1},
         {LineFirstIdx,Idx1}, {true,true}, TabSize, State).
 
 
-%%
-%% @doc  If `SetToken' is false the calculated indices won't be written back
-%%       into the `State'. If `SetToken' is false `IdxB' and `InfoB' is not
-%%       used.
+% Calculate textual indices of tokens.
+% If `SetToken' is false the calculated indices won't be written back
+% into the `State'. If `SetToken' is false `IdxB' and `InfoB' is not used.
 calc_indices_tokrec([], {LineIdxA,LastCharIdxA,CharCntA,PostWsA},
         {LineAFirstIdx,LineALastIdx}, {_SetToken,SetLine}, TabSize,
         State=#ppState{}) ->
@@ -897,7 +982,7 @@ calc_indices_tokrec([], {LineIdxA,LastCharIdxA,CharCntA,PostWsA},
     if
         SetLine ->
             calc_indices_tokrec_line({LineIdxA,LineAFirstIdx,LineALastIdx},
-                {CharCntA,LastCharIdxA,PostWsA}, TabSize, State),
+                {CharCntA,LastCharIdxA,PostWsA}, TabSize, State#ppState.lines),
             % Update the minimal/maximal line index
             LineIdxs = ?MISC:ets_keys(State#ppState.lines),
             ets:insert(State#ppState.etc, {minLineIdx, hd(LineIdxs)}),
@@ -908,13 +993,13 @@ calc_indices_tokrec([], {LineIdxA,LastCharIdxA,CharCntA,PostWsA},
     {LineIdxA,LastCharIdxA,CharCntA,PostWsA};
 calc_indices_tokrec([{IdxB,TokenB,InfoB}|TokRecs],
         {LineIdxA,LastCharIdxA,CharCntA,PostWsA}, {LineAFirstIdx,LineALastIdx},
-        {SetToken, SetLine}, TabSize, State=#ppState{tokens=TokensETS})
+        {SetToken, SetLine}, TabSize, State=#ppState{})
         when is_integer(LineIdxA), is_integer(LastCharIdxA), is_list(PostWsA),
         is_boolean(SetToken), is_boolean(SetLine) ->
     % Get token indices
     {LineIdxB, {FirstCharIdxB,LastCharIdxB}, CharCntB, PostWsB} =
         get_token_indices({LineIdxA, LastCharIdxA, CharCntA, PostWsA},
-                          TokenB, TabSize),
+                          InfoB, TabSize),
     % Calc line indices
     {LineBFirstIdx, LineBLastIdx} = if
         LineIdxA/=LineIdxB -> {IdxB,          IdxB};
@@ -925,14 +1010,14 @@ calc_indices_tokrec([{IdxB,TokenB,InfoB}|TokRecs],
         SetToken ->
             InfoB2 = InfoB#tokenInfo{charIdx={FirstCharIdxB, LastCharIdxB},
                                      lineCharCnt=CharCntB},
-            ets:insert(TokensETS, {IdxB, TokenB, InfoB2});
+            ets:insert(State#ppState.tokens, {IdxB, TokenB, InfoB2});
         true -> ok
     end,
     % Set line indices
     if
         SetLine andalso LineIdxA/=LineIdxB ->
             calc_indices_tokrec_line({LineIdxA,LineAFirstIdx,LineALastIdx},
-                {CharCntA,LastCharIdxA,PostWsA}, TabSize, State);
+                {CharCntA,LastCharIdxA,PostWsA}, TabSize, State#ppState.lines);
         true -> ok
     end,
     % Recursion
@@ -940,34 +1025,34 @@ calc_indices_tokrec([{IdxB,TokenB,InfoB}|TokRecs],
         {LineBFirstIdx, LineBLastIdx}, {SetToken,SetLine}, TabSize, State).
 
 
-%%
-%%
+% Calculate textual indices of a line and store those
 calc_indices_tokrec_line({LineIdx, LineFirstIdx, LineLastIdx},
-        {CharCnt, LastCharIdx, LastPostWs}, TabSize, State=#ppState{}) ->
+        {CharCnt, LastCharIdx, LastPostWs}, TabSize, LinesETS) ->
     % Calc the line length
     {Parts,_} = ?MISC:string_split(LastPostWs,?MISC:string_EOLs(),1,true,false),
     LineEndCharIdx = get_last_charIdx(LastCharIdx, hd(Parts), TabSize),
     % Insert line record
-    ets:insert(State#ppState.lines, {LineIdx,
+    ets:insert(LinesETS, {LineIdx,
         #lineInfo{tokenFirst=LineFirstIdx, tokenLast=LineLastIdx,
             charCnt=CharCnt, lengthVisible=LastCharIdx,
             lengthTotal=LineEndCharIdx}}).
 
 
-%%
-%%
-get_token_indices({LineIdxA,LastCharIdxA,CharCntA,PostWsA}, TokenB, TabSize) ->
+% Calculate textual indices of a token
+get_token_indices({LineIdxA,LastCharIdxA,CharCntA,PostWsA}, TokenInfoB,
+        TabSize) ->
     % Calculate the line index of TokenB
-    PreWsB  = ((?Graph:data(TokenB))#lex.data)#token.prews,
-    TextB   = ((?Graph:data(TokenB))#lex.data)#token.text,
-    PostWsB = ((?Graph:data(TokenB))#lex.data)#token.postws,
+    DataBdata = (TokenInfoB#tokenInfo.data)#lex.data,
+    PreWsB  = DataBdata#token.prews,
+    TextB   = DataBdata#token.text,
+    PostWsB = DataBdata#token.postws,
     {Parts,NlCount} = ?MISC:string_lines(PostWsA++PreWsB),
     TextLengthB = length(TextB),
-    {LineIdxB,CharIdxB0,CharCntB} = case NlCount of
+    {LineIdxB,CharIdxB0,CharCntB} = if
             % continue the current line
-            0 -> {LineIdxA,         LastCharIdxA, CharCntA+TextLengthB};
+            0==NlCount -> {LineIdxA, LastCharIdxA, CharCntA+TextLengthB};
             % start a new line
-            _ -> {LineIdxA+NlCount, 0,            TextLengthB}
+            true -> {LineIdxA+NlCount, 0, TextLengthB}
         end,
     % Calculate inedex of last visible character of TokenB
     FirstCharIdxB = get_last_charIdx(CharIdxB0, lists:last(Parts), TabSize) + 1,
@@ -976,8 +1061,7 @@ get_token_indices({LineIdxA,LastCharIdxA,CharCntA,PostWsA}, TokenB, TabSize) ->
     {LineIdxB, {FirstCharIdxB,LastCharIdxB}, CharCntB, PostWsB}.
 
 
-%%
-%%
+% Get the textual index of the last character of a string
 get_last_charIdx(PrevCharIdx, String, TabSize) ->
     lists:foldl(
         fun(9,ChIdx) -> ChIdx + (TabSize-(ChIdx rem TabSize));
@@ -994,10 +1078,8 @@ get_last_charIdx(PrevCharIdx, String, TabSize) ->
 %%% ============================================================================
 %%% Indentation downpropagation and token collections
 
-
-
-%%
-%%
+% Down propagate the indentation informations in the syntax tree and collect
+% the token formatting rules
 downProp(Node1, Node2, Config=#ppConfig{}, State=#ppState{}) ->
     % Check syntax subtree and get the first/last token
     {{Node1RealFirst,Node2RealLast}, {HasPrevLine, HasNextLine},
@@ -1005,10 +1087,9 @@ downProp(Node1, Node2, Config=#ppConfig{}, State=#ppState{}) ->
     % Set initial values for the Pretty Printer
     State1 = State#ppState{tokenFrom=Node1RealFirst, tokenTo=Node2RealLast,
                            hasPrevLine=HasPrevLine, hasNextLine=HasNextLine},
-    ets:insert(State1#ppState.etc, {tokensCount, 0}),
     % Down propagate the indentation informations
-    downProp_(FileNode, #indent{level=0,diff=0}, PathDown1,PathDown2,
-        {path,path}, 0, Config,State1),
+    downProp_({downProp_nodeInfo(FileNode), 0}, {PathDown1,PathDown2},
+              {path,path}, 0, Config,State1),
     % Check macro substituations
     % case get_part_substs(State1#ppState.subst) of
         % [] -> ok;
@@ -1017,12 +1098,11 @@ downProp(Node1, Node2, Config=#ppConfig{}, State=#ppState{}) ->
     % Get the indices of first and last token where need to modify spaces
     Idx1 = case ets:lookup(State1#ppState.etc, tokenFrom) of
         [{tokenFrom,I1}] -> I1;
-        _ -> 1
+        _                -> 1
     end,
-    [{tokensCount,Cnt}] = ets:lookup(State1#ppState.etc, tokensCount),
     Idx2 = case ets:lookup(State1#ppState.etc, tokenTo) of
         [{tokenTo,I2}] -> I2;
-        _ -> Cnt
+        _              -> ets:info(State#ppState.tokens, size)
     end,
     % Calculate the indices of the firdt/last tokens of the multiple line terms
     calc_multi_indices(State1),
@@ -1048,7 +1128,6 @@ check_subtree(Node1, Node2) ->
             throw(?LocalError(not_token_leaves,[Node1RealFirst,Node2RealLast]));
         _    -> ok
     end,
-    % referl_draw_graph:draw_graph("ef20_5e.dot", synlex),
     % Find the syntax tree part of the real tokens
     {HasPrevLine, RealFirstToken} = case reallineBegin(Node1RealFirst, 0) of
         {RealLnFirst,  no,             _} -> {false, RealLnFirst   };
@@ -1061,7 +1140,7 @@ check_subtree(Node1, Node2) ->
     % Calc the boundary down pathes from the root
     PathDown1  = ?Syn:root_path(RealFirstToken, left),
     PathDown2  = ?Syn:root_path(RealLastToken, right),
-    FileNode = element(2,hd(PathDown1)),
+    FileNode   = element(2,hd(PathDown1)),
     PathDown1B = path_down(tl(PathDown1), FileNode, []),
     PathDown2B = path_down(tl(PathDown2), FileNode, []),
     % Return
@@ -1076,26 +1155,49 @@ path_down([{Tag,ChildNode}|Path], ParentNode, PathDown) ->
     path_down(Path, ChildNode, [{Tag,Idx}|PathDown]).
 
 
-%%
-%%
-downProp_(Node,NodeInd, PathDown1,PathDown2, {Begin,End}, SynLevel,
-        Config=#ppConfig{}, State=#ppState{}) ->
-    % Determine the childerns where  must down propagate the indentation
+% Find the partially subsituated macros
+% get_part_substs(SubStTableID) ->
+    % ets:foldl(fun({SubStNode, TokCnt, FoundTok}, Wrongs) ->
+            % if
+                % FoundTok/=TokCnt ->
+                    % [{SubStNode,(?Graph:data(SubStNode))#lex.data,
+                      % TokCnt,FoundTok} | Wrongs];
+                % true -> Wrongs
+            % end
+        % end,
+        % [], SubStTableID).
+
+
+% Return informations about `Node' to the following investigations.
+downProp_nodeInfo(Node) ->
+    {Node, ?Graph:class(Node), ?Graph:data(Node)}.
+
+
+% Down propagate the indentation informations in the syntax tree and collect
+% the token formatting rules
+downProp_({{Parent,ParentClass,ParentData},ParLevel},
+        {PathDown1,PathDown2}, {Begin,End}, SynLevel,
+        Config=#ppConfig{indent=InRules, ws_nl=WsNlRules, longNl=LongRules,
+        multiNl=MultiRules}, State=#ppState{subst=SubStETS}) ->
+    % Determine the childerns where  must downpropagate the indentation
     % informations
-    ChildTNIs = ?GR_UTILS:edges_idx(Node, forward, ?Syn:children(Node)),
-    Idx1 = ?PPR:get_child_idx({Begin,PathDown1}, from, ChildTNIs, 1),
-    Idx2 = ?PPR:get_child_idx({End,  PathDown2}, to,   ChildTNIs, Idx1),
-    DownChildTNIs = if
-        Idx1=<Idx2 andalso 0<Idx1 andalso 0<Idx2 ->
-            lists:sublist(ChildTNIs, Idx1, Idx2-Idx1+1);
-        true -> []
-    end,
-    % Create parameters for recursive calls
+    ChildTNIs   = ?Syn:children_idx(Parent),
+    ChildLength = length(ChildTNIs),
+    Idx1 =
+        ?PPR:find_child_path(Begin,PathDown1,Parent,{ChildTNIs,ChildLength},1),
+    Idx2 =
+        ?PPR:find_child_path(End,PathDown2,Parent,{ChildTNIs,ChildLength},Idx1),
+    % Downpropagate the indentation informations
+    ChildTNIIs = ?PPR:get_indent({{Parent,ParentClass,ParentData},ParLevel},
+                                 {ChildTNIs,ChildLength}, InRules),
+    % Cut required part
+    DownChildTNIIs = lists:sublist(ChildTNIIs, Idx1, Idx2-Idx1+1),
+    % Create parameters to recursive calls
     PathDown1tail = case PathDown1     of [] -> [];    _  -> tl(PathDown1) end,
     PathDown2tail = case PathDown2     of [] -> [];    _  -> tl(PathDown2) end,
     Begin_        = case PathDown1tail of [] -> first; _  -> Begin         end,
     End_          = case PathDown2tail of [] -> last;  _  -> End           end,
-    DownModes = case length(DownChildTNIs) of
+    DownModes = case length(DownChildTNIIs) of
         0 -> [];
         1 -> [{Begin_,End_}];
         2 -> [{Begin_,last},{first,End_}];
@@ -1103,107 +1205,94 @@ downProp_(Node,NodeInd, PathDown1,PathDown2, {Begin,End}, SynLevel,
     end,
     % Propagate down the indentations recursivelly
     lists:foldl(
-        fun({Tag,Child,_}, [Mode|Modes]) ->
-            ChildInd = downProp_getChildInd(Node,NodeInd, Tag,Child,
-                                            Config#ppConfig.indent),
-            case downProp_pair(Node, Child,ChildInd, SynLevel,
-                {Config#ppConfig.ws_nl, Config#ppConfig.longNl,
-                 Config#ppConfig.multiNl}, State) of
+        fun({_Tag,Child,_,ChildInd}, [Mode|Modes]) ->
+            ChildInfo = downProp_nodeInfo(Child),
+            downProp_tok_rules({Parent,ParentClass,ParentData},
+                {ChildInfo,ChildInd}, SynLevel,
+                {WsNlRules, LongRules, MultiRules}, State),
+            case downProp_down(ChildInfo, SubStETS) of
                 true ->
-                    downProp_(Child,ChildInd, PathDown1tail,PathDown2tail,Mode,
+                    downProp_({ChildInfo, ChildInd#indent.level},
+                        {PathDown1tail,PathDown2tail}, Mode,
                         SynLevel+1, Config, State);
                 _ -> ok
             end,
             Modes
         end,
         DownModes,
-        DownChildTNIs).
+        DownChildTNIIs).
 
 
-%%
-%%
-downProp_getChildInd(Parent,ParentInd, LinkTag,Child, IndentRules) ->
-    % Set indentations and return true if must go into recursion on child
-    Diff = ?PPR:get_indent_diff(IndentRules, Parent,Child,LinkTag),
-    #indent{level=ParentInd#indent.level+Diff, diff=Diff}.
-
-
-%%
-%%
-downProp_pair(ParentNode, ChildNode,ChildInd, SynLevel,
-        {WsNlRules, LongNlRules, MultiNlRules}, State=#ppState{}) ->
-    % Get child class and data
-    ChildClass = ?Graph:class(ChildNode),
-    ChildData  = ?Graph:data(ChildNode),
-    % If the node is a real token ...
-    case lex==ChildClass andalso token==(ChildData#lex.type) andalso
-            virtual/=(ChildData#lex.data) of
-        true ->
-            % ... add real tokens to the list with indent and rules...
-            [{tokensCount,TokenCnt0}] =
-                ets:lookup(State#ppState.etc, tokensCount),
-            ChildIdx = TokenCnt0+1,
-            ets:insert(State#ppState.etc, {tokensCount, ChildIdx}),
-            ets:insert(State#ppState.tokens,
-                {ChildIdx,ChildNode,
-                 #tokenInfo{indent=ChildInd,
-                            rules=?PPR:merge_token_defrules(
-                                ?PPR:get_token_rules(WsNlRules,
-                                                     ChildNode, ParentNode))
-                            }
-                }),
-            % ... and find the index of the first and last real token ...
-            case ChildNode==State#ppState.tokenFrom of
-                true -> ets:insert(State#ppState.etc, {tokenFrom, ChildIdx});
-                _    -> ok
-            end,
-            case ChildNode==State#ppState.tokenTo of
-                true -> ets:insert(State#ppState.etc, {tokenTo, ChildIdx});
-                _    -> ok
-            end,
-            % ... and collect line breakers with rules
-            % long line breakers
-            case ?PPR:merge_token_defrules(?PPR:get_token_rules(
-                    LongNlRules, ChildNode, ParentNode)) of
-                [] -> ok;
-                LongRules -> ets:insert(State#ppState.longNl,
-                                        {ChildIdx, SynLevel, LongRules})
-            end,
-            % line breakers for multiple line terms
-            case ?PPR:merge_token_defrules(?PPR:get_token_rules(
-                    MultiNlRules, ChildNode, ParentNode)) of
-                [] -> ok;
-                MultiRules ->
-                    RealFirst = realtoken_first(ParentNode),
-                    RealLast  = realtoken_last(ParentNode),
-                    ets:insert(State#ppState.multiNl,
-                        {ChildIdx, #multiInfo{rules=MultiRules,
-                         tokenFirst=RealFirst, tokenLast=RealLast} })
-            end;
-        _ -> ok
-    end,
+% If the token is a macro substituation and it is founded first go into
+% recursion otherwise do not.
+downProp_down({Child,lex,ChildData}, SubStETS) ->
     % If the token is a macro substituation and ...
-    case ChildClass of
-        lex ->
-            case lists:member(ChildData#lex.type, [subst, incl]) of
+    case lists:member(ChildData#lex.type, [subst, incl]) of
+        true ->
+            case ets:member(SubStETS, Child) of
+                % ... it is already founded just increase the counter
                 true ->
-                    case ets:lookup(State#ppState.subst, ChildNode) of
-                        % ... it is already founded just increase the counter
-                        [{ChildNode,TokCnt,FoundTok}] ->
-                            ets:insert(State#ppState.subst,
-                                {ChildNode,TokCnt,FoundTok+1}),
-                            false;
-                        % ... it is founded first go into recursion on childs
-                        [] ->
-                            TokCnt = length(
-                                ?Graph:path(ChildNode, [{llex,back}])),
-                            ets:insert(State#ppState.subst,
-                                {ChildNode,TokCnt,1}),
-                            true
-                    end;
-                _ -> 0<length(?Graph:path(ChildNode, [llex]))
+                    % ets:update_counter(SubStETS, Child, {3,1}),
+                    false;
+                % ... it is founded first go into recursion
+                false ->
+                    % TokCnt = length(?Graph:path(Child, [{llex,back}])),
+                    % ets:insert(SubStETS, {Child,TokCnt,1}),
+                    ets:insert(SubStETS, {Child,undefined,1}),
+                    true
             end;
-        _ -> true
+        false -> [] /= ?Graph:path(Child, [llex])
+    end;
+downProp_down({_Child,_ChildClass,_ChildData}, _SubStETS) ->
+    true.
+
+
+% Find the token formatting rules for the token and store the relevant
+% informations about the syntactical envinronment of the token
+downProp_tok_rules({Parent,ParentClass,ParentData},
+        {{Child,ChildClass,ChildData},ChildInd}, SynLevel,
+        {WsNlRules, LongNlRules, MultiNlRules},
+        #ppState{tokens=TokensETS, tokenFrom=TokenFrom, tokenTo=TokenTo,
+                 etc=EtcETS, longNl=LongETS, multiNl=MultiETS}) ->
+    % If the node is a real token ...
+    if
+        lex==ChildClass andalso token==(ChildData#lex.type) andalso
+        virtual/=(ChildData#lex.data) ->
+            % get the diffrent rules of token
+            WR = ?PPR:get_token_rules({Parent,ParentClass,ParentData},
+                        {Child,ChildClass,ChildData}, WsNlRules),
+            LR = ?PPR:get_token_rules({Parent,ParentClass,ParentData},
+                        {Child,ChildClass,ChildData}, LongNlRules),
+            MR = ?PPR:get_token_rules({Parent,ParentClass,ParentData},
+                        {Child,ChildClass,ChildData}, MultiNlRules),
+            % ... add real tokens to the list with indent and rules...
+            ChildIdx = 1 + ets:info(TokensETS, size),
+            ets:insert(TokensETS, {ChildIdx,Child,
+                       #tokenInfo{indent=ChildInd, rules=WR, data=ChildData}}),
+            % ... and find the index of the first and last real token ...
+            if
+                Child==TokenFrom -> ets:insert(EtcETS, {tokenFrom, ChildIdx});
+                true -> ok
+            end,
+            if
+                Child==TokenTo -> ets:insert(EtcETS, {tokenTo, ChildIdx});
+                true -> ok
+            end,
+            % ... and add line breaker rules
+            if
+                []/=LR -> ets:insert(LongETS, {ChildIdx,SynLevel,LR});
+                true   -> ok
+            end,
+            % ... and add line breaker rules for multiple line terms
+            if
+                []/=MR ->
+                    RF = realtoken_first(Parent),
+                    RL = realtoken_last(Parent),
+                    ets:insert(MultiETS, {ChildIdx,
+                            #multiInfo{rules=MR, tokenFirst=RF, tokenLast=RL}});
+                true -> ok
+            end;
+        true -> ok
     end.
 
 
@@ -1231,7 +1320,7 @@ realtoken_down_(Node, DownFun) ->
     Class = ?Graph:class(Node),
     case lists:member(Class, [file,form,clause,expr,lex]) of
         false -> throw(?LocalError(not_has_tokens, [Node]));
-        _     ->
+        true  ->
             case ?Syn:children(Node) of
                 [] when Class/=lex ->
                     throw(?LocalError(not_has_tokens, [Node]));
@@ -1286,14 +1375,12 @@ realtoken_neighbour_([{_,Parent}|Parents], FirstLeaf, DirFun, DownFun) ->
 %% Token lines
 
 
-%%
-%%
+% Collect the real tokens in the real line before the `Token'.
 reallineBegin(Token, CollectFrom) ->
     xlnxtok(Token, fun realtoken_prev/1, fun(L) when is_list(L) -> L end,
             CollectFrom, 1, []).
 
-%%
-%%
+% Collect the real tokens in the real line after the `Token'.
 reallineEnd(Token, CollectFrom) ->
     xlnxtok(Token, fun realtoken_next/1, fun lists:reverse/1,CollectFrom,1,[]).
 
@@ -1302,15 +1389,32 @@ xlnxtok(Token, NeighFun, DirFun, CollectFrom, Count, Line) ->
     NeighToken = NeighFun(Token),
     [Token1,Token2] = DirFun([NeighToken,Token]),
     {Idx,_} = ?MISC:string_strs(ws_between(Token1,Token2), ?MISC:string_EOLs()),
-
-    if
-        0<CollectFrom andalso CollectFrom=<Count -> NewLine = [Token|Line];
-        true                                     -> NewLine = Line
+    % If we reach the first token, that we need to collect, collect it.
+    NewLine = if
+        0<CollectFrom andalso CollectFrom=<Count -> [Token|Line];
+        true                                     -> Line
     end,
-
+    % If we are still in same line check the next token else we are done.
     if
         no/=NeighToken andalso 0==Idx ->
-            xlnxtok(NeighToken, NeighFun, DirFun, CollectFrom, Count+1, NewLine);
+            xlnxtok(NeighToken,NeighFun, DirFun, CollectFrom, Count+1, NewLine);
         true ->
             {Token, NeighToken, DirFun(NewLine)}
     end.
+
+
+%% @spec ws_between(Token1::node(), Token2::node()) -> string()
+%% @doc  White spaces between `Token1' and `Token2'. `Token2' must follow
+%%       `Token1'.
+ws_between(Token1, Token2) ->
+    Ws1 = case Token1 of
+        no -> "";
+        _  -> ((?Graph:data(Token1))#lex.data)#token.postws
+    end,
+    Ws2 = case Token2 of
+        no -> "";
+        _  -> ((?Graph:data(Token2))#lex.data)#token.prews
+    end,
+    Ws1 ++ Ws2.
+
+

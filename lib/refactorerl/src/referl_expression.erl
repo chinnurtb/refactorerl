@@ -1,27 +1,27 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module implements queries about expressions.
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_expression).
--vsn("$Rev: 2931 $").
+-vsn("$Rev: 3185 $").
 
 -export([type/1, kind/1, value/1, is_expr/1]).
 -export([clause/0, attrib_form/0, children/0, child/1, parent/0]).
@@ -32,7 +32,7 @@
 -export([modq/0, add_modq/2, del_modq/1, upd_modq/2, expand_funexpr/1]).
 
 -export([top_sub/0, sub/0, top_deep_sub/0, deep_sub/0, sup/0, is_top/1]).
--export([is_same_expr/1]).
+-export([is_same_expr/1, is_leaf/1]).
 -export([side_effect/1]).
 
 
@@ -392,9 +392,9 @@ side_effect(Expr)->
     case {SideEffs =/= [], UnKnown =/= [], DirtyFunc =/= []} of
         {true, _, _} -> true;
         {_, true, _} -> true;
-    %% when we can not determine whether the expression has a side-effect,
+    %% when we cannot determine whether the expression has a side-effect,
     %% we handle this as it has
-    %% TODO: ask the user wheather it has a side-effect
+    %% TODO: ask the user whether it has a side-effect
         {_, _, true} -> true;
         {_, _,    _} -> false
     end.

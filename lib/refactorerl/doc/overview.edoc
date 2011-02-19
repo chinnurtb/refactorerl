@@ -1,6 +1,6 @@
 -*- coding: latin-1 -*-
 @title The RefactorErl application
-@version 0.6.1
+@version 0.6.2
 @copyright 2006-2009 Eötvös Loránd University
 @doc
 == Storage layer ==

@@ -1,39 +1,42 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Graph storage server. This is a mnesia based implementation of
 %%% the semantical graph server interface.
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
+%%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(referl_graph).
--vsn("$Rev: 2211 $").
+-vsn("$Rev: 3553 $").
 -behaviour(gen_server).
 -include("refactorerl.hrl").
+-include("referl_db.hrl").
 -include_lib("stdlib/include/qlc.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
 
 -define(NODETAG, '$gn').
+-define(IS_NODE(Node), element(1, Node) =:= ?NODETAG).
+
 -define(TIMEOUT, 60000).
 
--define(IS_NODE(Node), element(1, Node) =:= ?NODETAG).
 
 %%% ============================================================================
 %%% Exports
@@ -62,6 +65,8 @@
 
 %% @type path() = [PathElem]
 %%       PathElem = Tag | {Tag, Index} | {Tag, Filter} | {intersect, Node, Tag}
+%%                | Union | {PathElem | path(), unique}
+%%       Union = [PathElem | path()]
 %%       Tag = atom() | {atom(), back}
 %%       Index = integer() | last | {integer(), last} | {integer(), integer()}
 %%       Filter = {Filter, and, Filter} | {Filter, or, Filter}
@@ -76,7 +81,8 @@
 %%       Link = {Tag::atom(), ClassName::atom()}.
 %%  Describes the schema of the graph.
 
-%% Client functions
+%%% ============================================================================
+%%% Client functions
 
 %% @spec start_link() -> {ok, Pid} | {error, Error}
 %% @doc Starts the server. There will be no initial schema information,
@@ -142,6 +148,7 @@ mklink(From, Tag, To) when ?IS_NODE(From), ?IS_NODE(To),
                            is_atom(Tag); is_tuple(Tag) ->
     case gen_server:call(?GRAPH_SERVER, {mklink, From, Tag, To}, ?TIMEOUT) of
         bad_link -> erlang:error(bad_link, [From,Tag,To]);
+        bad_node -> erlang:error(bad_node, [From,Tag,To]);
         Reply    -> Reply
     end.
 
@@ -237,71 +244,25 @@ clean()->
 %%% links.
 
 %% Callback functions
--define(NAME, backup).
-
-%% Class table: stores the attribute names for every node class
--record(class, {name, attribs}).
-%% Target table: stores the link target class name for every starting class,
-%% link tag pair
--record(target, {start, next}).
-%% Nextid table: stores the next available ID for every node class
--record(nextid, {class, id}).
 
 %% @private
 init(_) ->
     process_flag(trap_exit, true),
-    %% When mnesia is started the first time, a ram only empty schema is
-    %% created. This is the clue that we should start with schema
-    %% initialisation.
-    case mnesia:table_info(schema, storage_type) of
-        ram_copies ->
-            %% The schema should be stored on disc
-            mnesia:change_table_copy_type(schema, node(), disc_copies),
-            %% In a new database, some tables are always created:
-            %% node class table
-            mnesia:create_table(
-              class,
-              [{attributes, record_info(fields, class)},
-               {disc_copies, [node()]}]),
-            %% node id table
-            mnesia:create_table(
-              nextid,
-              [{attributes, record_info(fields, nextid)},
-               {disc_copies, [node()]}]),
-            %% link target class table
-            mnesia:create_table(
-              target,
-              [{attributes, record_info(fields, target)},
-               {disc_copies, [node()]}]),
-            %% checkpoint counter table (needs a better name)
-            mnesia:create_table(counter, [{ram_copies,[node()]}]),
-            init_counter(),
-            %% no_schema means we should create more tables to store the graph
-            %% itself
-            {ok, no_schema};
-        disc_copies ->
-            %% has_schema means that the existing schema should be checked
-            %% against the needed schema
-            mnesia:wait_for_tables([counter],infinity),
-            delete_end_backups({1,up}),
-            init_counter(),
-            {ok, has_schema}
+    case referl_db:init() of
+        no_schema  -> {ok, no_schema};
+        has_schema -> {ok, has_schema}
     end.
 
 %% @private
 handle_cast({schema, Schema}, no_schema) ->
-    init_schema(Schema),
-    mnesia:dirty_write(#class{name='$hash', attribs=erlang:phash2(Schema)}),
+    referl_db:set_schema(Schema),
     {noreply, has_schema};
 
 handle_cast({schema, Schema}, has_schema) ->
-    mnesia:wait_for_tables([class, target, counter], infinity),
-    [#class{attribs=OldHash}] = mnesia:dirty_read(class, '$hash'),
-    NewHash = erlang:phash2(Schema),
-    if
-        OldHash =:= NewHash ->
-            {noreply, has_schema};
+    case referl_db:check_schema(Schema) of
         true ->
+            {noreply, has_schema};
+        false ->
             error_logger:error_report(
               [{module, ?MODULE},
                {message,
@@ -310,10 +271,7 @@ handle_cast({schema, Schema}, has_schema) ->
     end;
 
 handle_cast({reset_schema}, _) ->
-    error_logger:info_msg("Resetting database schema, restart follows\n"),
-    [ mnesia:delete_table(Tab) || Tab <- mnesia:system_info(tables),
-                                  Tab =/= schema],
-    mnesia:change_table_copy_type(schema, node(), ram_copies),
+    referl_db:reset_schema(),
     {stop, normal, no_schema}.
 
 %% @private
@@ -362,8 +320,10 @@ handle_call({mklink, {?NODETAG, FCl, FId},
         {Tag, Ind}            -> ok;
         Tag when is_atom(Tag) -> Ind = last
     end,
+    FEx = node_exists(FCl, FId),
+    TEx = node_exists(TCl, TId),
     case mnesia:dirty_read(target, {FCl, Tag}) of
-        [#target{next=TCl}] ->
+        [#target{next=TCl}] when FEx, TEx ->
             Absent = link_index(FCl, FId, Tag, TId) =:= [],
             if
                 not Absent   -> ok;
@@ -371,6 +331,8 @@ handle_call({mklink, {?NODETAG, FCl, FId},
                 true         -> insert_link(linktab(FCl), FId, TId, Tag, Ind)
             end,
             {reply, ok, S};
+        _ when not FEx; not TEx ->
+            {reply, bad_node, S};
         _ ->
             {reply, bad_link, S}
     end;
@@ -396,8 +358,9 @@ handle_call({links, {?NODETAG, Class, Id}}, _F, S) ->
 
 handle_call({path, {?NODETAG, Class, Id}, Path}, _F, S) ->
     try compile_path(Path, Class, [Id]) of
-        Query ->
-            Reply = mnesia:async_dirty(fun()-> qlc:e(Query) end),
+        {ResultClass, Q} ->
+            Query = qlc:q([{?NODETAG, ResultClass, Id_} || Id_ <- Q]),
+            Reply = mnesia:async_dirty(fun qlc:e/1, [Query]),
             {reply, Reply, S}
     catch
         throw:Msg ->
@@ -429,45 +392,23 @@ handle_call({info}, _F, S) ->
      S};
 
 handle_call({backup}, _F, S) ->
-    {reply, checkpoint(), S};
+    {reply, referl_db:checkpoint(), S};
 
 handle_call({restore, Count}, _F, S) ->
-    restore_checkpoint(Count),
+    referl_db:restore_checkpoint(Count),
     {reply, restore, S};
 
 handle_call({undo}, _F, S) ->
-    IdAkt = mnesia_idakt(),
-    Id    = mnesia_id(),
-    if
-        IdAkt > 0 ->
-            restore_checkpoint(Id),
-            mnesia:dirty_write({counter, 1, IdAkt - 1}),
-            Reply = undo_is_ok;
-        true ->
-            Reply = invalid_checkpoint_number
-    end,
-    {reply, Reply, S};
+    {reply, referl_db:undo(), S};
 
 handle_call({redo}, _F, S) ->
-    IdAkt = mnesia_idakt(),
-    Id    = mnesia_id(),
-    if
-        IdAkt < Id ->
-            restore_checkpoint(IdAkt + 1),
-            mnesia:dirty_write({counter, 1, IdAkt + 1}),
-            Reply = redo_is_ok;
-        true ->
-            Reply = invalid_checkpoint_number
-    end,
-    {reply, Reply, S};
+    {reply, referl_db:redo(), S};
 
 handle_call({clean}, _F, S) ->
-    Id    = mnesia_id(),
-    {reply, delete_all_backups(Id), S}.
+    {reply, referl_db:delete_all_backups(), S}.
 
 %%% ----------------------------------------------------------------------------
 %%% Implementation details
-
 
 delete_forward_links(Class, Id) ->
     Tags = mnesia:dirty_select(
@@ -546,114 +487,37 @@ remove_link(OldLinks, From, To, Tag) ->
             exit({multiple_links, Tag})
     end.
 
+to_path(Elem) when is_list(Elem) -> Elem;
+to_path(Elem) when is_atom(Elem) orelse is_tuple(Elem) -> [Elem].
 
 
-%% Returns the number of checkpoints in the system.
-checkpoint_count() ->
-    mnesia_id() + 1.
-
-%%
-name(Name, Number) ->
-    atom_to_list(Name) ++ "." ++ integer_to_list(Number).
-
-
-mnesia_idakt() ->
-    [{_, _, IdAkt}] = mnesia:dirty_read({counter,1}),
-    IdAkt.
-
-mnesia_id() ->
-    [{_, _, Id}] = mnesia:dirty_read({counter,0}),
-    Id.
-
-%%% ----------------------------------------------------------------------------
-%%% Checkpoints
-
-init_counter() ->
-    mnesia:dirty_write({counter,0,0}),
-    mnesia:dirty_write({counter,1,0}).
-
-checkpoint()->
-    %%temporary function call
-    delete_all_backups(1),
-    Name  = name(backup, 1),%checkpoint_count()),
-    %checkpoint_number/0 is need to create more backup files
-    Tab   = mnesia:system_info(tables),
-    Args  = [{name,Name},{max, Tab},
-             {allow_remote,true},{ram_overrides_dump,true}],
-    catch mnesia:activate_checkpoint(Args),
-    Dir   = mnesia:system_info(directory),
-    File  = filename:absname_join(Dir,Name),
-    catch mnesia:backup_checkpoint(Name,File),
-    mnesia:deactivate_checkpoint(Name),
-    mnesia:dirty_write({counter, 0, checkpoint_count()}),
-    IdAkt = mnesia_idakt(),
-    mnesia:dirty_write({counter, 1, IdAkt + 1}),
-    {ok, Name}.
-
-delete_all_backups(0)->
-   mnesia:dirty_write({counter, 0, 0}),
-   mnesia:dirty_write({counter, 1, 0}),
-   {ok, backups_deleted};
-delete_all_backups(Id)->
-   Name = name(backup, Id),
-   file:delete(filename:absname_join(mnesia:system_info(directory),Name)),
-   delete_all_backups(Id - 1).
-
-
-delete_end_backups({Id, up})->
-    Name      = name(backup, Id),
-    Directory = mnesia:system_info(directory),
-    File      = filename:absname_join(Directory,Name),
-    case filelib:is_file(File) of
-        true ->
-            file:delete(
-              filename:absname_join(mnesia:system_info(directory),Name)),
-            Dir = up;
-        _ ->
-            Dir = down
-    end,
-    delete_end_backups({Id + 1, Dir});
-delete_end_backups({Id, down})->
-    {Id - 1, deleted}.
-
-
-restore_checkpoint(Count)->
-    Name = name(?NAME, Count),
-    Dir  = mnesia:system_info(directory),
-    File = filename:absname_join(Dir,Name),
-    mnesia:dirty_write({counter, 1, Count + 1}),
-    catch mnesia:restore(File,[{recreate_tables, []},
-                               {skip_tables, [counter]}]).
-
-
-init_schema([]) ->
-    ok;
-init_schema([{Class, Attribs, Links} | Tail]) ->
-    if
-        Class =/= root ->
-            mnesia:create_table(
-              Class,
-              [{attributes, [id, attribs]},
-               {disc_copies, [node()]}]);
-        true -> ok
-    end,
-
-    mnesia:create_table(
-        linktab(Class),
-        [{attributes, [id, ind, to]},
-         {disc_copies, [node()]},
-         {index, [to]},
-         {type,bag}]),
-
-    mnesia:dirty_write(#class{name=Class, attribs=Attribs}),
-    [ mnesia:dirty_write(#target{start={Class, Tag}, next=To}) ||
-        {Tag, To} <- Links],
-
-    init_schema(Tail).
+node_exists(root, 0)   -> true;
+node_exists(Class, Id) -> mnesia:dirty_read(Class, Id) =/= [].
 
 compile_path([], Class, Query) ->
     %%error_logger:info_msg("~s~n", [qlc:info(Query)]),
-    qlc:q([ {?NODETAG, Class, Id} || Id <- Query]);
+    {Class, Query};
+
+compile_path([ElemList | Rest], Class, Query) when is_list(ElemList) ->
+    %% [cache] option for the previous query cannot help here, so we
+    %% evaluate the result before the processing of the union
+    TmpResult = mnesia:async_dirty(fun qlc:e/1, [Query]),
+    Compiled = [compile_path(to_path(Elem), Class, TmpResult) ||
+                   Elem <- ElemList],
+    {Classes, Queries} = lists:unzip(Compiled),
+    Result = qlc:append(Queries),
+    [NextClass|_] = Classes,
+    case lists:all(fun(C) -> C == NextClass end, Classes) of
+        true ->
+            compile_path(Rest, NextClass, Result);
+        false ->
+            throw(bad_union)
+    end;
+
+compile_path([{Elem, unique} | Rest], Class, Query) ->
+    {NextClass, Q} = compile_path(to_path(Elem), Class, Query),
+    Result = qlc:q([Id || Id <- Q], [unique]),
+    compile_path(Rest, NextClass, Result);
 
 compile_path([S={intersect, {?NODETAG, SCl, SId}, Step} | Rest],
              Class, Query) ->
@@ -737,7 +601,7 @@ compile_path([Elem | Rest], Class, Query) ->
                 [#class{attribs=Attribs}] =
                     mnesia:dirty_read(class, NextClass),
                 compile_filter(Attribs, NextClass, Filter)
-    end,
+        end,
 
     %% This query generates the result set. It depends on that objects for the
     %% same key preserve their insertion order, which gives the correct order
@@ -807,7 +671,7 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, _State) ->
-    delete_end_backups({1,up}),
+    referl_db:delete_end_backups({1,up}),
     ok.
 
 %% @private

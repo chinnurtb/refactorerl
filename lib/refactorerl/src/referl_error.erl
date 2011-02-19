@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Standard refactoring errors. This module contains the textual
 %%% description of standard refactoring errors that can be thrown using the
@@ -47,7 +47,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(referl_error).
--vsn("$Rev: 3026 $").
+-vsn("$Rev: 3678 $").
 
 -include("refactorerl.hrl").
 
@@ -100,8 +100,6 @@ error_text(illegal_pos, [File, Pos]) ->
     ["Position ", integer_to_list(Pos), " not found in file ", File];
 error_text(token_parent, [Type]) ->
     ["The selection has to be inside ", ?MISC:add_article(node_kind_text(Type))];
-error_text(file_not_present, [Name]) ->
-    ["File ", Name, " cannot be found in the database"];
 error_text(file_not_module, [File]) ->
     ["File ", File, " does not identify a module"];
 error_text(file_not_hrl, [File]) ->
@@ -109,7 +107,18 @@ error_text(file_not_hrl, [File]) ->
 error_text(rel_path, [_]) ->
     ["The path of the header file has to be an absolute path"];
 error_text(mod_not_found, [Name]) ->
-    ["Module ", atom_to_list(Name), " not found"];
+    ["Module '", atom_to_list(Name), "' not found"];
+error_text(file_not_present, [Name]) ->
+    ["File ", Name, " cannot be found in the database"];
+error_text(no_file, [Type]) ->
+    ["File for the ",atom_to_list(Type)," not found"];
+error_text(no_file, [Type,Name]) ->
+    ["File for ",atom_to_list(Type)," '", ?MISC:any_to_string(Name), "' not found"];
+error_text(ambiguous_mod,[Mod]) ->
+    ["Multiple files loaded with the module name ",
+     io_lib:write_atom(Mod)];
+error_text(form_not_found, []) ->
+    ["Graph consistency error: form not found"];
 error_text(fun_not_found, FunInfo) ->
     ["Function ", ?MISC:fun_text(FunInfo), " not found"];
 error_text(rec_not_found, [Name]) ->
@@ -117,7 +126,7 @@ error_text(rec_not_found, [Name]) ->
 error_text(recfld_not_found, RecFld) ->
     ["Record field ", ?MISC:recfld_text(RecFld), " not found"];
 error_text(mac_not_found, [Name]) ->
-    ["Macro ", Name, " not found"];
+    ["Macro ", ?MISC:to_list(Name), " not found"];
 error_text(fun_exists, FunInfo) ->
     ["Function ", ?MISC:fun_text(FunInfo), " already exists"];
 error_text(var_exists, VarName) ->
@@ -162,12 +171,45 @@ error_text(recursive_subexpr, []) ->
     ["The selection may not contain recursive calls"];
 error_text(bad_var_name, []) ->
     ["Illegal variable name given"];
+error_text(bad_mac_name, []) ->
+    ["Illegal macro name given"];
 error_text(quoted_atom, []) ->
     ["Quoted atoms are not allowed"];
 error_text(module_exists,[Name]) ->
     ["Collision with existing module \"", atom_to_list(Name), "\""];
 error_text(file_exists,[Path]) ->
     ["Collision with existing file \"", Path, "\""];
+error_text(file_notexists,[Path]) ->
+    ["File is not exists: \"", Path, "\""];
+error_text(file_notdir,[Path]) ->
+    ["Path is not a directory: \"", Path, "\""];
+error_text(file_acces,[FilePath,Mode]) ->
+    ["Can't acces the file in ", ?MISC:format("~p",[Mode]), 
+     " mode: \"", FilePath, "\""];
+error_text(file_open,[FilePath,Reason]) ->
+    ["Can't open the file: \"", FilePath, "\" (", 
+     ?MISC:format("~p", [Reason]), ")"];
+error_text(file_eof,[FilePath,Reason]) ->
+    ["Unexpected end of file: \"", FilePath, "\" (", 
+     ?MISC:format("~p", [Reason]), ")"];
+error_text(file_load_wrong_datatype,[FilePath,Reason]) ->
+    ["File contain wrong data: \"", FilePath, 
+     "\". The required data type is ", ?MISC:format("~p", [Reason]), "."];
+error_text(file_error,[FilePath,Reason]) ->
+    ["An error happen while processing the file: \"", FilePath, "\" (", 
+     ?MISC:format("~p", [Reason]), ")"];
+error_text(incompat,[FunName])->
+    ["The metric type '"
+     ,?MISC:format("~p", [FunName])
+     ,"' is not compatible with the given node"];
+error_text(metric_fun,[Metric])->
+    ["Unknown meric function: ",?MISC:format("~p", [Metric])];
+error_text(m_parser_error, [Mesg])->
+    ["Parse error in the Metrics Query: ",?MISC:format("~p", [Mesg])];
+error_text(m_scanner_error, [Err])->
+    ["Scanner error in the Metrics Query: ",?MISC:format("~p", [Err])];
+error_text(m_bad_filter, [Filter])->
+    ["Bad filter: ",?MISC:format("~p", [Filter])];
 error_text(_, _) ->
     unknown.
 

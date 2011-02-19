@@ -1,51 +1,66 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
+
+%%% ============================================================================
+%%% Module Informations
 
 %%% @doc Efficient matrix implementation to be used for clustering.
 %%% Attribute matrices are usually quite sparse, entity distance matrices
 %%% are not; this representation should work reasonably well with both.
-%%%
+
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(cl_matrix).
--vsn("$Rev: 2941 $").
+-vsn("$Rev: 3263 $").
 
 -include("cluster.hrl").
 
 
-%%% ============================================================================
-%%% Exports
 
--export([new/3, delete/1, 
-         cols/1, rows/1,
-         add_col/2, add_col/3, add_row/2, add_row/3, del_col/2, del_row/2,
+%%% ============================================================================
+%%% Imports/Exports
+
+% Proplists
+-import(proplists, [get_value/2, get_value/3]).
+
+% Matrix
+-export([new/3, delete/1, clone/1, pack/1, unpack/1, save/3, load/1, 
+         is_matrix/1]).
+% Manage rows and columns
+-export([add_col/2, add_col/3, add_row/2, add_row/3, 
+         insert_new_row/3, % depricated
+         del_col/2, del_row/2,
          swap_row/3, swap_col/3, move_row/4, move_col/4, 
-         reorder_rows/2, reorder_cols/2, 
+         reorder_rows/2, reorder_cols/2]).
+% Get and set values
+-export([cols/1, rows/1,
          get/3, get2/3, get_row/2, get_col/2, 
          get_row_non_def/2, get_col_non_def/2,
          get_row_non_def_ids/2, get_col_non_def_ids/2, 
-         set/4, insert_new_row/3,
-         to_list/1, from_list/2, to_record/1, from_record/1,
-         transform/2, transform2/2, 
-         fold_col/4, fold_row/4, fold_col2/5, fold_row2/5, clone/1]).
-
--export([dump/1, dump/2, dump/4, save/3, save/4]).
+         set/4]).
+% Transform matrix
+-export([transform/2, transform2/2, 
+         fold_col/4, fold_row/4, fold_col2/5, fold_row2/5]).
+% Conversions
+-export([to_list/1, from_list/2, to_record/1, from_record/1]).
+% Dump
+-export([dump/1, dump/2, dump/4]).
 
 
 
@@ -65,7 +80,7 @@
 
 
 %%% ============================================================================
-%%% Functions
+%%% Matrix
 
 %% @spec new([row()], [col()], val()) -> matrix()
 %%
@@ -74,11 +89,97 @@
 new(Rows, Cols, Default) ->
     #matrix{rows=Rows, cols=Cols, default=Default, table=ets:new(matrix, [])}.
 
+
 %% @spec delete(matrix()) -> ok
 %%
 %% @doc Deletes the matrix.
 delete(#matrix{table=Tab}) ->
     ets:delete(Tab).
+
+
+%% @spec clone(matrix()) -> matrix()
+%%
+%% @doc Creates a copy of a matrix.
+%% If modification is made in the original or in the clone, it will not affect
+%% the other one.
+clone(#matrix{table=Table} = Matrix) ->
+    Matrix#matrix{table=?MISC:ets_clone(Table)}.
+
+
+%% @spec pack(Matrix::matrix()) -> PackedMatrix::matrix()
+%% @doc Create a new `matrix' object which contains all information from 
+%%      the original `Matrix' as values.
+%%      Don't use the returned `PackedMatrix' object as the normal
+%%      `matrix' objects! In this case a run time error may occur.
+%%      If you have a packed `matrix' object you need to unpack with the
+%%      {@link unpack/1} function before use it.
+%% @see unpack/1
+pack(Matrix=#matrix{}) ->
+    to_record(Matrix).
+
+%% @spec unpack(PackedMatrix::matrix()) -> Matrix::matrix()
+%% @doc Create a normal `matrix' object from the given packed
+%%      `Packedmatrix' object.
+%% @see pack/1
+unpack(Matrix=#matrix{}) ->
+    from_record(Matrix).
+
+
+%% @spec save(M::matrix(), FileName, Options::OptList) -> ok
+%%       OptList = [Opt]
+%%       Opt = {format,Format} | {id2NameFun, Id2NameFun}
+%%       Format = pack | DumpFormat
+%%       DumpFormat = normal | list | csv
+%%       Id2NameFun = ((term()) -> term())
+%% @doc Save the matrix into a file in the specified file format. For more 
+%%      information about `DumpFormat' and `Id2NameFun' see {@link dump/4}.
+%%      All row and column label will be replaced by the `Id2NameFun' function.
+%%      The default format is `pack' which mean the matrix saved as packed
+%%      matrix (see {@link pack/1}). The default row/column identifier 
+%%      conversion function is the identity function.
+%% @see dump/4
+save(Matrix=#matrix{}, FileName, Options) ->
+    case file:open(FileName, [write]) of
+        {ok, Dev} ->
+            case get_value(format,Options,pack) of
+                pack   -> io:format(Dev, "~p.\n", [pack(Matrix)]);
+                Format -> 
+                    dump(Format, Dev, Matrix, 
+                         get_value(id2NameFun,Options,fun(Id) -> Id end))
+            end,
+            file:close(Dev);
+        {error, Reason} ->
+            throw(?LocalError(file_error, file:format_error(Reason)))
+    end.    
+
+
+%% @spec load(FilePath::list()) -> Matrix::matrix()
+%% @doc Load a packed `matrix' object from the `FilePath' file and unpack that.
+load(FileName) ->
+    case file:open(FileName, [read]) of
+        {ok, Dev} ->
+            case io:read(Dev, "") of
+                {ok, Matrix} ->
+                    file:close(Dev),
+                    unpack(Matrix);
+                eof ->
+                    throw(?LocalError(file_error, "End of file"));
+                {error, Reason} ->
+                    throw(?LocalError(file_error, file:format_error(Reason)))
+            end;
+        {error, Reason} ->
+            throw(?LocalError(file_error, file:format_error(Reason)))
+    end.
+
+%% @spec is_matrix(Term::term()) -> boolean()
+%% @doc  Return `true' if `Term' is a `matrix()' otherwise `false'.
+is_matrix(#matrix{}) -> true;
+is_matrix(_)         -> false.
+
+
+
+%%% ============================================================================
+%%% Manage rows and columns
 
 %% @spec add_col(col(), matrix()) -> matrix()
 %%
@@ -119,7 +220,6 @@ add_col(ColLabel, ColValues, Matrix=#matrix{}) ->
         ColValues),
     M2.
 
-
 %% @spec add_row(RowLabel::row(), 
 %%               RowValues::[{ColLabel::col(), CellValue::val()}], 
 %%               Matrix::matrix()) -> NewMatrix::matrix()
@@ -133,6 +233,20 @@ add_row(RowLabel, RowValues, Matrix=#matrix{}) ->
         fun ({Col, Value}) -> ets:insert(Tab, {{RowLabel, Col}, Value}) end, 
         RowValues),
     M2.
+
+%% @spec insert_new_row(row(), [{col(), val()}], matrix()) -> matrix()
+%%
+%% @doc Inserts a new row with its elements into the matrix, and returns the
+%% updated matrix.
+%% @deprecated Please use the function {@link add_row/3} instead.
+insert_new_row(RowLabel, RowValues, Matrix) ->
+    % M2 = add_row(RowLabel, Matrix),
+    % #matrix{table=Tab} = M2,
+    % lists:foreach(fun ({Col, Value}) ->
+                    % ets:insert(Tab, {{RowLabel, Col}, Value})
+                  % end, RowValues),
+    % M2.
+    add_row(RowLabel, RowValues, Matrix).
 
 
 %% @spec del_col(col(), matrix()) -> matrix()
@@ -204,6 +318,10 @@ reorder_cols(Cols, M=#matrix{cols=Cols0}) when is_list(Cols) ->
     end,
     M#matrix{cols=Cols}.
 
+
+
+%%% ============================================================================
+%%% Get and set values
 
 %% @spec cols(Matrix::matrix()) -> [col()]
 %%
@@ -300,20 +418,87 @@ set(Row, Col, Value, Matrix=#matrix{table=Tab}) ->
     ets:insert(Tab, {{Row,Col}, Value}),
     Matrix.
 
-%% @spec insert_new_row(row(), [{col(), val()}], matrix()) -> matrix()
-%%
-%% @doc Inserts a new row with its elements into the matrix, and returns the
-%% updated matrix.
-%% @deprecated Please use the function {@link add_row/3} instead.
-insert_new_row(RowLabel, RowValues, Matrix) ->
-    % M2 = add_row(RowLabel, Matrix),
-    % #matrix{table=Tab} = M2,
-    % lists:foreach(fun ({Col, Value}) ->
-                    % ets:insert(Tab, {{RowLabel, Col}, Value})
-                  % end, RowValues),
-    % M2.
-    add_row(RowLabel, RowValues, Matrix).
 
+
+%%% ============================================================================
+%%% Transform matrix
+
+%% @spec transform((val()) -> val(), matrix()) -> matrix()
+%%
+%% @doc Applies `Fun' to every element of the matrix and stores the result
+%% in its place.
+transform(Fun, Matrix=#matrix{default=Def, table=Tab}) ->
+    transform(Fun, ets:first(Tab), Tab),
+    Matrix#matrix{default=Fun(Def)}.
+
+transform(_Fun, '$end_of_table', _Tab) ->
+    ok;
+transform(Fun, Key, Tab) ->
+    [{_, Val}] = ets:lookup(Tab, Key),
+    ets:insert(Tab, {Key, Fun(Val)}),
+    transform(Fun, ets:next(Tab, Key), Tab).
+
+
+%% @spec transform2((col_key(), row_key(),val()) -> val(), matrix()) -> matrix()
+%%
+%% @doc Applies `Fun' to every element of the matrix and stores the result
+%% in its place.
+transform2(Fun, Matrix=#matrix{default=Def, table=Tab}) ->
+    transform2(Fun, ets:first(Tab), Tab),
+    Matrix#matrix{default=Fun(default,default,Def)}.
+
+transform2(_Fun, '$end_of_table', _Tab) ->
+    ok;
+transform2(Fun, Key, Tab) ->
+    [{_, Val}] = ets:lookup(Tab, Key),
+    {RowKey, ColKey} = Key,
+    ets:insert(Tab, {Key, Fun(RowKey,ColKey,Val)}),
+    transform2(Fun, ets:next(Tab, Key), Tab).
+
+
+%% @spec fold_col(FunType, term(), col(), matrix()) -> term()
+%%       FunType = (row(), val(), Acc::term()) -> term()
+%%
+%% @doc Usual fold operation on a given column. No ordering guarantees.
+fold_col(Fun, Acc0, Col, M=#matrix{rows=Rows}) ->
+    lists:foldl(
+      fun(Row, Acc) -> Fun(Row, get(Row, Col, M), Acc) end,
+      Acc0, Rows).
+
+%% @spec fold_row(FunType, term(), row(), matrix()) -> term()
+%%       FunType = (col(), val(), Acc::term()) -> term()
+%%
+%% @doc Usual fold operation on a given row. No ordering guarantees.
+fold_row(Fun, Acc0, Row, M=#matrix{cols=Cols}) ->
+    lists:foldl(
+      fun(Col, Acc) -> Fun(Col, get(Row, Col, M), Acc) end,
+      Acc0, Cols).
+
+
+%% @spec fold_col2(FunType, term(), col(), col(), matrix()) -> term()
+%%       FunType = (row(), Val1::val(), Val2::val(), Acc::term()) -> term()
+%%
+%% @doc Usual fold operation on two columns. No ordering guarantees.
+fold_col2(Fun, Acc0, Col1, Col2, M=#matrix{rows=Rows}) ->
+    lists:foldl(
+      fun(Row, Acc) ->
+              Fun(Row, get(Row, Col1, M), get(Row, Col2, M), Acc)
+      end, Acc0, Rows).
+
+%% @spec fold_row2(FunType, term(), row(), row(), matrix()) -> term()
+%%       FunType = (col(), Val1::val(), Val2::val(), Acc::term()) -> term()
+%%
+%% @doc Usual fold operation on two rows. No ordering guarantees.
+fold_row2(Fun, Acc0, Row1, Row2, M=#matrix{cols=Cols}) ->
+    lists:foldl(
+      fun(Col, Acc) ->
+              Fun(Col, get(M, Row1, Col), get(M, Row2, Col), Acc)
+      end, Acc0, Cols).
+
+
+
+%%% ============================================================================
+%%% Conversion
 
 %% @spec to_list(Matrix::matrix()) ->
 %%           [{{Row::row(), Col::col()}, Value::term()}]
@@ -366,107 +551,9 @@ from_record(M=#matrix{rows=Rows, cols=Cols, default=Default, table=TabList}) ->
     end.
 
 
-%% @spec transform((val()) -> val(), matrix()) -> matrix()
-%%
-%% @doc Applies `Fun' to every element of the matrix and stores the result
-%% in its place.
-transform(Fun, Matrix=#matrix{default=Def, table=Tab}) ->
-    transform(Fun, ets:first(Tab), Tab),
-    Matrix#matrix{default=Fun(Def)}.
 
-transform(_Fun, '$end_of_table', _Tab) ->
-    ok;
-transform(Fun, Key, Tab) ->
-    [{_, Val}] = ets:lookup(Tab, Key),
-    ets:insert(Tab, {Key, Fun(Val)}),
-    transform(Fun, ets:next(Tab, Key), Tab).
-
-%% @spec transform2((col_key(), row_key(),val()) -> val(), matrix()) -> matrix()
-%%
-%% @doc Applies `Fun' to every element of the matrix and stores the result
-%% in its place.
-transform2(Fun, Matrix=#matrix{default=Def, table=Tab}) ->
-    transform2(Fun, ets:first(Tab), Tab),
-    Matrix#matrix{default=Fun(default,default,Def)}.
-
-transform2(_Fun, '$end_of_table', _Tab) ->
-    ok;
-transform2(Fun, Key, Tab) ->
-    [{_, Val}] = ets:lookup(Tab, Key),
-    {RowKey, ColKey} = Key,
-    ets:insert(Tab, {Key, Fun(RowKey,ColKey,Val)}),
-    transform2(Fun, ets:next(Tab, Key), Tab).
-
-%% @spec fold_col(FunType, term(), col(), matrix()) -> term()
-%%       FunType = (row(), val(), Acc::term()) -> term()
-%%
-%% @doc Usual fold operation on a given column. No ordering guarantees.
-fold_col(Fun, Acc0, Col, M=#matrix{rows=Rows}) ->
-    lists:foldl(
-      fun(Row, Acc) -> Fun(Row, get(Row, Col, M), Acc) end,
-      Acc0, Rows).
-
-%% @spec fold_row(FunType, term(), row(), matrix()) -> term()
-%%       FunType = (col(), val(), Acc::term()) -> term()
-%%
-%% @doc Usual fold operation on a given row. No ordering guarantees.
-fold_row(Fun, Acc0, Row, M=#matrix{cols=Cols}) ->
-    lists:foldl(
-      fun(Col, Acc) -> Fun(Col, get(Row, Col, M), Acc) end,
-      Acc0, Cols).
-
-%% @spec fold_col2(FunType, term(), col(), col(), matrix()) -> term()
-%%       FunType = (row(), Val1::val(), Val2::val(), Acc::term()) -> term()
-%%
-%% @doc Usual fold operation on two columns. No ordering guarantees.
-fold_col2(Fun, Acc0, Col1, Col2, M=#matrix{rows=Rows}) ->
-    lists:foldl(
-      fun(Row, Acc) ->
-              Fun(Row, get(Row, Col1, M), get(Row, Col2, M), Acc)
-      end, Acc0, Rows).
-
-%% @spec fold_row2(FunType, term(), row(), row(), matrix()) -> term()
-%%       FunType = (col(), Val1::val(), Val2::val(), Acc::term()) -> term()
-%%
-%% @doc Usual fold operation on two rows. No ordering guarantees.
-fold_row2(Fun, Acc0, Row1, Row2, M=#matrix{cols=Cols}) ->
-    lists:foldl(
-      fun(Col, Acc) ->
-              Fun(Col, get(M, Row1, Col), get(M, Row2, Col), Acc)
-      end, Acc0, Cols).
-
-%% @spec clone(matrix()) -> matrix()
-%%
-%% @doc Creates a copy of a matrix.
-%% If modification is made in the original or in the clone, it will not affect
-%% the other one.
-clone(#matrix{table=Table} = Matrix) ->
-    Table2 = ets:new(matrix,[]),
-    ets:foldl(
-      fun(Row,_) ->
-              ets:insert(Table2,Row)
-      end,
-      undefined,
-      Table),
-    Matrix#matrix{table=Table2}.
-
-
-% %% @ spec dump(matrix()) -> ok
-% %%
-% %% @ doc Prints the contents of a matrix to the standard output.
-% dump(M) ->
-    % dump(standard_io, M).
-
-% %% @ spec dump(matrix(),io_device()) -> ok
-% %%
-% %% @ doc Prints the contents of a matrix to a given device.
-% dump(D,M) ->
-    % io:format(D,"~p~n~p~n",
-               % [cols(M),
-                % [{R,lists:reverse(
-                      % fold_row(fun(_,V,L)-> [V|L] end, [], R, M))} ||
-                    % R <- rows(M)]]).
-
+%%% ============================================================================
+%%% Dump
 
 %% @spec dump(matrix()) -> ok
 %% @doc Prints the contents of a matrix to the standard output.
@@ -539,30 +626,5 @@ dump(csv, Dev, M=#matrix{}, Id2NameFun) when is_function(Id2NameFun) ->
             io:format(Dev, "\n", [])
         end,
         Rows).
-
-
-%% @spec save(FileFormat, M::matrix(), FileName) -> ok
-%% @doc Save the matrix into a file in the specified file format. For more 
-%%      information about `FileFormat' see {@link dump/4}.
-%% @see dump/4
-save(FileFormat, M=#matrix{}, FileName) ->
-    save(FileFormat, M, FileName, fun(Id) -> Id end).
-
-%% @spec save(FileFormat, M::matrix(), FileName, Id2NameFun) -> ok
-%%       Id2NameFun = ((term()) -> term())
-%% @doc Save the matrix into a file in the specified file format. For more 
-%%      information about `FileFormat' and `Id2NameFun' see {@link dump/4}.
-%%      All row and column label will be replaced by the `Id2NameFun' function.
-%%      If you do not wnat to replace the labels use {@link save/3} function.
-%% @see save/3
-%% @see dump/4
-save(FileFormat, M=#matrix{}, FileName, Id2NameFun) ->
-    case file:open(FileName, [write]) of
-        {ok, Dev} ->
-            dump(FileFormat, Dev, M, Id2NameFun),
-            file:close(Dev);
-        {error, Reason} ->
-            io:format("Error: ~s\n", file:format_error(Reason))
-    end.    
 
 

@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Erlang preprocessor graph transformations. This module contains the
 %%% functions that build the graph representation of the lexical layer of
@@ -48,7 +48,7 @@
 %%%
 %%% </ul>
 %%%
-%%% @author Robert Kitlei
+%%% @author Robert Kitlei <kitlei@inf.elte.hu>
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 %%% Plans:
@@ -56,17 +56,25 @@
 %%%      reporting
 
 -module(referl_preproc).
--vsn("$Rev: 2559 $").
+-vsn("$Rev: 3324 $").
 
--export([preprocess/2, preprocess/3]).
+-export([preprocess/2, preprocess/3, detach/2]).
 
 -include("refactorerl.hrl").
 
 %%% @type formTokens() = [{#token{}, node()}]. A list that contains token
 %%% data for a form.
 
-%% @spec preprocess(formTokens(), node()) ->
-%%                                   [{tokens, formTokens()} | {form, node()}]
+%%% @type processedForm() = {token, formTokens()} |
+%%%                         {vtokens, Dep::node(), Orig::node(), formTokens()} |
+%%%                         {form, node()}.
+%%% Represetation of a form after preprocessing. The result may be a comlpeted
+%%% lexical form that needs no further processing, or a list of tokens.
+%%% Virtual forms may appear after file inclusion; these are entirely consist
+%%% of virtual tokens copied from form `Orig', with their origin in another
+%%% file, which is referred by form `Dep'.
+
+%% @spec preprocess(formTokens(), node()) -> [processedForm()]
 %%
 %% @doc Processes `Tokens' according to the Erlang preprocessor rules. The
 %% input should be a list of tokens that make a single, complete form,
@@ -79,7 +87,7 @@ preprocess(Tokens, File) ->
     Result.
 
 %% @spec preprocess(formTokens(), node(), state()) ->
-%%                         {[{tokens, formTokens()} | {form, node()}], state()}
+%%                                           {[processedForm()], state()}
 %%
 %% @doc Re-entrant preprocessor that handles conditional compilation. The
 %% same notes apply as for `preprocess/2'. First time this function must be
@@ -133,7 +141,7 @@ preprocess(Form, File, St=[StTop|_]) ->
             {[{form, create_form(lex, skip, token_nodes(Form))}], St}
     end.
 
-%% @spec form(formTokens(), node()) -> [{tokens, formTokens()} | {form, node()}]
+%% @spec form(formTokens(), node()) -> [processedForm()]
 %%
 %% @doc Preprocesses a form: macro definitions are stored (without further
 %% preprocessing), included files are linked to the top level file, other
@@ -257,8 +265,8 @@ macro_subst([], _File) ->
 %%       {done, formTokens(), formTokens()} |
 %%       {node(), [formTokens()], formTokens()}
 %% @doc Analyses macro substitution. Returns `skip' for not existing macros,
-%% `{done, Result, Rest}' for macros substituted here, and
-%% `{App, Params, Rest}' for macros to be substituted later.
+%% `{done, Result, Rest}' for special macros substituted here, and
+%% `{App, Params, Rest}' for normal macros to be substituted later.
 macro([{#token{type=NameType, value=Name}, N} | Tokens], File, First)
   when NameType == atom; NameType == variable ->
     MacroPath = [incl, {form, {{type, '==', macro}, 'and',
@@ -405,7 +413,7 @@ substitute([], _, _, _) ->
     [].
 
 subs_arg(Name, _, [Name|_], [Value|_]) ->
-    Value; 
+    Value;
 subs_arg(Name, Node, [_|Args], [_|Params]) ->
     subs_arg(Name, Node, Args, Params);
 subs_arg(Name, Node, [], _) ->
@@ -421,7 +429,7 @@ macro_name(Str)  when is_list(Str)  -> Str.
 find_include(include, Name, FileNode) ->
     case ?Graph:path(?Graph:root(), ?File:find(Name)) of
         [_InclFile] -> Name;
-        _ -> 
+        _ ->
             #file{path=FilePath} = ?Graph:data(FileNode),
             Base = filename:dirname(FilePath),
             Path = [{env, {name, '==', include}}],
@@ -449,8 +457,9 @@ find_include(include_lib, Name, _) ->
     end.
 
 
-%% @spec include(node(), string(), [node()]) ->
-%%         [{tokens,formTokens()} | {form, node()}]
+%% @spec include(node(), string(), [node()]) -> [processedForm()]
+%% @doc Adds an include file into the graph. Returns the form list that is the
+%% result of including the file.
 include(File, IncName, Tokens) ->
     FileType = (?Graph:data(File))#file.type,
     case ?FileMan:add_file(IncName) of
@@ -470,12 +479,12 @@ include(File, IncName, Tokens) ->
                     IncForm = create_form(lex, include, [IncNode]),
                     ?Graph:mklink(IncForm, iref, IncFile),
                     [{form, IncForm} |
-                     [{tokens, macro_subst(Form, File)} ||
-                         Form <- include_forms(IncFile, IncNode)]]
+                     [{vtokens, IncForm, Orig, macro_subst(Form, File)} ||
+                         {Orig, Form} <- include_forms(IncFile, IncNode)]]
             end
     end.
 
-%% @spec include_forms(node(), node()) -> [formTokens()]
+%% @spec include_forms(node(), node()) -> [{node(), formTokens()}]
 include_forms(IncFile, IncNode) ->
     lists:flatmap(
       fun
@@ -486,7 +495,8 @@ include_forms(IncFile, IncNode) ->
 
 %% @spec include_form(#form{}, node(), node()) -> [formTokens()]
 include_form(#form{tag=store}, Form, IncNode) ->
-    [[include_token(T, IncNode) || T <- ?Graph:path(Form, [flex])]];
+    [{Form, [include_token(T, IncNode) || T <- ?Graph:path(Form, [flex])]}];
+%% TODO: what about include_lib?
 include_form(#form{tag=include}, Form, IncNode) ->
     [File] = ?Graph:path(Form, [iref]),
     include_forms(File, IncNode);
@@ -509,3 +519,21 @@ virtual(Token, Source) ->
     end,
     ?ESG:insert(VT, llex, Source),
     VT.
+
+%% @spec detach(node(), node()) -> ok
+%% @doc Detaches preprocessor-generated form `Form' from its container file
+%% `File' by deleting preprocessor-generated links. Currently this only means
+%% cleaning up file inclusion information, other preprocessor-related stuff is
+%% represented in the syntax tree.
+detach(File, Form) ->
+    case ?Graph:path(Form, [iref]) of
+        [] -> ok;
+        [Incl] -> remove_include(File, Incl)
+    end.
+
+remove_include(File, Incl) ->
+    OtherIncl = ?Graph:path(File, [form, iref]) -- [Incl],
+    Hold = lists:append([?Graph:path(I, [incl]) || I <- OtherIncl]),
+    lists:foreach(
+      fun (Drop) -> ?Graph:rmlink(File, incl, Drop) end,
+      ?Graph:path(Incl, [incl]) -- Hold).

@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module provides a generic framework for consistent semantical
 %%% analysis of Erlang syntax trees. Basically it is a bridge between the
@@ -117,7 +117,7 @@
 
 
 -module(referl_esg).
--vsn("$Rev: 2550 $").
+-vsn("$Rev: 3571 $").
 -behaviour(gen_fsm).
 
 %% Client exports
@@ -274,7 +274,7 @@ query_op(Fun) ->
 init([]) ->
     {ok, Mods} = application:get_env(anal_mods),
     SchemaParts = lists:flatmap(fun (Mod) -> Mod:init() end, Mods),
-    EnvSchema = [   {root,  [],                         [{env,env}]},
+    EnvSchema = [   {root,  [{env,env}]},
                     {env,   record_info(fields, env),   []}
                 ],
     Schema = lists:foldl(fun add_schema/2, ?SYNTAX_SCHEMA,

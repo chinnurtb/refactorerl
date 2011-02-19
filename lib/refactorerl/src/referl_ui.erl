@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module provides a bridge between user interfaces and system
 %%% functionality. A user interface requests operations and receives results
@@ -41,17 +41,18 @@
 %%% <dt>{@type {error, Message::string()@}}</dt> <dd>A textual error message
 %%% that describes an internal error situation of the tool.</dd>
 %%%
-%%% <dt>{@type {add, Path::path()@}}</dt> <dd>The file specified by `Path' is
-%%% added (or maybe re-added) to the database.</dd>
+%%% <dt>{@type {add, Files::[Path::path()]@}}</dt> <dd>The files specified by 
+%%% the `Files' list are added (or maybe re-added) to the database.</dd>
 %%%
-%%% <dt>{@type {drop, Path::path()@}}</dt> <dd>The file specified by `Path' is
-%%% removed from the database.</dd>
+%%% <dt>{@type {drop, Files::[Path::path()]@}}</dt> <dd>The files specified by 
+%%% the `Files' list are removed from the database.</dd>
 %%%
 %%% <dt>{@type {invalid, Path::path()@}}</dt> <dd>The file specified by `Path'
 %%% is added to the database, but it is invalid (contains errors).</dd>
 %%%
-%%% <dt>{@type {reload, Path::path()@}}</dt> <dd>The file specified by `Path'
-%%% is modified by the tool (and should be reloaded from disk by the UI).</dd>
+%%% <dt>{@type {reload, Files::[Path::path()]@}}</dt> <dd>The files specified by
+%%% the `Files' list are modified by the tool (and should be reloaded from disk
+%%% by the UI).</dd>
 %%%
 %%% <dt>{@type {rename, {From::path(), To::path()@}@}}</dt> <dd>The file
 %%% `From' is changed to have the name `To' (and this changes should be
@@ -62,11 +63,9 @@
 %%% used key values are `appbase', `include', and `output'. See also {@link
 %%% saveconfig/3}.</dd>
 %%%
-%%% <dt>{@type {filelist, Files::[path()]@}}</dt> <dd>This message contains
-%%% the files that are currently stored in the database. There is a special
-%%% notation: when the first character of a filename is an exclamation mark
-%%% (`!'), it is not part of the filename, it means that the file has some
-%%% errors. <small>TODO: This representation should be improved.</small></dd>
+%%% <dt>{@type {filelist, Files::[{Path::path(), Error::atom()@}]@}}</dt>
+%%% <dd>This message contains the files that are currently stored in the
+%%% database, and whether they haver errors or not.</dd>
 %%%
 %%% <dt>{@type {filepos,
 %%% FilePos::[{Path::path(),SatartPos::{integer(), integer()@},
@@ -81,11 +80,11 @@
 %%%
 %%% <dt>{@type {recordlist, Records::[Name::atom()]@}}</dt> <dd>This message
 %%% contains a list of records. <small>TODO: this is rather specific to the
-%%% move record refactoring, ans should be improved.</small></dd>
+%%% move record refactoring, and should be improved.</small></dd>
 %%%
-%%% <dt>{@type {macrolist, Macros::[Name::atom()|string()]@}}</dt> <dd>This message
-%%% contains a list of macros. <small>TODO: this is rather specific to the
-%%% move macro refactoring, ans should be improved.</small></dd>
+%%% <dt>{@type {macrolist, Macros::[Name::atom()|string()]@}}</dt> <dd>This
+%%% message contains a list of macros. <small>TODO: this is rather specific
+%%% to the move macro refactoring, and should be improved.</small></dd>
 %%%
 %%% <dt>{@type {question, {Id::integer(), Details::proplist()@}@}}</dt>
 %%% <dd>Contains a question that must be answered by {@link reply/2} or
@@ -93,48 +92,58 @@
 %%% specified.</small></dd>
 %%%
 %%% <dt>{@type {uifinished, Operation::atom()@}}</dt> <dd>The spawning of the
-%%  specified operation is complete on the UI side.</dd>
+%%% specified operation is complete on the UI side.</dd>
 %%%
 %%% <dt>{@type {trfinished, ok@}}</dt> <dd>An operation is finished
-%%  on the transform side.</dd>
+%%% on the transform side.</dd>
+%%%
+%%% <dt>{@type {progress, {add|drop, Path::path(), Count::integer(),
+%%% Max::integer()@}@}}</dt> <dd>Progress report of a file (re)loading or
+%%% dropping operation. `Max' is the maximal number of steps, `Count' is the
+%%% number of currently finished steps.</dd>
 %%%
 %%% </dl>
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
+%%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_ui).
 -vsn("$Rev: 1479$ ").
 -behaviour(gen_server).
 
+%%% ----------------------------------------------------------------------------
 %%% Client exports
--export([stop/0, status/1, add/1, drop/1, draw/2,
-         showconfig/0, saveconfig/3, filelist/0, reset/0]).
 
--export([transform/2, reply/2, cancel/1, wr_transform/2, search_dup/1]).
+%%% Database control
+-export([stop/0, reset/0, add/1, drop/1, undo/1, saveconfig/3]).
+
+%%% Status queries
+-export([status/1, showconfig/0, filelist/0, status_info/1, error_attr/0]).
+
+%%% Semantic queries
+-export([search_dup/1, draw/2]).
+
+%%% Internal queries
 -export([funlist/1, recordlist/1, macrolist/1]).
 
-%%% Undo/redo
--export([backup/0, undo/1, clean/0]).
+%%% Refactoring
+-export([transform/2, wr_transform/2, reply/2, cancel/1]).
 
 %%% Clustering
 -export([cl_options/1, run_cl/3, cl_refresh/0]).
 
-%% UI message handlers
--export([message/2, message/3, add_msg_handler/2, del_msg_handler/2,
-         error_message/1]).
+%%% UI message handlers
+-export([message/2, message/3, add_msg_handler/2, add_msg_handler/3,
+         del_msg_handler/2]).
 
-%% File status info
--export([status_info/1]).
-
-%%% Error forms
--export([error_attr/0]).
-
+%%% ----------------------------------------------------------------------------
 %%% Server exports
 -export([start_link/0]).
 
-%% gen_server callbacks
+%%% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2,
          handle_info/2, terminate/2, code_change/3]).
+
 
 -include("refactorerl.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -152,25 +161,26 @@ status(File) -> cast({status, File}).
 
 %% @spec status_info([string()]) -> ok
 %%
-%% @doc This function collets information about files loaded in the 
+%% @doc This function collets information about files loaded in the
 %%      RefactorErl database.
-%%      Parameter of the function: `[]' means that the function find all 
+%%      Parameter of the function: `[]' means that the function find all
 %%      files form the database.
 %%      When the parameter is a list of the file paths or it is one file path
 %%      in a list, the function is collecting information about these files
 %%      only.
-%%      The message of the function is a `FileStatusList' that is a [proplist()]
-%%      containes information about the file(s).
+%%      The message of the function is a `FileStatusList' that is a
+%%      [proplist()] contains information about the file(s).
 %%
 %%      Elements of the `FileStatusList':
 %%
 %%      {file,string()}          The path and the name of the file
 %%      {errors,atom()}          The file contains errors: `yes'|`no'
-%%      {type,atom()}            The type of the file: `none'|`module'|`include'
-%%      {lastmod,int()|atom()}   The last modification of th file. The 
-%%                               default value is `undefined' 
+%%      {type,atom()}            The type of the file:
+%%                               `none'|`module'|`include'
+%%      {lastmod,int()|atom()}   The last modification of th file. The
+%%                               default value is `undefined'
 %%      {status,atom()}          Status of the file: `loaded' or `missing'
-status_info(Prop) -> cast({status_info, Prop}).
+status_info(Files) -> cast({status_info, Files}).
 
 %% @spec add(path()) -> ok
 %% @doc Adds `File' to the database.
@@ -221,22 +231,22 @@ reset() -> cast({reset}).
 %% @see referl_args
 transform(Mod, Args) -> cast({transform, Mod, Args}).
 
-%% @spec search_dup(proplist()) -> [clone()] 
+%% @spec search_dup(proplist()) -> [clone()]
 
 %% @doc Calls Wrangler's duplicated code detection functionality and
 %% returns the found `clones'. The proplist should contain the
-%% directory(ies) or the file where the detection is performed, 
-%% the minimum number of tokens in a code clone, and 
+%% directory(ies) or the file where the detection is performed,
+%% the minimum number of tokens in a code clone, and
 %% the minimum number of appearance time in a clone in the file.
-%% 
-%% `clone()::[{File::string(), Start::{integer(),integer()}, 
+%%
+%% `clone()::[{File::string(), Start::{integer(),integer()},
 %% End::{integer(), integer()}}]'
 %% @see duplicated_code_detection
 search_dup(Args)-> cast({search_dup, Args}).
 
 %% @spec wr_transform(atom(), proplist()) -> ok
-%% @doc Initiates a transformation from Wrangler. `Mod' is a transformation 
-%% module name, `Args' is a proplist that contains the arguments of the 
+%% @doc Initiates a transformation from Wrangler. `Mod' is a transformation
+%% module name, `Args' is a proplist that contains the arguments of the
 %% transformation.
 %% @see referl_tr_wrangler
 wr_transform(Mod, Args) -> cast({wr_transform, Mod, Args}).
@@ -278,10 +288,6 @@ cl_options(Alg) -> cast({cl_options, Alg}).
 %% @doc Refreshes the Emacs clustering interface.
 cl_refresh() -> cast({cl_refresh}).
 
-%% @spec backup() -> ok
-%% @doc Backups tables of Refactorerl database.
-backup() -> cast({backup}).
-
 %% @spec error_attr() -> ok
 %% @doc This function can collect information about error forms.
 error_attr() -> cast({error_attr}).
@@ -290,13 +296,8 @@ error_attr() -> cast({error_attr}).
 %% @doc Steps backward on the Refactorerl database.
 undo(RFile) -> cast({undo, RFile}).
 
-%% @spec clean() -> ok
-%% @doc Clean backup files from the Refactorerl database.
-clean() -> cast({clean}).
-%redo(RFile) -> cast({redo, RFile}).
 
 cast(Data) -> gen_server:cast({?MODULE, ?REFERL_NODE}, Data).
-
 
 %% @spec message(atom(), [term()]) -> ok
 %% @doc Sends a message of `Type' which contains an arbitrary list of terms
@@ -317,6 +318,12 @@ message(Type, Format, Args) ->
 add_msg_handler(Handler, Args) ->
     gen_event:add_sup_handler({?UI_MSG_SERVER, ?REFERL_NODE}, Handler, Args).
 
+%% @spec add_msg_handler(atom(), term(), atom()) -> ok | term()
+%% @doc Registers a new user interface message handler (which must be a
+%% `gen_event' callback module).
+add_msg_handler(Handler, Args, nosup) ->
+    gen_event:add_handler({?UI_MSG_SERVER, ?REFERL_NODE}, Handler, Args).
+
 %% @spec del_msg_handler(atom(), term()) -> ok | term()
 %% @doc Deletes a registered user interface message handler.
 del_msg_handler(Handler, Args) ->
@@ -332,43 +339,9 @@ init(_) ->
     {ok, ok}.
 
 %% @private
-handle_cast(Cmd, S) when is_tuple(Cmd) ->
-    [CmdName | Args] = tuple_to_list(Cmd),
-    Handler = case CmdName of
-                  stop         -> fun handle_stop/0;
-                  status       -> fun handle_status/1;
-                  status_info  -> fun handle_status_info/1;
-                  add          -> fun handle_add/1;
-                  drop         -> fun handle_drop/1;
-                  draw         -> fun handle_draw/2;
-                  showconfig   -> fun handle_showconfig/0;
-                  saveconfig   -> fun handle_saveconfig/3;
-                  reset        -> fun handle_reset/0;
-                  echo         -> fun handle_echo/2;
-
-                  transform    -> fun handle_transform/2;
-                  wr_transform -> fun handle_wr_transform/2;
-                  search_dup   -> fun handle_search_dup/1;
-                  reply        -> fun handle_reply/2;
-                  cancel       -> fun handle_cancel/1;
-
-                  filelist     -> fun handle_filelist/0;
-                  funlist      -> fun handle_funlist/1;
-                  recordlist   -> fun handle_recordlist/1;
-                  macrolist    -> fun handle_macrolist/1;
-
-                  backup       -> fun handle_backup/0;
-                  undo         -> fun handle_undo/1;
-                  clean        -> fun handle_clean/0;
-
-                  run_cl       -> fun handle_run_cl/3;
-                  cl_options   -> fun handle_cl_options/1;
-                  cl_refresh   -> fun handle_cl_refresh/0;
-                  error_attr  -> fun handle_error_attr/0;
-                   _            -> error
-              end,
+handle_cast(Cmd, S) when is_tuple(Cmd)->
     try
-        apply(Handler, Args)
+        handle(Cmd)
     catch
         error:Err ->
             error_logger:error_msg("Bad request ~p~n"
@@ -377,8 +350,8 @@ handle_cast(Cmd, S) when is_tuple(Cmd) ->
                                    [Cmd, Err, erlang:get_stacktrace()]),
             message(error, "error handling request ~512P", [Cmd,4])
     end,
-    message(uifinished, CmdName),
-    {noreply, S}.
+    message(uifinished, element(1,Cmd)),
+    {noreply, S}. 
 
 %% @private
 handle_call(_,_,S) ->
@@ -399,73 +372,54 @@ code_change(_,S,_) ->
 %%% ============================================================================
 %%% Standard UI
 
-handle_stop() ->
+handle({stop}) ->
     message(status, "RefactorErl server is shutting down...",[]),
-    init:stop().
+    init:stop();
 
-handle_status(File) when is_list(File) ->
-    case ?Query:exec(?File:find(File)) of
-        [F] ->
-            case ?Graph:path(F, [{form, {type,'==',error}}]) of
-                [] -> message(add, "~s", [File]);
-                _  -> message(invalid, "~s", [File])
+handle({status, FileName}) when is_list(FileName) ->
+    case ?Query:exec(?File:find(FileName)) of
+        [File] ->
+            case ?Query:exec(File, [{form, {type,'==',error}}]) of
+                [] -> message(add, [FileName]);
+                _  -> message(invalid, "~s", [FileName])
             end;
-        []  -> message(drop, "~s", [File])
-    end.
+        []  -> message(drop, [FileName])
+    end;
 
-handle_add(Name) when is_list(Name) ->
-    case ?Query:exec(?File:find(Name)) of
-        [F] ->
-            Drop = [(?Graph:data(FN))#file.path ||
-                       FN <- ?Graph:path(F, [{incl, back}])],
-            ?FileMan:drop_file(F);
-        [] ->
-            Drop = []
-    end,
-    case ?FileMan:add_file(Name) of
+%% todo: maybe introduce a `reload' or `update' message
+handle({add, FileName}) when is_list(FileName) ->
+    case ?FileMan:add_file(FileName, update) of
         {error, Reason} ->
-            [message(drop, "~s", [DF]) || DF <- Drop],
-            message(invalid, "~s", [Name]),
+            message(invalid, "~s", [FileName]),
             message(status, "~s", [error_message(Reason)]);
         {file, File} ->
-            Add = [(?Graph:data(FN))#file.path ||
-                      FN <- ?Graph:path(File, [incl])],
-            [message(drop, "~s", [DF]) || DF <- Drop],
-            [message(add, "~s", [AF]) || AF <- Add]
-    end.
+            Add = [?File:path(FN) || FN <- ?Query:exec(File, ?File:includes())],
+            message(add, Add)
+    end;
 
-handle_drop(File) when is_list(File) ->
-    case ?Query:exec(?File:find(File)) of
-        [F] ->
-            Drop = [(?Graph:data(FN))#file.path ||
-                       FN <- ?Graph:path(F, [{incl, back}])],
-            ?FileMan:drop_file(F),
-            [message(drop, "~s", [DF]) || DF <- Drop];
+handle({drop, FileName}) when is_list(FileName) ->
+    case ?Query:exec(?File:find(FileName)) of
+        [File] ->
+            Drop = 
+                [?File:path(FN) || FN <- ?Query:exec(File, ?File:included())],
+            ?FileMan:drop_file(File),
+            message(drop, Drop);
         [] ->
             message(status, "Already dropped", [])
-    end.
+    end;
 
-handle_draw(File, Type) ->
-    Filt = case Type of
-               2 -> sem;
-               3 -> ctx;
-               4 -> syn;
-               5 -> synlex;
-               6 -> lex;
-               7 -> inp;
-               8 -> not_lex;
-               _ -> all
-           end,
-    ?DRAW_GRAPH:draw_graph(File, Filt),
-    message(status, "Ok", []).
+handle({draw, File, Type}) ->
+    Filter = convert_filter(Type),
+    ?DRAW_GRAPH:draw_graph(File, Filter),
+    message(status, "Ok", []);
 
-handle_showconfig() ->
+handle({showconfig}) ->
     message(showconfig,
             [{Name, Value} ||
-                Env <- ?Graph:path(?Graph:root(), [env]),
-                #env{name=Name, value=Value} <- [?Graph:data(Env)]]).
+                Env <- ?Query:exec([env]),
+                #env{name=Name, value=Value} <- [?Graph:data(Env)]]);
 
-handle_saveconfig(AppDirs, IncDirs, OutDir) ->
+handle({saveconfig, AppDirs, IncDirs, OutDir}) ->
     [?Graph:delete(Env) || Env <- ?Graph:path(?Graph:root(), [env])],
     [?Graph:mklink(?Graph:root(), env,
                    ?Graph:create(#env{name=appbase, value=Dir})) ||
@@ -475,277 +429,291 @@ handle_saveconfig(AppDirs, IncDirs, OutDir) ->
                       Dir <- IncDirs],
     ?Graph:mklink(?Graph:root(), env,
                   ?Graph:create(#env{name=output, value=OutDir})),
-    message(status, "Configuration saved.", []).
+    message(status, "Configuration saved.", []);
 
-handle_filelist() ->
-    Files = [ {(?Graph:data(F))#file.path, F} ||
-                F <- ?Graph:path(?Graph:root(), [file])],
-    St = fun(N) -> case ?Graph:path(N, [{form, {type,'==',error}}]) of
-                       [] -> ""; _ -> "!" end
-         end,
-    [message(filelist, "~s~s",[St(N),F]) || {F,N}<-lists:sort(Files)].
+handle({filelist}) ->
+    Files = ?Query:exec([file]),
 
-handle_reset() ->
+    Err = fun(File) ->
+                  case ?Query:exec(File, [{form, {type,'==',error}}]) of
+                      [] -> no_error;
+                      _  -> error
+                  end
+          end,
+
+    FilesWithErr = [ {?File:path(File), Err(File)} || File <- Files],
+
+    message(filelist, FilesWithErr);
+
+handle({reset}) ->
     ?Graph:reset_schema(),
-    message(status, "Database clear started.", []).
-
-handle_echo(Type, String) ->
-    message(Type, "~s~n", [String]).
-
-%% @private
-error_message({no_include_file, File}) ->
-    ?MISC:format("Include file \"~s\" not found", [File]);
-error_message(Error) ->
-    ?MISC:format("Error: ~p", [Error]).
-
+    message(status, "Database clear started.", []);
 
 %%% ============================================================================
 %%% Transformation interface
 
-handle_transform(Mod, Args) ->
+handle({transform, Mod, Args}) ->
     ?Graph:backup(),
-    ?Transform:do(Mod, Args).
+    ?Transform:do(Mod, Args);
 
-handle_wr_transform(Mod, Args) ->
-    case application:start(wrangler_app) of 
-         {error, {already_started, wrangler_app}} -> wrtrans(Mod, Args);
-         {error, _} -> message(error, "~p", "Please set Wrangler's " ++
-                         "installation directory, and restart RefactorErl");
-        _ -> wrtrans(Mod, Args)
-    end.
+handle({wr_transform, Mod, Args}) ->
+    case application:start(wrangler_app) of
+        {error, {already_started, wrangler_app}} ->
+            wrtrans(Mod, Args);
+        {error, _} ->
+            message(error, "Please set Wrangler's " ++
+                           "installation directory, and restart RefactorErl");
+        _ ->
+            wrtrans(Mod, Args)
+    end;
 
-wrtrans(Mod, Args)->
-    application:start(wrangler_app),
-    case apply(referl_tr_wrangler, Mod, [Args]) of
-        {NewPath, {ok, Files}} ->
-            message(rename, {hd(Files), NewPath}),
-            [message(reload, "~s", [Path]) || Path <- tl(Files) ++ [NewPath]],
-            message(status, "Finished", []),
-            [wrdrop(File) || File <- [ NewPath | tl(Files)]];
-        {_File, {error, Reason}} -> message(status, "~p", [Reason]);
-        {error, Reason} -> message(status, "~p", [Reason]);
-        {ok, Files} -> 
-            [message(reload, "~s", [Path]) || Path <- Files],
-            message(status, "Finished", []),
-            [wrdrop(File) || File <- Files];
-        Error -> message(error, "~p", [Error])
-    end.
-    %application:stop(wrangler).
+handle({reply, Id, Reply}) ->
+    ?Transform:reply(Id, Reply);
 
-wrdrop(File) when is_list(File) ->
-    case ?Query:exec(?File:find(File)) of
-        [F] ->
-            Drop = [(?Graph:data(FN))#file.path ||
-                       FN <- ?Graph:path(F, [{incl, back}])],
-            ?FileMan:drop_file(F),
-            [message(drop, "~s", [DF]) || DF <- Drop];
-        [] -> ok
-    end.
-
-handle_reply(Id, Reply) ->
-    ?Transform:reply(Id, Reply).
-
-handle_cancel(Id) ->
-    ?Transform:cancel(Id).
+handle({cancel, Id}) ->
+    ?Transform:cancel(Id);
 
 %%% ============================================================================
 %%% Duplicated code detection
 
-handle_search_dup(Args) ->
-    case application:start(wrangler_app) of 
-         {error, {already_started, wrangler_app}} -> dup(Args);
-         {error, _} -> message(error, "~p", "Please set Wrangler's " ++
-                         "installation directory, and restart RefactorErl");
-         _ -> dup(Args)
-
-    end.    
-
-dup(Args) ->
-    List = referl_wrangler:run_dup(Args),
-    case List of
-        [] -> message(error, "~p", "Wrangler did not find any "++
-                      "duplicated code freagments");
-        _ -> message(filepos, List)
-    end.
+handle({search_dup, Args}) ->
+    case application:start(wrangler_app) of
+         {error, {already_started, wrangler_app}} ->
+            dup(Args);
+         {error, _} ->
+            message(error,
+                    "~p",
+                    ["Please set Wrangler's " ++
+                     "installation directory, and restart RefactorErl"]);
+        _ ->
+            dup(Args)
+    end;
 
 %%% ----------------------------------------------------------------------------
 %%% Movings
 
-handle_funlist(File) ->
+handle({funlist, File}) ->
     message(funlist,
             [{?Fun:name(F), ?Fun:arity(F)} ||
                 F <- ?Query:exec(
                         ?Query:seq([?File:find(File),
                                     ?File:module(),
-                                    ?Mod:locals()]))]).
+                                    ?Mod:locals()]))]);
 
-handle_recordlist(File) ->
+handle({recordlist, File}) ->
     message(recordlist,
             [?Rec:name(R) ||
                 R <- ?Query:exec(
-                        ?Query:seq(?File:find(File),
-                                    ?File:records()))]).
+                        ?Query:seq(?File:find(File), ?File:records()))]);
 
-handle_macrolist(File) ->
+handle({macrolist, File}) ->
     message(macrolist,
             [?Macro:name(M) ||
                 M <- ?Query:exec(
-                        ?Query:seq(?File:find(File),
-                                    ?File:macros()))]).
+                        ?Query:seq(?File:find(File), ?File:macros()))]);
 
 %%% ============================================================================
 %%% Clustering
 
 %% Sending options for the emacs interface
-handle_cl_options(Alg)->
+handle({cl_options, Alg}) ->
     OptList = cl_ui:cl_options(Alg),
     Ls = [[A,B] || {A,B} <- OptList],
-    message(options, [Alg]++Ls).
+    message(options, [Alg]++Ls);
 
-handle_cl_refresh()->
+handle({cl_refresh}) ->
     case cl_ui:refresh() of
       {cl_ui, _} -> message(status, "cl_ui refresh: cleaned",[]);
       _ -> message(error, "cl_ui refresh: something wrong",[])
-    end.
+    end;
 
-handle_run_cl(Opt, Alg, Create)->
+handle({run_cl, Opt, Alg, Create}) ->
     {Clustering, FittNum} = cl_ui:run({Opt, Alg, Create}),
     message(status,"Clustering algorithm has been finished."),
     message(result,Clustering),
-    message(flist,"~w",[FittNum]).
+    message(flist,"~w",[FittNum]);
 
 %%% ============================================================================
 %%% Backup
 
-handle_backup() ->
-   try ?Graph:backup() of
-      {ok, Name} ->
-          message(status, "Done ~s", [Name]);
-      _ ->
-          message(status, "Unsuccessful", [])
-   catch
-       throw:Msg ->
-          message(error, "Error: ~p", [Msg])
-   end.
-
-handle_clean() ->
-   try ?Graph:clean() of
-      {ok, backups_deleted} ->
-          message(status, "Backup storage is cleaned", []);
-      _ ->
-          message(status, "No backup files", [])
-   catch
-       throw:Msg ->
-          message(error, "Error: ~p", [Msg])
-   end.
-
-handle_undo(_RFile) ->
+handle({undo, _RFile}) ->
     %% (_RFile) This parameter is need to handling more backup checkpoints.
     FilesBefore = files_with_lastmod(),
     try ?Graph:undo() of
-        undo_is_ok  ->
+        ok  ->
             FilesAfter = files_with_lastmod(),
-            [begin
-                 case lists:keysearch(File, 1, FilesBefore) =:= LastMod of
-                     true ->
-                         ok;
-                     false ->
-                         ?FileMan:save_file(File),
-                         message(reload, "~s", [?File:path(File)])
-                 end
-             end || {File, LastMod} <- FilesAfter],
+            ModifiedFiles =
+                [ begin ?FileMan:save_file(File), ?File:path(File) end ||
+                    {File, LastMod} <- FilesAfter,
+                    lists:keysearch(File, 1, FilesBefore) =/= LastMod ],
+
+            message(reload, ModifiedFiles),
+
             ?Graph:clean();
         _ ->
             message(status, "Need a backup to do it", [])
     catch
         throw:Msg ->
             message(error, "Error: ~p", [Msg])
+    end;
+
+%%% ============================================================================
+%%% Attributes of the error form
+
+%% @private
+handle({error_attr}) ->
+    case ?Query:exec([file, {form, {type, '==', error}}]) of
+        [] ->  message(errorlist, []);
+        ErrList when is_list(ErrList)->
+            try
+                AllError =
+                [begin
+                     [File] = ?Query:exec(Form, ?Form:file()),
+                     Token = paarse((?Graph:data(Form))#form.tag),
+                     {Position, Text} = case Token of
+                                            [] -> {{?File:length(File)-1,
+                                                    ?File:length(File)}, "EOF"};
+                                            _ -> {?Token:pos(Token),
+                                                  ?Token:text(Token)}
+                                        end,
+                     [{filepath, ?File:path(File)}, {nexttokentext, Text},
+                      {position, Position}]
+                 
+                 end || Form <- ErrList],
+                message(errorlist, [AllError])
+            catch
+                throw:InternalErrorMsg ->
+                    message(error, [InternalErrorMsg])
+            end
+    end;
+
+%%% ============================================================================
+%%% Handling file status information
+
+handle({status_info, FileList}) ->
+    message(filestatus, [file_status_info(FileList)]).
+
+%%% ============================================================================
+%%% Parser for the error messages
+paarse({_,Mesg})->
+    case
+         %regexp:match(InMesg,"{'\\$gn',[a-z]+,[0-9]+}")
+         regexp:match(Mesg,"{{.+},{.+}}")
+    of
+         {match, F, L}->
+            SToken = string:substr(Mesg, F, L),
+           {ok, STerm, _}= erl_scan:string(SToken++"."),
+           {ok, Tken} = erl_parse:parse_term(STerm),
+           {_,Token} = Tken, Token;
+         _ -> []
+    end;
+paarse(_) ->
+   [].
+
+%%% ============================================================================
+
+
+%% Filters can be given by their atomic abbreviations or by numeric codes.
+convert_filter(Type) when is_atom(Type) -> Type;
+convert_filter(2) -> sem;
+convert_filter(3) -> ctx;
+convert_filter(4) -> syn;
+convert_filter(5) -> synlex;
+convert_filter(6) -> lex;
+convert_filter(7) -> inp;
+convert_filter(8) -> not_lex;
+convert_filter(_) -> all.
+
+
+error_message({no_include_file, File}) ->
+    ?MISC:format("Include file \"~s\" not found", [File]);
+error_message(Error) ->
+    ?MISC:format("Error: ~p", [Error]).
+
+
+wrtrans(Mod, Args)->
+    Result =
+        try
+            application:start(wrangler_app),        %TODO: again?! -bkil
+            apply(referl_tr_wrangler, Mod, [Args])
+        catch
+            nofile->
+                {error, "file not found"};
+            error:undef ->
+                {error, "undefined function"};
+            E={M,_A,_L} when is_atom(M)->
+                {error, ?Error:error_text(E)}
+%%            E       -> io:format("EX ~p~n",[[E,erlang:get_stacktrace()]]);
+%%            error:E -> io:format("ER ~p~n",[[E,erlang:get_stacktrace()]])
+        end,
+    case Result of
+        {NewPath, {ok, Files}} ->
+            message(rename, {hd(Files), NewPath}),
+            message(reload, [NewPath | tl(Files)]),
+            message(status, "Finished", []),
+            [wrdrop(File) || File <- [ NewPath | tl(Files)]];
+        {_File, {error, Reason}} ->
+            message(status, "~p", [Reason]);
+        {error, Reason} ->
+            message(status, "~p", [Reason]);
+        {ok, Files} ->
+            message(reload, Files),
+            message(status, "Finished", []),
+            [wrdrop(File) || File <- Files];
+        Error ->
+            message(error, "~p", [Error])
     end.
+    %application:stop(wrangler).
+
+wrdrop(File) when is_list(File) ->
+    case ?Query:exec(?File:find(File)) of
+        [F] ->
+            Drop = [ ?File:path(FN) || FN <- ?Query:exec(F,?File:included()) ],
+            ?FileMan:drop_file(F),
+            message(drop, Drop);
+        [] -> ok
+    end.
+
+
+dup(Args) ->
+    List = referl_wrangler:run_dup(Args),
+    case List of
+        [] -> message(error, "~p", ["Wrangler did not find any " ++
+                      "duplicated code freagments"]);
+        _ -> message(filepos, List)
+    end.
+
 
 files_with_lastmod() ->
     [{File, LastMod}
      || File <- ?Query:exec([file]),
         LastMod <- [(?ESG:data(File))#file.lastmod]].
 
-
-%%% ============================================================================
-%%% Attributes of the error form
-
-%% @private
-handle_error_attr()->
-case ?Query:exec([file, {form, {type, '==', error}}]) of
-       [] ->  message(errorlist, []);
-       ErrList when is_list(ErrList)->
-         try
-          AllError = 
-          [begin 
-            [File] = ?Query:exec(Form, ?Form:file()),
-            Token = paarse((?Graph:data(Form))#form.tag),
-            {Position, Text} = case Token of
-                                 [] -> {{?File:length(File)-1, 
-                                         ?File:length(File)}, "EOF"};
-                                  _ -> {?Token:pos(Token), 
-                                         ?Token:text(Token)}
-                               end,
-            [{filepath, ?File:path(File)}, {nexttokentext, Text}, 
-                                               {position, Position}]
-
-           end || Form <- ErrList], 
-            message(errorlist, [AllError])
-        catch
-          throw:InternalErrorMsg ->
-            message(error, [InternalErrorMsg])
-        end
-   end.
-
-%%% ============================================================================
-%%% Handling file status information
-
-handle_status_info(Prop)->
-    message(filestatus, [file_status_info(Prop)]).
-
 file_status_info([])->
-    Files = ?Graph:path(?Graph:root(),[file]),
-    [file_stat(?File:path(FileNode)) || FileNode <- Files];
+    Files = ?Query:exec([file]),
+    [file_stat(File) || File <- Files];
 
 file_status_info(FileList)->
-    [file_stat(File) || File <- FileList].
+    lists:map(
+      fun(FileName) ->
+              case ?Query:exec(?File:find(FileName)) of
+                  [File] ->
+                      file_stat(File);
+                  _ ->
+                      [{file, FileName}, {errors, no}, {type, none},
+                       {lastmod, undefined}, {status, missing}]
+              end
+      end,
+      FileList).
 
-%% @private
 file_stat(File)->
-    NoFile = [{file, File}, {errors, no}, {type, none}, 
-              {lastmod, undefined}, {status, missing}],
+    Path = ?File:path(File),
+    Type = ?File:type(File),
+    LastMod = (?Graph:data(File))#file.lastmod,
+    IsError = case ?Query:exec(File, [{form, {type, '==', error}}]) of
+                  [] -> no;
+                  _ -> yes
+              end,
 
-    Node = ?Graph:path(?Graph:root(),[{file,{path,'==',File}}]),
-    case Node of
-                 [] -> FileStat = NoFile;
-           [InNode] -> case ?Graph:data(InNode) of
-                      #file{path=Path, type=Type, lastmod=LastMod} ->
-                           IsError = case ?Query:exec(InNode, 
-                                             [{form, {type, '==', error}}]) of
-                                           [] -> no;
-                                            _ -> yes
-                                     end,
-                            FileStat = [{file, Path}, {error,IsError},
-                                        {type, Type}, {lastmod, LastMod}, 
-                                        {status, loaded}];    
-                         _ ->  FileStat = NoFile
-                   end;
-	      _ -> FileStat = NoFile
-    end,
-    FileStat.
-
-
-%%% ============================================================================
-%%% Parser for the error messages
-paarse({_,Mesg})->
-    case regexp:match(Mesg,"{'\\$gn',[a-z]+,[0-9]+}") of
-         {match, F, L}->
-	    SToken = string:substr(Mesg, F, L),
-           {ok, STerm, _}= erl_scan:string(SToken++"."),
-           {ok, Token} = erl_parse:parse_term(STerm),
-           Token;
-	 _ -> []
-    end;
-paarse(_) ->
-   [].
+    [{file, Path}, {error,IsError}, {type, Type},
+     {lastmod, LastMod}, {status, loaded}].

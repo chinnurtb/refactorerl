@@ -1,32 +1,32 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Contains utilities for the clustering modules.
 %%%
 %%% @author Csaba Hoch <hoch@inf.elte.hu>
 
 -module(cl_utils).
--vsn("$Rev: 1358 $").
+-vsn("$Rev: 3675 $").
 
 -export([ignore/1, leave/1, transform_to_01/3, 
          get_defined_value/2, proplist_update/2,
-         concat_atoms/2, integer_to_list/2]).
+         concat_atoms/2]).
 
 %% @spec ignore(term()) -> (term(),[{Attr,Out::integer()}]) -> bool()
 %%
@@ -103,12 +103,3 @@ proplist_update_sorted([{Key1,_}=H1|T1],[{Key2,_}=H2|T2]) ->
 concat_atoms(Atom1,Atom2) ->
     list_to_atom(atom_to_list(Atom1) ++ atom_to_list(Atom2)).
 
-%% @spec integer_to_list(integer(),integer()) -> string()
-%%
-%% @doc Converts `N' to string with `P' leading zeros.
-integer_to_list(N,P) ->
-    case lists:flatten(io_lib:format("~"++integer_to_list(P)++"..0b", [N])) of
-        %% if "***" was returned, it means that N does not fit in P characters.
-        [$*|_] -> integer_to_list(N);
-        Result -> Result
-    end.

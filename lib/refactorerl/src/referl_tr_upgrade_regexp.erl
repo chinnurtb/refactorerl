@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
@@ -103,13 +103,25 @@
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 -module(referl_tr_upgrade_regexp).
--vsn("$Rev: 3006 $").
+-vsn("$Rev: 3243 $").
 -include("refactorerl.hrl").
 
 -import(referl_tr_upgrade_iface, [do/1, simple_infix_expr/1]).
 
 -export([prepare/1]).
 -compile([export_all]).
+
+-define(ErrorCD, {"{error, Reason}", "catch error:badarg"}).
+%% regexp.erl:
+%% format_error({illegal,What}) ->
+%%        ["illegal character `",What,"'"];
+%% format_error({unterminated,What}) ->
+%%        ["unterminated `",What,"'"];
+%% format_error({char_class,What}) ->
+%%        ["illegal character class ",io_lib:write_string(What)].
+-define(ErrorCDDefVal, {"{error, {illegal, \" or unterminated part "
+                        "ruined the regular expression\"}}",
+                        "catch error:badarg"}).
 
 %% -----------------------------------------------------------------------------
 %% Callback
@@ -147,19 +159,11 @@ cd_match() ->
      [{"Str, RE",         "Str, RE, [{capture, first}]"},
       {"{match, S, L}",   "{match, [{decr(S), L}]}"},
       {"nomatch",         "nomatch"},
-      {"{error, Reason}", "catch error:badarg"},
+      ?ErrorCD,
 
       %% For default value
 
-      %% regexp.erl:
-      %% format_error({illegal,What}) ->
-      %%        ["illegal character `",What,"'"];
-      %% format_error({unterminated,What}) ->
-      %%        ["unterminated `",What,"'"];
-      %% format_error({char_class,What}) ->
-      %%        ["illegal character class ",io_lib:write_string(What)].
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 
@@ -182,12 +186,11 @@ cd_first_match() ->
      [{"Str, RE",         "Str, RE, [{capture, first}]"},
       {"{match, S, L}",   "{match, [{decr(S), L}]}"},
       {"nomatch",         "nomatch"},
-      {"{error, Reason}", "catch error:badarg"},
+      ?ErrorCD,
 
       %% For default value
 
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 
@@ -208,19 +211,26 @@ cd_matches() ->
      %% Change desctiptors
 
      [{"Str, RE",           "Str, RE, [global, {capture, first}]"},
-      {"{match, []}",       "nomatch"},
-      {"{match, Matches}",  "{match, map(melem, Matches)}"},
-      {"{error, Reason}",   "catch error:badarg"},
+      
+      %%{"{match, []}",       "nomatch"},
+      %%{"{match, Matches}",  "{match, map(melem, Matches)}"},
+
+      [{"{match, Matches = []}",       "nomatch"},
+       {"{match, Matches = _}",            "{match, map(melem, Matches)}"}
+      ],
+
+      ?ErrorCD,
 
       %% For default value
 
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 
-     [{melem, "{S, L}", "[{decr(S), L}]"}],
-
+     [{melem, [{"{S, L}", "[{decr(S), L}]"}]},
+      {mlist, [{"[]",      "nomatch"},
+               {"Matches2", "map(melem, Matches2)"}]}],
+     %%],
      %% Transforms
 
      [{decr, simple_infix_expr("P - 1"), simple_infix_expr("P + 1")}]
@@ -237,12 +247,11 @@ cd_gsub() ->
 
      [{"Str, RE, New",    "Str, RE, New, [{return, list}, global]"},
       {"{ok, NS, RC}",    "NS"},
-      {"{error, Reason}", "catch error:badarg"},
+      ?ErrorCD,
 
       %% For default value
 
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 
@@ -264,12 +273,11 @@ cd_sub() ->
 
      [{"Str, RE, New",    "Str, RE, New, [{return, list}]"},
       {"{ok, NS, RC}",    "NS"},
-      {"{error, Reason}", "catch error:badarg"},
+      ?ErrorCD,
 
       %% For default value
 
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 
@@ -291,12 +299,11 @@ cd_split_space() ->
 
      [{"Str, \" \"",      "Str, \"[ \\t\\n]+\", [{return, list}, trim]"},
       {"{ok, Res}",       "Res"},
-      {"{error, Reason}", "catch error:badarg"},
+      ?ErrorCD,
 
       %% For default value
 
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 
@@ -318,12 +325,11 @@ cd_split() ->
 
      [{"Str, RE",         "Str, RE, [{return, list}]"},
       {"{ok, Res}",       "Res"},
-      {"{error, Reason}", "catch error:badarg"},
+      ?ErrorCD,
 
       %% For default value
 
-      {"{error, {illegal, \" or unterminated part ruined the regular expression\"}}",
-       "catch error:badarg"}],
+      ?ErrorCDDefVal],
 
      %% Helpers
 

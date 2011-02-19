@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
@@ -85,11 +85,14 @@
 %%%   already in one), or copying their definition.</li>
 %%% </ol>
 %%%
+%%%
+%%% @todo handle all error_text atoms either here or in ?Error
+%%%
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 
 
 -module(referl_tr_move_fun).
--vsn("$Rev: 3006 $").
+-vsn("$Rev: 3408 $").
 
 -include("refactorerl.hrl").
 
@@ -134,8 +137,8 @@
 
 %% @private
 
-error_text(fundef_not_found, [FunName]) ->
-    ["Definition of function ", FunName," not found"];
+error_text(fundef_not_found, Fun) ->
+    ["Definition of function ", ?MISC:fun_text(Fun)," not found"];
 
 error_text(name_conflict, [ToModName, {Name, Arity}]) ->
     ["Name conflict with ", ?MISC:fun_text([ToModName, Name, Arity])];
@@ -150,15 +153,15 @@ error_text(unincludables, [Conflicts]) ->
 
 error_text(include_mismatch, [Clash]) ->
     ["Different definitions come from includes in the source and target files",
-     "for some records and macros: ",
+     " for some records and macros: ",
      ?MISC:format("(~p)", [Clash])].
 
 
 %% Returns the name of a record or a macro from its node.
 recmac_name(Node) ->
     case ?Syn:node_type(Node) of
-        form   -> ["?" | ?Macro:name(Node)];
-        record -> ["#" | atom_to_list(?Rec:name(Node))]
+        form   -> [$? | ?Macro:name(Node)];
+        record -> [$# | atom_to_list(?Rec:name(Node))]
     end.
 
 %%% ============================================================================
@@ -178,16 +181,17 @@ prepare(Args) ->
 
     %% Finding the files that belong to the modules
 
-    FromFile = exec1(FromMod, ?Mod:file(), file_not_present),
-    ToFile   = exec1(ToMod, ?Mod:file(), file_not_present),
+    FromFile = exec1(FromMod, ?Mod:file(), ?RefErr0r(source_not_found)),
+    ToFile   = exec1(ToMod, ?Mod:file(), ?RefErr0r(target_not_found)),
 
     %% Finding function objects and definitions
 
     FunObjs = ?Args:functions(Args),
     FunDefs = [exec1(FunObj, ?Fun:definition(),
-                     ?LocalError(fundef_not_found, [FunName]))
-               || FunObj <- FunObjs,
-                  FunName <- [?Fun:name(FunObj)]],
+                     ?LocalError(fundef_not_found, [FunName,Arity]))
+               || FunObj  <- FunObjs,
+                  FunName <- [?Fun:name(FunObj)],
+                  Arity   <- [?Fun:arity(FunObj)]],
 
     %% Checking function name collisions
 
@@ -259,6 +263,7 @@ rec_mac_infos(Tag, FromFile, ToFile, Used_, FunDefs) ->
     Local_Clash   = intersect(Clash, F_L),
     Used_Included = intersect(F_I, Used),
 
+    ClashNames = lists:map(fun recmac_name/1, Clash),
     case {Clash, Local_Clash} of
         {[], _} ->
             % There is no direct name collision, but the inclusion
@@ -267,8 +272,10 @@ rec_mac_infos(Tag, FromFile, ToFile, Used_, FunDefs) ->
             Conflicts = [Hrl || Entity <- Used_Included,
                                 Hrl <- exec(Entity, GetFileQuery),
                                 not ?File:includable(ToFile, Hrl)],
+            ConflictNames = lists:map(fun ?File:path/1, Conflicts),
+            ConflictNameL = string:join(ConflictNames, ", "),
             ?Check(Conflicts == [],
-                   ?LocalError(unincludables, [Conflicts]));
+                   ?LocalError(unincludables, [ConflictNameL]));
         {_, []} ->
             % The clashes only come from includes,
             % hopefully it can be resolved by matching the include entries.
@@ -277,9 +284,8 @@ rec_mac_infos(Tag, FromFile, ToFile, Used_, FunDefs) ->
             InclClashFiles = usort(exec(Clash, GetFileQuery)),
             ToIncludes = exec(ToFile, ?File:includes()),
             ?Check(InclClashFiles -- ToIncludes == [],
-                   ?LocalError(include_mismatch, [Clash]));
+                   ?LocalError(include_mismatch, [ClashNames]));
         {_, _}  ->
-            ClashNames = lists:map(fun recmac_name/1, Clash),
             throw(?LocalError(recmac_local_conflict, [ClashNames]))
     end,
     [recmac_info(Node, FunDefs, Used_Included, Tag) || Node <- Used].
@@ -292,7 +298,7 @@ recmac_info(Node, FunDefs, UsedIncluded, Tag) ->
                end,
     case Tag of
         record ->
-            Form = exec1(Node, ?Rec:form(), recform_not_found),
+            Form = exec1(Node, ?Rec:form(), form_not_found),
             #rec_info{loc_incl = Loc_Incl, node = Node,
                       form = Form, removable = Removable};
         macro  ->
@@ -433,7 +439,8 @@ correct_import_refs(Expr, Fun, TargetMod) ->
                             name = ?Fun:name(Fun), arity = ?Fun:arity(Fun)});
         {_,TargetMod} ->
             ?File:del_form(ImportForm),
-            ?Transform:touch(exec1(Mod, ?Mod:file(), file_not_found));
+            ?Transform:touch(exec1(Mod, ?Mod:file(),
+                                   ?RefError(no_file,[module,Mod])));
         {_, _} ->
             ?NOTE(#list_ren{form=ImportForm, name=?Mod:name(TargetMod)}),
             ?Transform:touch(ImportForm)
@@ -577,7 +584,8 @@ expimp_list_adds(#list_add{type = Type, where = Module, funobj = FunObj}) ->
             ?Transform:touch(FunDef),
             ?Fun:add_export(FunObj);
         import ->
-            File = exec1(Module, ?Mod:file(), file_not_found),
+            File = exec1(Module, ?Mod:file(),
+                         ?RefError(no_file,[module,Module])),
             ?Transform:touch(File),
             ?Mod:add_import(Module, FunObj)
     end.
@@ -592,7 +600,7 @@ expimp_list_dels(ListCons, Exprs, FromMod, FunDefs) ->
 
     %% File that defines the list
     File = exec1(ListCons, seq(?Expr:attrib_form(), ?Form:file()),
-                 file_not_found),
+                 ?RefError(no_file,[attrib_form])),
 
     %% The expr is removable, when only the moved applications refer to it
     Removable = filter_removable_exprs(Exprs, File, FromMod, AllApps),

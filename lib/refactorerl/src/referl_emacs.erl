@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module provides an interface for Emacs. It is intended to be
 %%% `start'ed from the command line using `-noshell'. It reads Erlang terms
@@ -31,13 +31,9 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(referl_emacs).
--vsn("$Rev: 1881 $").
--behaviour(gen_event).
+-vsn("$Rev: 3185 $").
 
 -export([start/0]).
-
--export([init/1, handle_event/2, handle_call/2, handle_info/2,
-         terminate/2, code_change/3]).
 
 -export([run_server/0]).
 
@@ -67,21 +63,16 @@ run_server() ->
 emacs_server() ->
     register(referl_input, self()),
     monitor_node(?REFERL_NODE, true),
-    connect_msg_server(),
     Self = self(),
-    loop(spawn_link(fun() -> read_loop(Self) end)).
-
-connect_msg_server() ->
-    try ?UI:add_msg_handler(?MODULE, self()) of
-        ok -> ok
-    catch
-        exit:noproc ->
-            timer:sleep(100),
-            connect_msg_server()
+    referl_ui_evsend:start(Self, msg),
+    receive
+	{msg, installed} -> loop(spawn_link(fun() -> read_loop(Self) end))
     end.
 
 loop(Inp) ->
     receive
+	{msg, terminated} -> loop(Inp);
+	{msg,{gen_event_EXIT,referl_ui_evsend,shutdown}} -> loop(Inp);
         {Inp, Term} ->
             try
                 ui_call(Term)
@@ -170,28 +161,3 @@ escape([$\n | Tail]) ->
 escape([Chr | Tail]) ->
     [Chr    | escape(Tail)].
 
-%% Event handler callbacks
-%% @private
-init(Pid) when is_pid(Pid) ->
-    {ok, Pid}.
-
-%% @private
-handle_event(Event, Pid) ->
-    Pid ! {msg, Event},
-    {ok, Pid}.
-
-%% @private
-handle_call(_Req, State) ->
-    {ok, undefined, State}.
-
-%% @private
-handle_info(_Info, State) ->
-    {ok, State}.
-
-%% @private
-terminate(_Arg, _State) ->
-    ok.
-
-%% @private
-code_change(_, S, _) ->
-    {ok, S}.

@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ===========================================================================
 %%% Processes
@@ -79,6 +79,7 @@
 
 
 %%% ===========================================================================
+%%% Module error reporting
 
 -define(LocalError(Type, Detail), {?MODULE, Type, Detail}).
 -define(RefError(Type, Detail),   {?Error, Type, Detail}).
@@ -99,7 +100,7 @@
 %%% Node data records
 
 -record(file,     {type, path, eol, lastmod}).
--record(form,     {type, tag, pp=none}).
+-record(form,     {type, tag, pp=none, hash}).
 -record(clause,   {type, kind, pp=none}).
 -record(expr,     {type=expr, kind, value, pp=none}).
 -record(lex,      {type, data}).
@@ -111,3 +112,14 @@
 -record(func,     {type, name, arity, dirty}).
 -record(variable, {name}).
 -record(env,      {name, value}).
+
+%%% ===========================================================================
+%%% Debugging
+
+%% Prettyprints the value of a single expression with module/line information.
+-define(d2(Name, X), io:format("~3w ~s~n ~9s: ~p~n", [?LINE, atom_to_list(?MODULE) -- "referl_", Name, X])).
+-define(d(X), ?d2(??X, X)).
+
+%% Prettyprints a list of expressions with module/line information.
+-define(ds(Xs), io:format(lists:flatten(["~p-~p", ["~n  ~p" || _ <- Xs], "~n"]),
+                            [?LINE, ?MODULE] ++ Xs)).

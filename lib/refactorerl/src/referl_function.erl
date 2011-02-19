@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc High level function-related operations. This module contains
 %%% functions that expect a function semantical node as their parameter (or
@@ -24,7 +24,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_function).
--vsn("$Rev: 2383 $").
+-vsn("$Rev: 3331 $").
 -include("refactorerl.hrl").
 
 %% =============================================================================
@@ -171,8 +171,9 @@ add_export(Fun) ->
     case exported(Fun) of
         true  -> ok;
         false ->
-            File = ?Query:exec1(Fun, ?Query:seq(module(), ?Mod:file()), 
-                                file_not_found),
+            [Mod] = ?Query:exec(Fun, module()),
+            File = ?Query:exec1(Mod, ?Mod:file(),
+                                ?RefError(no_file,[module,Mod])),
             NameExpr = ?Syn:create(#expr{kind=atom}, 
                                    [?MISC:to_list(name(Fun))]),
             ArityExpr = ?Syn:create(#expr{kind=integer}, 

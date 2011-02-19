@@ -1,21 +1,21 @@
 ;; -*- coding: utf-8 -*-
-;; The contents of this file are subject to the Erlang Public License,
-;; Version 1.1, (the "License"); you may not use this file except in
-;; compliance with the License. You should have received a copy of the
-;; Erlang Public License along with this software. If not, it can be
-;; retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+
+;; The  contents of this  file are  subject to  the Erlang  Public License,
+;; Version  1.1, (the  "License");  you may  not  use this  file except  in
+;; compliance  with the License.  You should  have received  a copy  of the
+;; Erlang  Public License  along  with this  software.  If not,  it can  be
+;; retrieved at http://plc.inf.elte.hu/erlang/
 ;;
-;; Software distributed under the License is distributed on an "AS IS"
-;; basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-;; License for the specific language governing rights and limitations under
-;; the License.
+;; Software  distributed under  the License  is distributed  on an  "AS IS"
+;; basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+;; the License  for the specific language governing  rights and limitations
+;; under the License.
 ;;
 ;; The Original Code is RefactorErl.
 ;;
-;; The Initial Developer of the Original Code is Eötvös Loránd University.
-;; Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-;; Loránd University. All Rights Reserved.
-
+;; The Initial Developer of the  Original Code is Eötvös Loránd University.
+;; Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+;; Eötvös Loránd University. All Rights Reserved.
 
 (provide 'refactorerl-operations)
 (require 'refactorerl-def)
@@ -33,7 +33,7 @@
                collect (vector arg-name arg-value))))
     (cond ((not buffer-file-name)
            (error "No visited file"))
-          ((bound-and-true-p refac-test-mode)
+          ((refac-test-mode-p)
            (kill-new (refac-erl-format arglist)))
           ((and (not wranglerp) (not (eq refac-buffer-state :ok)))
            (error "File is not ready for refactoring"))
@@ -194,15 +194,15 @@ on the expression between the point and the mark.
                    :varname varname)
   (deactivate-mark))
 
-(define-refac-operation (refactorerl-eliminate-variable :menu "Eliminate variable" :key "ev" 
-                                                        :precondition :buffer-state) 
-  ((pos :point)) 
+(define-refac-operation (refactorerl-eliminate-variable :menu "Eliminate variable" :key "ev"
+                                                        :precondition :buffer-state)
+  ((pos :point))
   "Performs the Eliminate Variable refactoring.
 
-1. Position the cursor over any instance of the variable. 
-2. Call the refactoring from the menu or with \\[refactorerl-eliminate-variable]." 
-  (refac-transform 'referl_tr_elim_var 
-                   :file buffer-file-name 
+1. Position the cursor over any instance of the variable.
+2. Call the refactoring from the menu or with \\[refactorerl-eliminate-variable]."
+  (refac-transform 'referl_tr_elim_var
+                   :file buffer-file-name
                    :position pos))
 
 (define-refac-operation (refactorerl-introduce-rec :menu "Introduce record" :key "ri"
@@ -248,7 +248,7 @@ moved can be selected from a list.
     (error "File is not ready for refactoring"))
   (refac-move-mac-params))
 
-(define-refac-operation (refactorerl-rename-mod :menu "Rename module" :menu-group "Renaming" :key "rm"
+(define-refac-operation (refactorerl-rename-mod :menu "Rename module" :menu-group rename :key "rm"
                                                 :precondition :buffer-state)
   ((name "New module name"))
   "Performs the Rename Module refactoring.
@@ -261,7 +261,7 @@ moved can be selected from a list.
                    :name name))
 
 
-(define-refac-operation (refactorerl-rename-header :menu "Rename header" :menu-group "Renaming" :key "rh"
+(define-refac-operation (refactorerl-rename-header :menu "Rename header" :menu-group rename :key "rh"
                                                 :precondition :buffer-state)
   ((name "New headerfile name"))
   "Performs the Rename Header File refactoring.
@@ -273,7 +273,7 @@ moved can be selected from a list.
                    :file buffer-file-name
                    :filename name))
 
-(define-refac-operation (refactorerl-rename-function :menu "Rename function" :menu-group "Renaming"
+(define-refac-operation (refactorerl-rename-function :menu "Rename function" :menu-group rename
                                                      :key "rf"
                                                      :precondition :buffer-state)
   ((pos :point) (name "New function name"))
@@ -289,7 +289,7 @@ moved can be selected from a list.
                    :position pos
                    :name name))
 
-(define-refac-operation (refactorerl-rename-variable :menu "Rename variable" :menu-group "Renaming"
+(define-refac-operation (refactorerl-rename-variable :menu "Rename variable" :menu-group rename
                                                      :key "rv"
                                                      :precondition :buffer-state)
   ((pos :point) (name "New variable name"))
@@ -303,7 +303,7 @@ moved can be selected from a list.
                    :position pos
                    :varname name))
 
-(define-refac-operation (refactorerl-rename-record :menu "Rename record" :menu-group "Renaming" :key "rrd"
+(define-refac-operation (refactorerl-rename-record :menu "Rename record" :menu-group rename :key "rrd"
                                                    :precondition :buffer-state)
   ((pos :point) (name "New record name"))
   "Performs the Rename Record refactoring.
@@ -316,7 +316,7 @@ moved can be selected from a list.
                    :position pos
                    :name name))
 
-(define-refac-operation (refactorerl-rename-field :menu "Rename record field" :menu-group "Renaming" :key "rrf"
+(define-refac-operation (refactorerl-rename-field :menu "Rename record field" :menu-group rename :key "rrf"
                                                   :precondition :buffer-state)
   ((pos :point) (name "New field name"))
   "Performs the Rename Record Field refactoring.
@@ -329,7 +329,7 @@ moved can be selected from a list.
                    :position pos
                    :name name))
 
-(define-refac-operation (refactorerl-rename-macro :menu "Rename macro" :menu-group "Renaming" :key "rc"
+(define-refac-operation (refactorerl-rename-macro :menu "Rename macro" :menu-group rename :key "rc"
                                                    :precondition :buffer-state)
   ((pos :point) (name "New macro name"))
   "Performs the Rename Macro refactoring.
@@ -341,3 +341,50 @@ moved can be selected from a list.
                    :file buffer-file-name
                    :position pos
                    :macname name))
+
+(define-refac-operation (refactorerl-semantic-query :menu "Run query"
+                                                    :key "sq"
+                                                    :menu-group query
+                                                    :precondition :buffer-state)
+  ((pos :point) (query "Query"))
+  "Runs a semantic query."
+  (refac-transform 'referl_sq
+                   :querystr query
+                   :file buffer-file-name
+                   :position pos))
+
+
+(define-refac-operation (refactorerl-goto-def
+                         :menu "Find definition"
+                         :key "qd"
+                         :menu-group query
+                         :precondition :buffer-state)
+  ((pos :point))
+  "Runs a semantic query which finds the definition of the
+entity at the point."
+  (refac-transform 'referl_sq
+                   :querystr "@def"
+                   :file buffer-file-name
+                   :position pos))
+
+(define-refac-operation (refactorerl-find-funrefs
+                         :menu "Find function references"
+                         :key "qr"
+                         :menu-group query
+                         :precondition :buffer-state)
+  ((pos :point))
+  "Runs a semantic query which finds every reference to the
+function at the point."
+  (refac-transform 'referl_sq
+                   :querystr "@fun.refs"
+                   :file buffer-file-name
+                   :position pos))
+
+(define-refac-operation (refactorerl-metric-query   :menu "Run metric query"
+                                                    :key "mq"
+                                                    :menu-group query
+                                                    :precondition :buffer-state)
+  ((mquery "Metric Query"))
+  "Runs a metric query."
+  (refac-transform 'referl_metrics
+                   :querys mquery))

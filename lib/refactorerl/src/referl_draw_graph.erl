@@ -1,30 +1,31 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module prints the syntax graph to a file.
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 %%% @author Robert Kitlei <kitlei@inf.elte.hu>
-
+%%%
+%%% @author Máté Tejfel <matej@inf.elte.hu>
 
 -module(referl_draw_graph).
--vsn("$Rev: 2914 $").
+-vsn("$Rev: 3292 $").
 
 -include("refactorerl.hrl").
 -include("referl_schema.hrl").
@@ -32,12 +33,181 @@
 %%% ============================================================================
 %%% Exports
 
--export([draw_graph/1, draw_graph/2, draw_graph_tooltip/2]).
-
+-export([draw_graph/1, draw_graph/2, draw_graph_tooltip/2, draw_graph_file/3, 
+         draw_graph_fun/3, draw_graph_funlist/3, draw_graph_file/4, 
+         draw_graph_fun/4, draw_graph_funlist/4, draw_graph_node/3, draw_graph_node/4]).
 
 
 %%% ============================================================================
 %%% Draw graph
+
+%% @spec draw_graph_fun(Args :: arglist()|{atom(), atom(), integer()}, 
+%% Filter :: atom(), ToFile :: string()) -> ok | string()
+%% @doc  Draws the subgraph of the Function to the file 
+%%ToFile (from the Function node).
+draw_graph_fun(Args, Filter, ToFile) 
+    -> draw_graph_fun(Args, Filter, ToFile, false).
+
+%% @spec draw_graph_fun(Args :: arglist()|{atom(), atom(), integer()}, 
+%% Filter :: atom(), ToFile :: string(), ToolTip::boolean()) -> ok | string()
+%% @doc  Draws the subgraph of the Function to the file 
+%% ToFile (from the Function node).
+%%       Fill `tooltip' attributes with the data of the nodes. You can use
+%%       this cool feature if you convert the dot file into svg.
+draw_graph_fun(Args, Filter, ToFile, ToolTip) ->
+    DGF = fun(QUE) -> draw_graph_node(hd(QUE), Filter, ToFile, ToolTip) end,
+    case Args of
+        {Module, Name, Arity} 
+            -> QueryDef = ?Query:exec(?Query:exec(?Query:seq(?Mod:find(Module),
+                   ?Fun:find(Name,Arity))), ?Fun:definition()),
+               case (QueryDef) of
+                   []  -> "The function:" ++ 
+                                "module: " ++ atom_to_list(Module)++
+                                ", fun: " ++ atom_to_list(Name) ++ 
+                                ", arity: " ++ integer_to_list(Arity) ++ 
+                                " is not available! ";
+                   _   -> DGF(QueryDef)
+               end;    
+        [{_,_}|_]             
+            -> QueryDef = ?Query:exec(?Args:function(Args), ?Fun:definition()),
+               case (QueryDef) of
+                   [] -> "There is no function expression 
+                            in the given position!";
+                   _  -> DGF(QueryDef)
+               end;   
+        _   -> "Wrong arguments!"
+    end.    
+
+
+%% @spec draw_graph_funlist(Args :: arglist()|[{atom(),atom(),integer()}], 
+%% Filter :: atom(), ToFile :: string()) -> ok | string()
+%% @doc  Draws the subgraph of the Functions to the file 
+%% ToFile (from nodes of the Functions).
+draw_graph_funlist(Args, Filter, ToFile) 
+    -> draw_graph_funlist(Args, Filter, ToFile, false).
+
+    
+%% @spec draw_graph_funlist(Args :: arglist()|[{atom(),atom(),integer()}], 
+%% Filter :: atom(), ToFile :: string(), ToolTip::boolean()) -> ok | string()
+%% @doc  Draws the subgraph of the Functions to the file 
+%% ToFile (from nodes of the Functions).
+%%       Fill `tooltip' attributes with the data of the nodes. You can use
+%%       this cool feature if you convert the dot file into svg.
+draw_graph_funlist(Args, Filter, ToFile,ToolTip) ->
+    ets:new(nodes, [named_table]),
+    ets:insert(nodes, {max, 0}),
+    case file:open(ToFile, [write]) of
+        {ok, Dev} -> 
+            io:format(Dev, "digraph erl {~n", []),
+            DFL = fun(FunDefs) -> draw_funlist(Dev,Filter,FunDefs,ToolTip) end,
+            case Args of
+               [{_,_}|_]   
+                  -> FunDefs = [ hd(?Query:exec(X, ?Fun:definition())) ||
+                                    X <- ?Args:functions(Args)],
+                     Ret = DFL(FunDefs); 
+               [{_,_,_}|_] 
+                  -> Ret = case (getDefNodes(Args)) of
+                              {ok,X}  -> DFL(X);
+                              {Str,X} 
+                                  -> case DFL(X) of
+                                         ok -> Str;
+                                         Str2 -> Str ++ " " ++ Str2
+                                     end;
+                              _   -> "Wrong arguments!!"
+                           end;                                                                                 
+               _  -> Ret = "Wrong arguments!"   
+            end;    
+        {error, Reason} ->
+            Ret = "Dump failed: " ++ file:format_error(Reason)
+    end,
+    ets:delete(nodes),
+    Ret.
+
+
+getDefNodes(Args) ->
+    GetDef = fun ({Module,Name,Arity}) ->
+                 ?Query:exec(?Query:exec(?Query:seq(?Mod:find(Module),
+                     ?Fun:find(Name,Arity))), ?Fun:definition())
+             end,         
+    FoldFun = fun ({Module,Name,Arity}, {Param, DefNodes}) ->
+                 case GetDef({Module,Name,Arity}) of
+                     []  -> ErrMsg = "The function:" ++ 
+                                "module: " ++ atom_to_list(Module)++
+                                ", fun: " ++ atom_to_list(Name) ++ 
+                                ", arity: " ++ integer_to_list(Arity) ++ 
+                                " is not available! ",
+                            case Param of
+                                ok  -> {ErrMsg,DefNodes};
+                                Str -> {Str ++ ErrMsg, DefNodes}
+                            end;    
+                     Def -> {Param, DefNodes ++ [hd(Def)]}
+                  end
+             end,
+    lists:foldl(FoldFun, {ok,[]}, Args).
+
+draw_funlist(Dev,Filter,FunDefs,ToolTip) ->
+    CollTok = fun (X,Y) -> case draw_graph(Dev, X, Filter, ToolTip, []) of
+                               ok  -> Y;   
+                               Str -> Y ++ Str
+                           end    
+              end,
+    CollectedTokens = lists:foldl(CollTok, [], FunDefs),
+    io:format(Dev, "{rank=same;~s}~n", [CollectedTokens]),
+    io:format(Dev, "}~n", []),
+    file:close(Dev).
+
+
+%% @spec draw_graph_node(Node :: node(), Filter :: atom(), 
+%%          ToFile :: string()) -> ok | string()
+%% @doc  Draws the subgraph from the Node to the file ToFile with edge
+%%       filtering.
+draw_graph_node(Node, Filter, ToFile) ->
+    draw_graph_node(Node, Filter, ToFile, false).
+
+
+%% @spec draw_graph_node(Node :: node(), Filter :: atom(), ToFile :: string(), 
+%% ToolTip::boolean()) -> ok | string()
+%% @doc  Draws the subgraph from the Node to the file ToFile with edge filtering.
+%%       Fill `tooltip' attributes with the data of the nodes. You can use
+%%       this cool feature if you convert the dot file into svg.
+draw_graph_node(Node, Filter, ToFile, ToolTip) -> 
+    ets:new(nodes, [named_table]),
+    ets:insert(nodes, {max, 0}),
+    case file:open(ToFile, [write]) of
+        {ok, Dev} -> 
+            io:format(Dev, "digraph erl {~n", []),
+            CollectedTokens = draw_graph(Dev, Node, Filter, ToolTip, []),
+            io:format(Dev, "{rank=same;~s}~n", [CollectedTokens]),
+            io:format(Dev, "}~n", []),
+            Ret = file:close(Dev);
+        {error, Reason} ->
+            Ret = "Dump failed: " ++ file:format_error(Reason)
+    end,
+    ets:delete(nodes),
+    Ret.
+
+
+
+%% @spec draw_graph_file(FileArg :: string() | arglist(),
+%%       Filter :: atom(), ToFile :: string()) -> ok | string()
+%% @doc  Draws the subgraph of the File to the file ToFile (from the File node)
+%%       with edge filtering.
+draw_graph_file(Arg, Filter, ToFile) 
+    -> draw_graph_file(Arg, Filter, ToFile, false).
+
+%% @spec draw_graph_file(FileArg :: string() | arglist(), Filter :: atom(),
+%%       ToFile :: string(), ToolTip::boolean()) -> ok | string()
+%% @doc  Draws the subgraph of the File to the file ToFile (from the File node)
+%%       with edge filtering.
+%%       Fill `tooltip' attributes with the data of the nodes. You can use
+%%       this cool feature if you convert the dot file into svg.
+draw_graph_file(Arg, Filter, ToFile, ToolTip) ->
+    DGN = fun(Node) -> draw_graph_node(Node, Filter, ToFile, ToolTip) end, 
+    case Arg of 
+        [{_,_}|_] -> DGN(?Args:file(Arg));
+        _         -> DGN(hd(?Query:exec(?File:find(Arg))))
+    end.
+
 
 %% @spec draw_graph(File :: string()) -> ok | string()
 %% @doc  Draws the whole graph to the file.
@@ -130,7 +300,7 @@ draw_new_node(Dev, Node, Filter, FilterFun, ToolTip, Tokens) ->
     [ io:format(Dev, "N~b -> N~b [~s]~n",
                  [Ind,
                  element(2, hd(ets:lookup(nodes, To))),
-                 linklabel(Tag, I)])
+                 linklabel(Tag, I, ToolTip)])
         ||
         {Tag, I, To} <- IndexLinks],
 
@@ -219,19 +389,36 @@ schema_has(Schema, From, To) ->
 
 
 %% @doc Returns the Graphviz label of the node.
-nodelabel(Node = {_,_, Index}, ToolTip) ->
+nodelabel(Node = {_,_, Index}, true) ->
+    Data = ?Graph:data(Node),
+    ToolTipText = tooltipStr(Node, Data),
+    nodelabel(Node, Index, ToolTipText, only_text);
+nodelabel(Node = {_,_, Index}, false) ->
+    nodelabel(Node, Index, "", all_info).
+
+nodelabel(Node, Index, ToolTipText, LabelSimplicity) ->
     Data          = ?Graph:data(Node),
     Shape         = shape(Data),
     Content       = label(Index, Data),
     IsRecordShape = Shape == "Mrecord" orelse Shape == "record",
     Label         = label_shape(IsRecordShape, Content, Index),
-    TooltipStr = if
-        ToolTip -> tooltipStr(Node,Data);
-        true    -> ""
-    end,
-    % Write attributes
-    io_lib:format("~s shape=\"~s\", label=\"~s\", fontsize=\"~p\"~s",
-                  [nodestyle(Data), Shape, Label, labelsize(Data), TooltipStr]).
+    LabelText     = simplify_label(LabelSimplicity, Label),
+    io_lib:format("~s shape=\"~s\", label=\"~s\", fontsize=\"~p\" ~s",
+                  [nodestyle(Data), Shape, LabelText,
+                   labelsize(Data), ToolTipText]).
+
+%% Controls how much information is displayed on the label.
+%% Expected values are `only_text', `text_index' and `all_info'.
+simplify_label(only_text, [${,_,"|",[${,_,"|",Text,$}],$}]) ->
+    Text;
+simplify_label(only_text, [${,_,"|",Text,$}]) ->
+    Text;
+simplify_label(text_index, [${,[${,_,"|",Index,$}],"|",[${,_,"|",Text,$}],$}]) ->
+    ["{{", Text, "|", Index, "}}"];
+simplify_label(text_index, [${,[${,_,"|",Index,$}],"|",Text,$}]) ->
+    ["{{", Text, "|", Index, "}}"];
+simplify_label(_, Text) ->
+    Text.
 
 label_shape(false, Content, _)              -> escape_text(Content);
 label_shape(true, {Top, Bottom}, Index)     -> boxed_shape(Top, Index, Bottom);
@@ -330,10 +517,16 @@ escape_char($")   -> [ $\\, $" ];
 escape_char(Char) -> [Char].
 
 
-linklabel(Tag, Ind) ->
+linklabel(Tag, Ind, ToolTip) ->
     C=color(Tag),
-    io_lib:format("label=\"~s/~b\", color=\"~s\", fontcolor=\"~s\"",
-                  [Tag, Ind, C, C]).
+    case ToolTip of
+        false ->
+            io_lib:format("label=\"~s/~b\", color=\"~s\", fontcolor=\"~s\"",
+                            [Tag, Ind, C, C]);
+        true  ->
+            io_lib:format("color=\"~s\", tooltip=\"~s/~b\"",
+                            [C, Tag, Ind])
+    end.
 
 explab(Type, Kind, Val) ->
     V = value_text(Val, Kind),
@@ -410,22 +603,15 @@ color(_) -> black.
 %% @doc  Write the properties of the `Node' into a string. This text used as
 %%  graphviz dot attribute for alt text in SVG format.
 %%  String format:
-%%  `, URL="1", tooltip="propKey1=propValue1&#13;&#10;...propKeyN=propValueN"'
+%%  `, URL="#ok", tooltip="propKey1=propValue1&#13;&#10;...propKeyN=propValueN"'
+%% The `URL' tag is required by some SVG viewer to show the tooltip on hoover.
 tooltipStr(Node, Data) ->
-    RevProps = lists:reverse([{node,Node}|
-                    ?MISC:record_to_proplist(Data, nodedata_fields(Data))]),
-    {LastKey,LastValue} = hd(RevProps),
-    LastStr0 = ?MISC:format("~p=~p", [LastKey,LastValue]),
-    LastStr  = ?MISC:string_replace(LastStr0, ["\""], "&quot;", 0),
-    PropStr = lists:foldl(
-        fun({K,V},StrEndAcc) ->
-            KV0 = ?MISC:format("~p=~p&#13;&#10;", [K,V]),
-            KV  = ?MISC:string_replace(KV0, ["\""], "&quot;", 0),
-            KV++StrEndAcc
-        end,
-        LastStr,
-        tl(RevProps)),
-    ?MISC:format(", URL=\"1\", tooltip=\"~s\"", [PropStr]).
+    LineSeparator = "&#13;&#10;",
+    Props = [{node,Node}|?MISC:record_to_proplist(Data,nodedata_fields(Data))],
+    Txt1 = [?MISC:format("~p=~p", [Key, Val]) || {Key, Val} <- Props],
+    Txt2 = [?MISC:string_replace(Txt, ["\""], "&quot;", 0) || Txt <- Txt1],
+    PropStr = ?MISC:join(Txt2, LineSeparator),
+    ?MISC:format(", URL=\"#ok\", tooltip=\"~s\"", [PropStr]).
 
 
 %% @spec nodedata_fields(NodeDataType::atom()) -> [RecordField::atom()]

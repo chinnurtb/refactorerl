@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Generic graph query interface. A graph query is the generalization of
 %%% a path (see {@link referl_graph:path()} and {@link referl_graph:path/2}).
@@ -35,10 +35,10 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_query).
--vsn("$Rev: 2407 $").
+-vsn("$Rev: 3572 $").
 
 -export([exec/1, exec/2, exec1/2, exec1/3]).
--export([seq/1, seq/2, all/1, all/2, any/1, any/2]).
+-export([seq/1, seq/2, all/1, all/2, any/1, any/2, unique/1]).
 
 %% @type query(Start, End)
 
@@ -86,6 +86,9 @@ exec(Start, {any, Q1, Q2}) ->
         Result -> Result
     end;
 
+exec(Start, {unique, Q}) ->
+    lists:usort(exec(Start, Q));
+
 exec(Start, Query) when is_function(Query) ->
     Query(Start);
 
@@ -116,6 +119,7 @@ seq(Lst) -> lists:foldr(fun seq/2, [], Lst).
 %% @see all/1
 all(Q, []) -> Q;
 all([], Q) -> Q;
+all(Q1, Q2) when is_list(Q1) andalso is_list(Q2) -> [[Q1, Q2]];
 all(Q1, Q2) -> {all, Q1, Q2}.
 
 %% @spec all([query()]) -> query()
@@ -135,3 +139,9 @@ any(Q1, Q2) -> {any, Q1, Q2}.
 %% that has any results. Queries are executed lazily, i.e. the second query is
 %% executed only when the first query has no results, and so on.
 any(Lst) -> lists:foldr(fun any/2, [], Lst).
+
+%% @spec unique(query()) -> query()
+%% @doc The result query returns the parameter query with unique
+%% filter.
+unique(Q) when is_list(Q) -> [{Q, unique}];
+unique(Q) -> {unique, Q}.

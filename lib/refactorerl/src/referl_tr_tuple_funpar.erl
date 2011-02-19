@@ -1,22 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
-
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
@@ -86,7 +85,7 @@
 %%% @author Kornél Horváth <kornel@inf.elte.hu>
 
 -module(referl_tr_tuple_funpar).
--vsn("$Rev: 2599 $").
+-vsn("$Rev: 3185 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -185,7 +184,9 @@ find_nodes_(Exprs) ->
             ?Query:exec(ParentNode, ?Query:seq([?Clause:form(),?Form:func()]));
         #expr{kind=application} ->
             ?Check(sub==LinkTag, ?RefErr0r(bad_range)),
-            ?Query:exec(ParentNode, ?Expr:function());
+            Funs = ?Query:exec(ParentNode, ?Expr:function()),
+            ?Check(length(Funs)==1, ?LocalErr0r(fun_expr)),
+            Funs;
         #clause{kind=funexpr} -> throw(?LocalErr0r(fun_expr));
         _                     -> throw(?RefErr0r(bad_range))
     end,

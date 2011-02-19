@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
@@ -24,14 +24,58 @@
 %%% macro refactoring step substitutes a selected macro reference
 %%% with the corresponding macro body and takes care of necessary
 %%% compensations.
-
-%%% == New heading ==
+%%%
+%%% == Parameters ==
+%%% <ul>
+%%%   <li>A macro usage to be inlined.
+%%%       (see {@link referl_args:macuse/1}) </li>
+%%% </ul>
+%%%
+%%% == Conditions of applicability ==
+%%% <ul>
+%%%   <li>The selected macro must not be contain stringification or another
+%%%       macro in its definition.</li>
+%%%   <li>The selection must not be inside a macro definition.</li>
+%%% </ul>
+%%%
+%%% == Transformation steps and compensations ==
+%%% <ol>
+%%%   <li>It should be checked for if
+%%%       conditions of applicability are met.</li>
+%%%   <li>The following must be gathered that are necessary to fully
+%%%       finish the transformation:
+%%%     <ul>
+%%%       <li>Edges to be deleted: those between `subst' and both its
+%%%           children and the macro definition; ones connecting all
+%%%           intermediate `token' nodes with `subst', the containing
+%%%           expression and the original lexical tokens; and the one between
+%%%           the `subst' node and its arguments.</li>
+%%%       <li>Nodes to be deleted: those lexical children of the `subst'
+%%%           nodes parameter child which do not participate in the final
+%%%           solution (commas), children of the `subst' node, the `subst'
+%%%           node itself and the intermediate `token' nodes.</li>
+%%%       <li>Edges to be rewired: those edges that originally connected a
+%%%           non-shared lexical node created specifically for the given
+%%%           substitution</li>
+%%%       <li>Nodes to be created: those nodes which must be cloned from the
+%%%           macro definition because they are shared between all usages</li>
+%%%       <li>Node to touch at the end: the containing expression</li>
+%%%     </ul>
+%%%   </li>
+%%% </ol>
+%%%
+%%% == Implementation status ==
+%%% The transformation is implemented for most real-world use cases. What's
+%%% left to do for a future enhancement is handling of macros embedded into
+%%% each other and stringification (which requires minor modifications to the
+%%% analyzer).
 %%%
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_tr_inline_mac).
--vsn("$Rev: 0000 $").
+-vsn("$Rev: 3185 $").
 -include("refactorerl.hrl").
+
 -define(NODETAG, '$gn').
 -define(IS_NODE(Node), element(1, Node) =:= ?NODETAG).
 
@@ -39,16 +83,16 @@
 -export([prepare/1, error_text/2]).
 
 %%% ============================================================================
-%%% Errors
+%%% Callbacks
+
+%% @private
 error_text(not_applicable,[]) ->
     ["Inline macro is not applicable in this case"];
 error_text(noquestion,[]) ->
     ["Stringification and embedded macros are not supported"];
 error_text(_,_) -> unknown.
 
-%%% ============================================================================
-%%% Callbacks
-
+%% @private
 prepare(Args) ->
     Macro   = ?Args:macuse(Args),
     Results = gather(Macro),
@@ -69,6 +113,7 @@ prepare(Args) ->
 %%% ============================================================================
 %%% Implementation
 
+%% @doc calls `throw_gather' and traps its exception into an error message
 gather(Subst) ->
     try
         throw_gather(Subst)
@@ -76,7 +121,9 @@ gather(Subst) ->
         error:{badmatch,_} -> throw(?LocalErr0r(not_applicable))
     end.
 
-%% In variable names, single letters stand for graph nodes,
+%% @doc Checks applicability and gathers all edges and nodes to be deleted,
+%% edges to be rewired, nodes to be created and nodes to touch at the end.
+%%  In variable names, single letters stand for graph nodes,
 %% while letter pairs stand for edges between two said
 %% nodes. Both are sets.
 throw_gather(Subst) when ?IS_NODE(Subst) ->
@@ -108,10 +155,11 @@ throw_gather(Subst) when ?IS_NODE(Subst) ->
 %
     [RmLink,DelNode,MkLink,CrMk,Touch].
 
-%%% ============================================================================
+%%% ----------------------------------------------------------------------------
 %%% Checks
 
-%% embedded macros and stringification is not currently supported
+%% @doc embedded macros and stringification is not currently supported,
+%% so these are signaled as errors this time
 check_no_questionm(MacroForm) ->
     FChild = ?Query:exec(MacroForm,[flex]),
     BV = [_|_] = lists:filter(
@@ -128,16 +176,16 @@ check_no_questionm(MacroForm) ->
             B),
     ?Check(Q == [], ?LocalErr0r(noquestion)).
 
-%%% ============================================================================
+%%% ----------------------------------------------------------------------------
 %%% Relational graph helpers
 
-%% expand a vertex and report both the edges and the vertices
+%% @doc expand a vertex and report both the edges and the vertices
 nods_prods(Parent,Edge,Min) ->
     Edges = expand_vertex(Parent,Edge,Min),
     Nodes = universe(Edges)--Parent,
     {Nodes,Edges}.
 
-%% expand vertices to the directions of Edge and require
+%% @doc expand vertices to the directions of Edge and require
 %% a minimal result set size for each vertex
 expand_vertex(Parent=[_|_],Edge,Min)->
     GenFun = case Edge of
@@ -156,22 +204,29 @@ expand_vertex(Parent=[_|_],Edge,Min)->
         end,
         Parent).
 
+%% @private
 domain(R) ->
     lists:usort([X || {X,_,_}<-R]).
 
+%% @private
 codomain(R)->
     lists:usort([Y || {_,_,Y}<-R]).
 
+%% @private
 universe(R) ->
     lists:usort(domain(R) ++ codomain(R)).
 
+%% @private
 product(A,T,B)->
     [{X,T,Y} || X<-A, Y<-B].
 
+%% @private
 composition(R1,R2) ->
     [{U,T,V} || {U,T,W1}<-R1, {W2,_,V}<-R2, W1==W2].
 
+%% @private
 restrict_codomain(R, A) ->
     [E || E={_,_,V}<-R, lists:member(V,A)].
 
+%% @private
 id(X) -> X.

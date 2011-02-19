@@ -1,27 +1,27 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This modules implements queries about variables.
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_variable).
--vsn("$Rev: 2696 $").
+-vsn("$Rev: 3346 $").
 
 -export([name/1]).
 -export([valid_name/1]).
@@ -41,15 +41,14 @@ name(Var) ->
 %% @spec valid_name(string()) -> bool() 
 %% @doc  Check the `NameStr' string is represent a legal variable name.
 %% @see  referl_misc:string_char_type/1
-valid_name("_") -> false;
 valid_name(NameStr)  when is_list(NameStr) ->
-    Str = lists:flatten(NameStr),
-    is_legal_name_(Str) andalso 
-        (hd(Str) == $_ orelse ?MISC:string_char_type(hd(Str)) == uppercase).
+    valid_name_(lists:flatten(NameStr)).
 
-is_legal_name_([]) -> false;
-is_legal_name_([Head|Tail]) ->
-    [] == lists:dropwhile(fun(CC) -> allow_in_name(CC) end, [Head|Tail]).
+valid_name_("")    -> false;
+valid_name_("_")   -> false;
+valid_name_([H|T]) ->
+    (H == $_ orelse ?MISC:string_char_type(H) == uppercase) andalso
+        lists:all(fun allow_in_name/1, T).
 
 %% @spec allow_in_name(CharCode::integer()) -> bool()
 %% @doc  Check the character represented by `CharCode' is allowed in atom or 

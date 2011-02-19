@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Analyse module definitions and references. The following semantical
 %%% structure is created:
@@ -37,7 +37,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_anal_mod).
--vsn("$Rev: 2324 $").
+-vsn("$Rev: 3311 $").
 -behaviour(referl_esg).
 
 %% Callback exports
@@ -106,6 +106,12 @@ remove(_, _, _, Attr, #form{type=attrib, tag=import}) ->
         [ModExpr | _] -> del_modref(ModExpr)
     end;
 
+remove(File, #file{}, _, _, #form{type=func}) ->
+    case ?Graph:path(File, [moddef]) of
+        [Mod] -> remove_module(File, Mod);
+        _ -> ok
+    end;
+
 remove(_, _, _, E, #expr{kind=infix_expr,value=':'}) ->
     case ?Graph:path(E, [{sub, 1}]) of
         [ModRef] -> del_modref(ModRef);
@@ -142,10 +148,13 @@ create_module(File, Name) ->
 remove_module(File, Mod) ->
     case File of
         undefined -> ok;
-        _         -> ?Graph:rmlink(File, moddef, Mod)
+        %% the link will be implicitly dropped when the module node is
+        %% deleted, meanwhile this link is used for cleanup
+        _         -> ok
+                     %% ?Graph:rmlink(File, moddef, Mod)
     end,
     case ?Graph:path(Mod, [{modref, back}]) ++ 
-        ?Graph:path(Mod, [{moddef, back}]) ++
+        %%?Graph:path(Mod, [{moddef, back}]) ++
         ?Graph:path(Mod, [func]) of
         [] ->
             ?Graph:rmlink(?Graph:root(), module, Mod),

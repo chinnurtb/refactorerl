@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Asynchron transformation framework. Transformations are implemented
 %%% in callback modules, and they are executed in a separate process. They
@@ -87,10 +87,23 @@
 %%%   (the default is `string'):
 %%%
 %%%   <ul>
-%%%   <li>`string': the answer may be an arbitrary string.</li>
-%%%   <li>`yesno': the answer may be `yes' or `no'.</li>
+%%%   <li>`string': the answer is an arbitrary string.</li>
+%%%   <li>`yesno': the answer is `yes' or `no'.</li>
+%%%   <li>`{select, [Values]}': the answer is one of `Values'.</li>
 %%%   </ul>
 %%%   </dd>
+%%%
+%%% <dt>`sync'</dt>
+%%%
+%%%   <dd>This property means that this question should be answered
+%%%   immediately. User interfaces may choose to display this question
+%%%   modally, while other questins can be accumulated into a form.</dd>
+%%%
+%%% <dt>`{ref, Node}'</dt>
+%%%
+%%%   <dd>This property is a reference to a syntax tree part. The user
+%%%   interface will provide a way to show the code that belongs to the
+%%%   subtree starting at `Node'.</dd>
 %%%
 %%% <dt>`{id, Id}'</dt>
 %%%
@@ -102,7 +115,7 @@
 %%% @author Lovei Laszlo <lovei@inf.elte.hu>
 
 -module(referl_transform).
--vsn("$Rev: 2944 $").
+-vsn("$Rev: 3660 $").
 -behaviour(gen_server).
 
 %%% ============================================================================
@@ -381,11 +394,15 @@ handle_rename(Data, #state{rename=Rename} = St) ->
 handle_exit(Result, Pid, #state{question=QT, answer=AT, wait=WT,
                                 save=Save, rename=Rename} = St) ->
     case Result of
-        {result, _}    ->
+        {result, R}    ->
             try
                 rename_files(lists:usort(Rename)),
                 save_files(lists:usort(Save)),
-                ?UI:message(status, "Finished", [])
+                if
+                    R =/= nomsg ->
+                        ?UI:message(status, "Finished", []);
+                    true -> ok
+                end
             catch
                 {rename, File, Err} ->
                     ?UI:message(status, "Error renaming ~s: ~s", [File, Err]);
@@ -433,8 +450,8 @@ save_file(File) ->
     try
         #file{path=Path} = ?Graph:data(File),
         try
-            ?FileMan:save_file(File),
-            ?UI:message(reload, "~s", [Path])
+            ok = ?FileMan:save_file(File),
+            ?UI:message(reload, [Path])
         catch
             error:Reason ->
                 error_logger:error_msg(

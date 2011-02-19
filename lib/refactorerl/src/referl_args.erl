@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Generic refactoring argument handler. The goal of this module is to
 %%% let refactoring code be independent of parameter representation. Parameter
@@ -44,6 +44,7 @@
 %%% <table border="1">
 %%%  <tr><th>key</th><th>value type</th><th>constraint</th></tr>
 %%%  <tr><td>`arity'</td>  <td>{@type integer()}</td><td>Non-negative</td></tr>
+%%%  <tr><td>`create_new_file'</td> <td>{@type bool()}</td></tr>
 %%%  <tr><td>`file'</td>     <td>{@type string()}</td>
 %%%                                                <td>Valid filename</td></tr>
 %%%  <tr><td>`filename'</td> <td>{@type string()}</td>
@@ -51,6 +52,7 @@
 %%%  <tr><td>`function'</td> <td>{@type atom()}</td></tr>
 %%%  <tr><td>`funlist'</td>
 %%%                    <td>{@type [{Fun::atom(), Arity::integer()@}]}</td></tr>
+%%%  <tr><td>`has_side_effect'</td> <td>{@type bool()}</td></tr>
 %%%  <tr><td>`macname'</td>    <td>{@type atom()|string()}</td></tr>
 %%%  <tr><td>`macro'</td>    <td>{@type atom()|string()}</td></tr>
 %%%  <tr><td>`maclist'</td><td>{@type [atom()|string()]}</td></tr>
@@ -71,11 +73,12 @@
 %%% </table>
 %%%
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
+%%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
 
 -module(referl_args).
--vsn("$Rev: 2959 $").
+-vsn("$Rev: 3435 $").
 
--export([string/1, string/3, integer/1, integer/3, name/1, atom/3]).
+-export([string/1, string/3, integer/1, integer/3, name/1, atom/3, bool/3]).
 -export([function/1, variable/1, module/1, file/1, expression/1,
          functions/1, record/1, record_field/1, records/1,
          macro/1, macros/1]).
@@ -84,8 +87,19 @@
 -export([error_text/2]).
 
 -include("refactorerl.hrl").
+-define(CallArg(A,S,L),?MISC:call_arg(A,S,L)).
 
 %%% @type node() = referl_graph:node()
+
+%%% ============================================================================
+%%% Error text
+
+error_text(bad_atom, [Text]) ->
+    ["\"", Text, "\" is not a valid atom (use single quotes)"].
+
+
+%%% ============================================================================
+%%% Database independent functions
 
 %% @spec string(arglist()) -> string()
 %% @doc Returns a generic target string value. This value is specified with a
@@ -109,7 +123,7 @@ name(Args) -> atom(name, "Target name", Args).
 %% In case of error, `Desc' is used to describe the parameter in the error
 %% message. Use only when {@link string/1} is insufficient.
 string(Key, Desc, Args) ->
-    call_arg(Args, Desc, [{stringval(Key), [Key]}]).
+    ?CallArg(Args, Desc, [{stringval(Key), [Key]}]).
 
 stringval(Key) ->
     fun
@@ -123,7 +137,7 @@ stringval(Key) ->
 %% In case of error, `Desc' is used to describe the parameter in the error
 %% message. Use only when {@link integer/1} is insufficient.
 integer(Key, Desc, Args) ->
-    call_arg(Args, Desc, [{intval(Key), [Key]}]).
+    ?CallArg(Args, Desc, [{intval(Key), [Key]}]).
 
 intval(Key) ->
     fun
@@ -132,12 +146,25 @@ intval(Key) ->
         (_) -> throw(?RefError(arg_type, [Key, "integer"]))
     end.
 
+%% @spec bool(atom(), string(), arglist()) -> bool()
+%% @doc Returns an arbitrary boolean parameter from `Args' using the key `Key'.
+%% In case of error, `Desc' is used to describe the parameter in the error
+%% message.
+bool(Key, Desc, Args) ->
+    ?CallArg(Args, Desc, [{boolval(Key), [Key]}]).
+
+boolval(Key) ->
+    fun
+        (B) when is_boolean(B) -> B;
+        (_) -> throw(?RefError(arg_type, [Key, "bool"]))
+    end.
+
 %% @spec atom(atom(), string(), arglist()) -> atom()
 %% @doc Returns an arbitrary atom parameter from `Args' using the key `Key'.
 %% In case of error, `Desc' is used to describe the parameter in the error
 %% message. Use only when {@link name/1} is insufficient.
 atom(Key, Desc, Args) ->
-    call_arg(Args, Desc, [{atomval(Key), [Key]}]).
+    ?CallArg(Args, Desc, [{atomval(Key), [Key]}]).
 
 %% Note: since `erl_scan:string/1` identifies `spec` as a category in itself
 %%       and not as an atom, it is dealt with as a unique case.
@@ -153,6 +180,38 @@ atomval(Key) ->
         (_) -> throw(?RefError(arg_type, [Key, "atom"]))
     end.
 
+%% @spec filename(arglist()) -> string()
+%% @doc Returns the target file name. This value is specified with
+%% a `filename' key in the argument list.
+filename(Args) ->
+    string(filename, "Target file name", Args).
+
+%% @spec order(arglist()) -> [integer()]
+%% @doc Returns the target order (a list of consecutive integers starting from
+%% 1, in an arbitrary order). This value is specified with an `order' key in
+%% the argument list.
+order(Args) ->
+    ?CallArg(Args, "Order",
+             [{fun orderbylst/1, [order]}]).
+
+orderbylst(List) ->
+    if
+        is_list(List) ->
+            ListLength = length(List),
+            case lists:sort(List) =:= ?MISC:seq2(1, ListLength) of
+                true ->
+                    List;
+                false ->
+                    throw(?RefError(bad_order, [ListLength]))
+            end;
+        true ->
+            throw(?RefError(order_not_list, []))
+    end.
+
+
+%%% ============================================================================
+%%% Database dependent functions
+
 %% @spec function(arglist()) -> node()
 %% @doc Returns the source function node. This value is specified in the
 %% argument list with
@@ -161,7 +220,7 @@ atomval(Key) ->
 %%  <li>`file' and `position' keys.</li>
 %% </ul>
 function(Args) ->
-    call_arg(Args, "Function",
+    ?CallArg(Args, "Function",
              [{fun funbyname/3, [module, function, arity]},
               {fun funbypos/2, [file, position]}]).
 
@@ -208,8 +267,9 @@ funbyref(Expr, Pos) ->
 %% @doc Returns the source function node list. This value is specified with
 %% `file' and `funlist' keys in the argument list.
 functions(Args) ->
-    call_arg(Args, "Function list",
-             [{fun funsbyname/2, [file, funlist]}]).
+    ?CallArg(Args, "Function list",
+             [{fun funsbyname/2, [file, funlist]},
+              {fun funbypos_/2, [file, position]}]).
 
 funsbyname(File, Funs) ->
     Mod = ?Query:exec1(
@@ -220,6 +280,9 @@ funsbyname(File, Funs) ->
                   ?RefError(fun_not_found, [Fun, Arity])) ||
         {Fun, Arity} <- Funs].
 
+funbypos_(File,Pos) ->
+    [funbypos(File,Pos)].
+
 %% @spec macro(arglist()) -> node()
 %% @doc Returns the source macro node. This value is specified in the
 %% argument list with
@@ -228,7 +291,7 @@ funsbyname(File, Funs) ->
 %%  <li>`file' and `position' keys.</li>
 %% </ul>
 macro(Args) ->
-    call_arg(Args, "Macro",
+    ?CallArg(Args, "Macro",
              [{fun macbyname/2, [file, macro]},
               {fun macbypos/2, [file, position]}]).
 
@@ -254,7 +317,7 @@ macbypos(File, Pos) ->
 %% @doc Returns the source macro use node. This value is specified in the
 %% argument list with `file' and `position' keys.
 macuse(Args) ->
-    call_arg(Args, "Macro",
+    ?CallArg(Args, "Macro",
              [{fun macusebypos/2, [file, position]}]).
 
 macusebypos(File, Pos) ->
@@ -272,7 +335,7 @@ macusebypos(File, Pos) ->
 %% @doc Returns the source macro node list. This value is specified with
 %% `file' and `maclist' keys in the argument list.
 macros(Args) ->
-    call_arg(Args, "Macro list",
+    ?CallArg(Args, "Macro list",
              [{fun macsbyname/2, [file, maclist]}]).
 
 macsbyname(File, Macs) ->
@@ -288,7 +351,7 @@ macsbyname(File, Macs) ->
 %%  <li>`file' and `position' keys.</li>
 %% </ul>
 record(Args) ->
-    call_arg(Args, "Record",
+    ?CallArg(Args, "Record",
              [{fun recbyname/2, [file, record]},
               {fun recbypos/2,  [file, position]}]).
 
@@ -322,7 +385,7 @@ recbypos(File, Pos) ->
 %% </ul>
 
 record_field(Args) ->
-    call_arg(Args, "Record field",
+    ?CallArg(Args, "Record field",
              [{fun recfieldbyname/3, [file, record, recfield]},
               {fun recfieldbypos/2,  [file, position]}]).
 
@@ -350,7 +413,7 @@ recfieldbypos(File, Pos) ->
 %% @doc Returns the source record node list. This value is specified with
 %% `file' and `reclist' keys in the argument list.
 records(Args) ->
-    call_arg(Args, "Record list",
+    ?CallArg(Args, "Record list",
              [{fun recsbyname/2, [file, reclist]}]).
 
 recsbyname(File, Recs) ->
@@ -362,7 +425,7 @@ recsbyname(File, Recs) ->
 %% @doc Returns the source variable node. This value is specified with
 %% `file' and `position' keys in the argument list.
 variable(Args) ->
-    call_arg(Args, "Variable",
+    ?CallArg(Args, "Variable",
              [{fun varbypos/2, [file, position]}]).
 
 varbypos(File, Pos) ->
@@ -377,7 +440,7 @@ varbypos(File, Pos) ->
 %% @doc Returns the target variable name. This value is specified with
 %% a `varname' key in the argument list.
 varname(Args) ->
-    call_arg(Args, "Target variable name",
+    ?CallArg(Args, "Target variable name",
              [{fun varstr/1, [varname]}]).
 
 varstr(Var) ->
@@ -390,7 +453,7 @@ varstr(Var) ->
 %% @doc Returns the source expression. This value is specified with
 %% `file' and `position' keys in the argument list.
 expression(Args) ->
-    call_arg(Args, "Source expression",
+    ?CallArg(Args, "Source expression",
              [{fun exprbypos/2, [file, position]}]).
 
 exprbypos(File, Pos) ->
@@ -404,7 +467,7 @@ exprbypos(File, Pos) ->
 %% @doc Returns the source file node. This value is specified with
 %% a `file' key in the argument list.
 file(Args) ->
-    call_arg(Args, "Source file",
+    ?CallArg(Args, "Source file",
              [{fun filebyname/1, [file]}]).
 
 filebyname(File) ->
@@ -412,25 +475,20 @@ filebyname(File) ->
        ?File:find(File),
        ?RefError(file_not_present, [File])).
 
-%% @spec filename(arglist()) -> string()
-%% @doc Returns the target file name. This value is specified with
-%% a `filename' key in the argument list.
-filename(Args) ->
-    call_arg(Args, "Target file name",
-             [{fun filestr/1, [filename]}]).
-
-filestr(Name) ->
-    Name.
-
-%% @spec macname(arglist()) -> string()|macro()
+%% @spec macname(arglist()) -> string()
 %% @doc Returns the target macro name. This value is specified with
 %% a `macname' key in the argument list.
 macname(Args) ->
-    call_arg(Args, "Target macro name",
+    ?CallArg(Args, "Target macro name",
              [{fun macrostr/1, [macname]}]).
 
-macrostr(Name) when is_atom(Name) orelse is_list(Name) ->
-    Name.
+macrostr(Name) when is_atom(Name) ->
+    io_lib:write(Name);
+macrostr(Name) when is_list(Name) ->
+    case ?Var:valid_name(Name) of
+        true  -> Name;
+        false -> throw(?RefErr0r(bad_mac_name))
+    end.
 
 %% @spec module(arglist()) -> node()
 %% @doc Returns the source module node. This value is specified in the
@@ -440,7 +498,7 @@ macrostr(Name) when is_atom(Name) orelse is_list(Name) ->
 %%  <li>a `file' key.</li>
 %% </ul>
 module(Args) ->
-    call_arg(Args, "Source module",
+    ?CallArg(Args, "Source module",
              [{fun modbyname/1, [module]},
               {fun modbypos/2,  [file, position]},
               {fun modbyfile/1, [file]}]).
@@ -471,13 +529,41 @@ modbyfile(File) ->
 %% same tag to a clause, or a single expression. This value is specified with
 %% `file' and `posrange' keys in the argument list.
 expr_range(Args) ->
-    call_arg(Args, "Expression range",
-             [{fun expr_range/2, [file, posrange]}]).
+    ?CallArg(Args, "Expression range",
+             [{fun expr_range/2,   [file, posrange]},
+              {fun expr_posnumr/3, [file, position, number]}]).
+
+expr_posnumr(File, Pos1, Num) ->
+    ?Check(Num>=1, ?RefErr0r(bad_range)),
+    IllP  = fun(Loc,Path)-> ?Query:exec1(Loc,Path,
+                            ?RefError(illegal_pos, [File, Pos1])) end,
+    F      = get_filenode(File),
+    Start  = IllP(F, ?File:token(Pos1)),
+    StPat  = IllP(Start, [{elex,back}]),
+    FunCl  = IllP(StPat, [{pattern,back}]),
+    FunDef = IllP(FunCl, [{funcl,back}, fundef]),
+    Arity  = ?Fun:arity(FunDef),
+    ?Check(Num=<Arity, ?RefErr0r(bad_range)),
+    IsIdx  = fun(I) -> StPat =:= IllP(FunCl, [{pattern,I}]) end,
+    {Idx,_Pos} = ?MISC:list_find(IsIdx, lists:seq(1,Arity-Num+1)),
+    EndIdx = Idx+Num-1,
+    ?Check((Idx>0) andalso (EndIdx=<Arity), ?RefErr0r(bad_range)),
+    EndE   = IllP(FunCl, [{pattern,EndIdx}]),
+    End    = hd(lists:reverse(?Query:exec(EndE,[elex]))),
+    expr_range_common(Start, End).
 
 expr_range(File, {Pos1, Pos2}) ->
-    F     = ?Query:exec1(?File:find(File), ?RefError(file_not_present, [File])),
-    Start = ?Query:exec1(F, ?File:token(Pos1), ?RefError(illegal_pos, [File, Pos1])),
-    End   = ?Query:exec1(F, ?File:token(Pos2), ?RefError(illegal_pos, [File, Pos2])),
+    F     = get_filenode(File),
+    Start = ?Query:exec1(F, ?File:token(Pos1),
+                         ?RefError(illegal_pos, [File, Pos1])),
+    End   = ?Query:exec1(F, ?File:token(Pos2),
+                         ?RefError(illegal_pos, [File, Pos2])),
+    expr_range_common(Start, End).
+
+get_filenode(File) ->
+    ?Query:exec1(?File:find(File), ?RefError(file_not_present, [File])).
+
+expr_range_common(Start, End) ->
     Exprs = range(joint(?Syn:root_path(Start, left),
                         ?Syn:root_path(End, right))),
     [First] = ?Query:exec(hd(Exprs), ?Syn:first_leaf()),
@@ -525,57 +611,3 @@ joint(_, _)                     -> throw(?RefErr0r(bad_range)).
 joint([{L,N}=H|T1], [H|T2],      {_,_,P}) -> joint(T1, T2, {P,L,N});
 joint([{L, N1}|_],  [{L, N2}|_], {_,_,P}) -> {P, L, N1, N2};
 joint(_,           _,            {P,L,C}) -> {P, L, C, C}.
-
-
-%% @spec order(arglist()) -> [integer()]
-%% @doc Returns the target order (a list of consecutive integers starting from
-%% 1, in an arbitrary order). This value is specified with an `order' key in
-%% the argument list.
-order(Args) ->
-    call_arg(Args, "Order",
-             [{fun orderbylst/1, [order]}]).
-
-orderbylst(List) ->
-    if
-        is_list(List) ->
-            ListLength = length(List),
-            case lists:sort(List) =:= lists:seq(1, ListLength) of
-                true ->
-                    List;
-                false ->
-                    throw(?RefError(bad_order, [ListLength]))
-            end;
-        true ->
-            throw(?RefError(order_not_list, []))
-    end.
-
-%%% ----------------------------------------------------------------------------
-%%% Generic argument finder
-
-%% @spec call_arg(arglist(), string(), ArgSpec) -> term()
-%%       ArgSpec = [{fun(), [atom()]}]
-%% @doc Applies the first argument specification that matches `Args'. Matching
-%% means that every property key that is specified in the argument
-%% specification list exists in `Args'; in this case, the function provided in
-%% the specification is called with the property values passed as individual
-%% arguments to the function. When no math is found, an exception is thrown
-%% using the argument description in `Desc'.
-call_arg(_Args, Desc, []) ->
-    throw(?RefError(missing_arg, [Desc]));
-call_arg(Args, Desc, [{Fun, Params} | Tail]) ->
-    try
-        apply(Fun, [arg(Args, Name) || Name <- Params])
-    catch
-        throw:?LocalError(not_found, _) ->
-            call_arg(Args, Desc, Tail)
-    end.
-
-arg(Args, Name) ->
-    case proplists:lookup(Name, Args) of
-        {Name, Value} -> Value;
-        none -> throw(?LocalError(not_found, [Name]))
-    end.
-
-
-error_text(bad_atom, [Text]) ->
-    ["\"", Text, "\" is not a valid atom (use single quotes)"].

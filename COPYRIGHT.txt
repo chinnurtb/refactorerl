@@ -1,6 +1,6 @@
-Copyright Notice © 2008 Eötvös Loránd University and Ericsson Hungary
+Copyright Notice © 2008-2009 Eötvös Loránd University and Ericsson Hungary
 Software development supported by Ericsson Hungary and
-GVOP-3.2.2-2004-07-0005/3.0 ELTE IKKK.
+TECH_08_A2-SZOMIN08.
 
 Materials  were  created, authored,  and/or  prepared  by  the Authors  at
 Department   of  Programming  Languages   and  Compilers,   Eötvös  Loránd

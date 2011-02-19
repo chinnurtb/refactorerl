@@ -1,30 +1,35 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
-%%% @doc Multiple hashing level tree
-%%%
+%%% ============================================================================
+%%% Module Informations
+
+%%% @doc Multiple level hashing tree
+%%% TODO
+%%% More description.
+
 %%% @author Kornel Horvath <kornel@inf.elte.hu>
 
 -module(multi_hashtree).
 -vsn("$Rev:  $").
 
--include("kcl.hrl").
+-include("ucluster.hrl").
 
 
 %% =============================================================================
@@ -44,8 +49,10 @@
 %% =============================================================================
 %% Types
 
-%%
-%%
+%% @type multi_hashTree().
+%% A multiple level hash tree.
+%% TODO
+%% More description.
 -record(multi_hashTree, {
     levels,     % int(): number of hashing levels
     hash_size,  % int(): size of hash tables    
@@ -62,8 +69,8 @@
 
 %% @spec hash_gen(HashTableSize::integer(), Numbers::boolean()) ->
 %%           {HashTableSize::integer(), HashFun::((term()) -> HashRange)}
-%% @doc      HashRange = 1..HashTableSize
-%%        Generate a hash function which hash any term into the 
+%%       HashRange = integer_range(1,HashTableSize)
+%% @doc  Generate a hash function which hash any term into the 
 %%      `1..HashTablesSize' range.
 %%      If `Numbers' is `true' than it will use `erlang:phash2/2' function 
 %%      otherwise `erlang:phash/2' function.

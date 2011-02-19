@@ -1,22 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
-
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Data flow graph builder module. A static data flow graph can be built
 %%% using this module, and there are operations that calculate data flow
@@ -25,13 +24,13 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_dataflow).
--vsn("$Rev: 3006 $").
+-vsn("$Rev: 3241 $").
 
 %% Data flow graph building
 -export([new/0, new/1, delete/1, add/2, draw/2]).
 
 %% Data flow analysis
--export([reach/2, safe_reach/2]).
+-export([reach/3]).
 
 
 -include("refactorerl.hrl").
@@ -70,7 +69,7 @@ delete(#graph{flow=Fl, funs=Fs}) ->
 %% @spec add(graph(), [node()]) -> ok
 %%
 %% @doc Add a set of functions to the data flow graph. Functions may be
-%% specified by `#function{}' nodes, or `#module{}' nodes which mean every
+%% specified by `#func{}' nodes, or `#module{}' nodes which mean every
 %% function in the module.
 add(G, Nodes) ->
     Funs = lists:flatmap(fun funlist/1, Nodes),
@@ -81,7 +80,7 @@ add(G, Nodes) ->
 funlist(Node) ->
     case ?Graph:class(Node) of
         module -> ?Query:exec(Node, ?Mod:locals());
-        function -> [Node]
+        func -> [Node]
     end.
 
 add_fun(G=#graph{funs=Fs, flow=Fl}, Fun) ->
@@ -163,13 +162,13 @@ add_expr(G, Expr, #expr{kind=match_expr}) ->
 add_expr(G, Expr, #expr{kind=cons, type=pattern}) ->
     [add_edge(G, Expr, Hd, {s,e}) ||
         Hd <- ?Query:exec(Expr, ?Query:seq(?Expr:child(1), ?Expr:children()))],
-    [add_edge(G, Expr, Tl, {s,l}) ||
+    [add_edge(G, Expr, Tl, f) ||
         Tl <- ?Query:exec(Expr, ?Expr:child(2))];
 
 add_expr(G, Expr, #expr{kind=cons}) ->
     [add_edge(G, Hd, Expr, {c,e}) ||
         Hd <- ?Query:exec(Expr, ?Query:seq(?Expr:child(1), ?Expr:children()))],
-    [add_edge(G, Tl, Expr, {c,l}) ||
+    [add_edge(G, Tl, Expr, f) ||
         Tl <- ?Query:exec(Expr, ?Expr:child(2))];
 
 %% add_expr(G=#graph{flow=Fl}, Expr, #expr{kind=list_comp}) ->
@@ -263,51 +262,129 @@ add_edge(G=#graph{flow=Fl}, From, To, Label) ->
 %% -----------------------------------------------------------------------------
 %% Reaching
 
-%% @spec reach(graph(), [node()]) -> [node()]
-%% @doc
-%% Given a set of source expression nodes, returns the set of reachable
-%% expressions, that is, every expression that may get its value from one of
-%% the source nodes.
-reach(G, From) ->
-    Init = set_addl(From, set_new()),
-    reach(G, Init, Init).
-
-reach(_G, [], Set) -> set_lst(Set);
-reach(G, [Next | Rest], Set) ->
-    case next_reach(G, Next) of
-        [] ->
-            reach(G, Rest, Set);
-        Reach ->
-            New = [N || N <- Reach, not set_has(N, Set)],
-            reach(G, Rest ++ New, set_addl(New, Set))
-    end.
-
-next_reach(G=#graph{flow=Fl}, Node) ->
-    lists:flatmap(fun (Edge) -> next_reach1(G, Edge) end,
-                  digraph:out_edges(Fl, Node)).
-
-next_reach1(G=#graph{flow=Fl}, Edge) ->
-    case digraph:edge(Fl, Edge) of
-        {_, _, Next, f} -> [Next];
-        {_, _, Comp, {c, Ind}} ->
-            [Next || Reach <- reach(G, [Comp]),
-                     Out <- digraph:out_edges(Fl, Reach),
-                     {_, _, Next, {s, I}} <- [digraph:edge(Out)],
-                     I =:= Ind];
-        _ -> []
-    end.
-
-%% @spec safe_reach(graph(), [node()]) -> [node()]
+%% @spec reach(graph(), [node()], [Opt]) -> [node()]
+%%       Opt = back | {back, bool()} |
+%%             safe | {safe, bool()}
 %%
-%% @doc Return the set of safely reachable nodes. The result may have to be
-%% split into safe nodes and border nodes.
-safe_reach(_G, _From) ->
-    throw(unimplemented).
+%% @doc Given a set of source expression nodes, returns the set of reachable
+%% expressions. Supported options are:
+%% <dl>
+%%  <dt>{@type {back, false@}}</dt>
+%%  <dd>This is the default behaviour: the result set contains expressions
+%%      that may return the result of one of the source expressions.</dd>
+%%
+%%  <dt>{@type back | {back, true@}}</dt>
+%%  <dd>The result set contains expressions with results that may be returned
+%%      by one of the source expressions.</dd>
+%%
+%%  <dt>{@type {safe, false@}}</dt>
+%%  <dd>This is the default behaviour: expressions in the result set may
+%%      return a value that is independent of the source set.</dd>
+%%
+%%  <dt>{@type safe | {safe, true@}}</dt>
+%%  <dd>Expressions in the result set cannot return values independent of the
+%%      source set.</dd>
+%% </dl>
+reach(G, From, Opts) ->
+    Dir =
+        case proplists:get_value(back, Opts, false) of
+            true  -> back;
+            false -> forw
+        end,
+    Reach = walk(fun(N) -> flow_step(G, N, Dir) end, From),
+    case proplists:get_value(safe, Opts, false) of
+        false ->
+            set_lst(Reach);
+        true ->
+            Strict = set_filt(Reach, fun(N) -> is_strict(G, N, Reach, Dir) end),
+            Safe = set_filt(Strict, fun(N) -> is_safe(G, N, Strict, Dir) end),
+            walk(fun(N) -> safe_step(G, N, Safe, Dir) end, From)
+    end.
+
+is_strict(G, Node, Reach, Dir) ->
+    lists:all(fun not_dep/1,
+              edges(G, Node, rev(Dir)))
+    andalso
+    lists:all(fun(N) -> set_has(N, Reach) end,
+              flow_step(G, Node, rev(Dir))).
+
+rev(forw) -> back;
+rev(back) -> forw.
+
+not_dep({d, _}) -> false;
+not_dep(_)      -> true.
+
+is_safe(G, Node, Strict, Dir) ->
+    lists:all(fun not_depcomp/1,
+              edges(G, Node, Dir))
+    andalso
+    lists:all(fun(N) -> set_has(N, Strict) end,
+              [N || {f, N} <- edges(G, Node, Dir)]).
+
+not_depcomp({d, _})      -> false;
+not_depcomp({{c, _}, _}) -> false;
+not_depcomp(_)           -> true.
+
+safe_step(G, Node, Safe, Dir) ->
+    case set_has(Node, Safe) of
+        true  -> [N || {f, N} <- edges(G, Node, Dir)];
+        false -> []
+    end.
+
+%% walk(((node()) -> [node()]), [node()]) -> set(node())
+walk(Next, Start) ->
+    Init = set_addl(Start, set_new()),
+    walk(Next, Init, Init).
+
+walk(Next, Work, Set) ->
+    case set_select(Work) of
+        empty ->
+            Set;
+        {Sel, Rest} ->
+            New = [N || N <- Next(Sel), not set_has(N, Set)],
+            walk(Next, set_addl(New, Rest), set_addl(New, Set))
+    end.
+
+
+flow_step(G, Node, Dir) ->
+    lists:flatmap(fun (N) -> flow_step1(G, N, Dir) end,
+        edges(G, Node, Dir)).
+
+flow_step1(_G, {f, Next}, _) ->
+    [Next];
+flow_step1(G, {{c, Ind}, Comp}, Dir=forw) ->
+    [Next || Reach <- reach(G, [Comp], [Dir]),
+             {{s, I}, Next} <- edges(G, Reach, Dir),
+             I =:= Ind];
+flow_step1(G, {{s, Ind}, Comp}, Dir=back) ->
+    [Next || Reach <- reach(G, [Comp], [Dir]),
+             {{c, I}, Next} <- edges(G, Reach, Dir),
+             I =:= Ind];
+flow_step1(_G, _, _) ->
+    [].
+
+edges(#graph{flow=Fl}, Node, forw) ->
+    [begin
+         {_, _, N, L} = digraph:edge(Fl, E),
+         {L, N}
+     end || E <- digraph:out_edges(Fl, Node)];
+
+edges(#graph{flow=Fl}, Node, back) ->
+    [begin
+         {_, N, _, L} = digraph:edge(Fl, E),
+         {L, N}
+     end || E <- digraph:in_edges(Fl, Node)].
+
 
 set_new() -> [].
 set_add(El, Set) -> ordsets:add_element(El, Set).
 set_has(El, Set) -> ordsets:is_element(El, Set).
+set_filt(Set, Pred) -> ordsets:filter(Pred, Set).
 set_lst(Set) -> Set.
+
+set_select([]) -> empty;
+set_select([H|T]) -> {H,T}.
+
 
 set_addl(Lst, Set) ->
     lists:foldl(

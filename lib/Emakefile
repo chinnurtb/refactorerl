@@ -1,11 +1,5 @@
 % -*- Erlang -*-
 {'refactorerl/src/*', [{outdir, "refactorerl/ebin"},
-                       {i, "refactorerl/include"},
-                       debug_info]}.
+                       {i, "refactorerl/include"}]}.
 {'clustering/src/*', [{outdir, "clustering/ebin"},
-                      {i, "clustering/include"},
-                      debug_info]}.
-{'test/src/*', [{outdir, "test/ebin"},
-                 debug_info]}.
-{'wrangler/src/*', [{outdir, "wrangler/ebin"},
-                 debug_info]}.
+                      {i, "clustering/include"}]}.

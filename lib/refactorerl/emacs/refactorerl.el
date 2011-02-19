@@ -1,21 +1,21 @@
 ;; -*- coding: utf-8 -*-
-;; The contents of this file are subject to the Erlang Public License,
-;; Version 1.1, (the "License"); you may not use this file except in
-;; compliance with the License. You should have received a copy of the
-;; Erlang Public License along with this software. If not, it can be
-;; retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+
+;; The  contents of this  file are  subject to  the Erlang  Public License,
+;; Version  1.1, (the  "License");  you may  not  use this  file except  in
+;; compliance  with the License.  You should  have received  a copy  of the
+;; Erlang  Public License  along  with this  software.  If not,  it can  be
+;; retrieved at http://plc.inf.elte.hu/erlang/
 ;;
-;; Software distributed under the License is distributed on an "AS IS"
-;; basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-;; License for the specific language governing rights and limitations under
-;; the License.
+;; Software  distributed under  the License  is distributed  on an  "AS IS"
+;; basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+;; the License  for the specific language governing  rights and limitations
+;; under the License.
 ;;
 ;; The Original Code is RefactorErl.
 ;;
-;; The Initial Developer of the Original Code is Eötvös Loránd University.
-;; Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-;; Loránd University. All Rights Reserved.
-
+;; The Initial Developer of the  Original Code is Eötvös Loránd University.
+;; Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+;; Eötvös Loránd University. All Rights Reserved.
 
 (require 'widget)
 (eval-when-compile
@@ -23,7 +23,6 @@
   (require 'cl))
 
 (require 'refactorerl-operations)
-(require 'refactorerl-operations-wrangler)
 (require 'refactorerl-customization)
 (require 'refactorerl-server)
 (require 'refactorerl-mode)
@@ -58,7 +57,7 @@
         ((not (eq refac-buffer-state :off))
          (error "Already added"))
         (t
-         (setq refac-buffer-state nil)
+         (refac-set-buffer-state nil)
          (refac-send-command 'add buffer-file-name))))
 
 (defun refactorerl-drop-file ()
@@ -69,7 +68,7 @@
         ((eq refac-buffer-state :off)
          (error "Not in the active set"))
         (t
-         (setq refac-buffer-state nil)
+         (refac-set-buffer-state nil)
          (refac-send-command 'drop buffer-file-name))))
 
 (defun refactorerl-control-buffer ()
@@ -116,16 +115,6 @@ that connects to the RefactorErl server."
   (interactive)
   (cluster-ui-options-genetic))
 
-(defun refactorerl-add-checkpoint ()
-  "Creates a new checkpoint file from the database."
-  (interactive)
-  (refac-send-command 'backup))
-
-(defun refactorerl-clean ()
-  "Deletes all checkpoint files from the database."
-  (interactive)
-  (refac-send-command 'clean))
-
 (defun refactorerl-undo ()
   "Steps backward on the refactoring database."
   (interactive)
@@ -139,15 +128,25 @@ that connects to the RefactorErl server."
 (defun refactorerl-list-files (&optional same-win)
   "Shows the contents of the active refactoring set."
   (interactive)
-  (with-current-buffer (refac-list-buffer)
-    (setq buffer-read-only t)
-    (let ((inhibit-read-only t))
-      (erase-buffer))
-    (refac-send-command 'filelist)
-    (set (make-local-variable 'last-file-dir) ""))
-  (if same-win
-      (switch-to-buffer (refac-list-buffer))
-    (switch-to-buffer-other-window (refac-list-buffer))))
+  (let ((buf (refac-buffer-list-ensure)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (set (make-local-variable 'last-file-dir) "")))
+    (refac-send-command 'filelist)    
+    (pop-to-buffer buf (not same-win))))
+
+;; TODO: unify this with list-files and other popup commands
+(defun refactorerl-show-errors ()
+  "Shows the parser's error messages"
+  (interactive)
+  (let ((buf (refac-buffer-list-ensure)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)))
+    (refac-send-command 'error_attr)
+    (pop-to-buffer buf t)))
+
 
 (defun refactorerl-load-dir (dirname)
   "Adds the contents of a directory to the active refactoring set."
@@ -163,11 +162,11 @@ that connects to the RefactorErl server."
 
 (defvar cluster-ui-buffer nil)
 (defun cluster-ui-options-genetic()
-  (refac-send-command 'cl_options 'genetic)
-)
+  (refac-send-command 'cl_options 'genetic))
+
 (defun cluster-ui-options-agglom()
-  (refac-send-command 'cl_options 'agglom_attr)
-)
+  (refac-send-command 'cl_options 'agglom_attr))
+
 
 ;Buffer of the clustering
 (defvar cluster-ui-result-buffer nil)
@@ -181,12 +180,11 @@ that connects to the RefactorErl server."
     (setq cluster-ui-result-buffer
           (generate-new-buffer "*Clustering*"))
     (switch-to-buffer cluster-ui-result-buffer)
-    (refac-send-command 'run_cl (reverse value) algo createdb)
-  ))
+    (refac-send-command 'run_cl (reverse value) algo createdb)))
 
 (defun cluster-ui-refresh (&rest args)
-   (refac-send-command 'cl_refresh)
-  )
+   (refac-send-command 'cl_refresh))
+
 
 (defun cluster-ui-cleanup (&rest args)
   (delete-window (get-buffer-window cluster-ui-buffer))
@@ -316,85 +314,3 @@ that connects to the RefactorErl server."
              (if (yes-or-no-p (concat text " "))
                  'yes 'no)))
     (quit nil)))
-
-(defun refac-file-list-add (stname)
-  (let* ((state (if (equal (elt stname 0) ?!) :err :ok))
-         (name (if (equal state :ok) stname (substring stname 1)))
-         (dirname (file-name-directory name))
-         (basename (file-name-nondirectory name)))
-    (unless (equal dirname last-file-dir)
-      (insert (concat (propertize dirname 'face 'dired-header) ":\n"))
-      (setq last-file-dir dirname))
-    (if (equal state :ok)
-        (insert "   ")
-      (insert (propertize " ! " 'face 'compilation-error)))
-    (insert-text-button basename
-                        'filename name
-                        'help-echo "mouse-2, RET: open file"
-                        'action (lambda (btn)
-                                  (find-file (button-get btn 'filename))))
-    (insert " (")
-    (insert-text-button "drop"
-                        'filename name
-                        'help-echo "mouse-2, RET: drop file"
-                        'action (lambda (btn)
-                                  (refac-send-command
-                                   'drop (button-get btn 'filename))
-                                  (refactorerl-list-files t)))
-    (insert ")\n")))
-
-;; Server buffer manipulation
-
-(defun refac-make-server-buffer (&rest args)
-  (set-buffer (get-buffer-create "*RefactorErl*"))
-  (kill-all-local-variables)
-  (let ((inhibit-read-only t)) (erase-buffer))
-  (widget-insert "**RefactorErl Server Control Buffer**\n")
-  (widget-create 'push-button
-                 :notify 'refac-show-config
-                 "Configuration")
-  (widget-insert "\n")
-  (set (make-local-variable 'config-start-marker) (point-marker))
-  (widget-insert "------------------------------------------------\n")
-  (widget-create 'push-button
-                 :notify (lambda (&rest args)
-                           (when (yes-or-no-p "Clear database contents? ")
-                             (refac-send-command 'reset)))
-                 "Reset database")
-  (widget-insert " (Hint: open configuration and save it after reset)\n")
-  (widget-create 'push-button :notify (lambda (&rest args) (refac-send-command 'status_info (list)))
-                 "Show files")
-  (widget-insert "\n")
-  (widget-create 'push-button :notify (lambda (&rest args) (refac-send-command 'error_attr))
-                 "Show parse errors")
-  (widget-insert "\n")
-  (widget-create 'push-button
-                 :notify 'refac-make-server-buffer
-                 "Clear buffer")
-  (widget-insert "\n================================================\n")
-  (use-local-map
-   (let ((map widget-keymap))
-     (set-keymap-parent map refactorerl-mode-map)
-     map))
-  (widget-setup)
-  (current-buffer))
-
-(defun refac-show-config (&rest args)
-  (refac-send-command 'showconfig))
-
-(defun refac-hide-config (&rest args)
-  (widget-delete appdir-list)
-  (widget-delete incdir-list)
-  (widget-delete outdir-menu)
-  (widget-delete save-button)
-  (widget-delete cancel-button)
-  (let ((inhibit-read-only t))
-    (delete-region config-start-marker config-end-marker))
-  (set-marker config-end-marker nil))
-
-(defun refac-save-config (&rest args)
-  (refac-send-command 'saveconfig
-                      (widget-value appdir-list)
-                      (widget-value incdir-list)
-                      (widget-value outdir-menu))
-  (refac-hide-config))

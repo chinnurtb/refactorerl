@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc Token related queries and manipulations. Tokens are represented with
 %%% nodes of class `lex' with the `type' attribute set to `token'. There are
@@ -28,13 +28,15 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(referl_token).
--vsn("$Rev: 2714 $").
+-vsn("$Rev: 3452 $").
 
 %% Properties
 -export([pos/1, pos/2, text/1, data/1]).
+-export([map_pos/2]).
 
 %% Queries
 -export([file/0, form/0, expr/0, clause/0, original/0, virtuals/0]).
+-export([linecol/1]).
 
 %% Manipulations
 -export([build/2, keyword_value/1]).
@@ -71,27 +73,87 @@ text(LexNode) ->
     #lex{data=#token{text=T,prews=P,postws=S}} = ?Graph:data(OrigNode),
     P++T++S.
 
-%% spec linecol(node()) -> {integer(), integer()}
-%% doc Should return the line and column number of the token.
-%% linecol(_) ->
-%%    todo.
+%% @type line_col() = {natural(), natural()}
+%% @spec linecol(node()) -> {line_col(),line_col()}
+%% @doc Returns the line and column number of the first and last character
+%%      of the token.
+linecol(Token) ->
+    File = ?Query:exec1(Token, file(), token_file),
+    linecol(File, Token).
+
+linecol(File,Token) ->
+    Res =
+        foldpos(
+          fun (Node,
+               #token{prews=Pre, text=Text},_,_,{_,LC}) when Node =:= Token ->
+                  Start = lc_aggr(LC,Pre),
+                  End   = lc_aggr(Start,init(Text)),
+                  {stop,{ok,{Start,End}}};
+              (_,#token{prews=Pre, text=Text, postws=Post},_,_,{Atom,LC}) ->
+                  {next,{Atom,lc_aggr(LC,Pre++Text++Post)}}
+          end, {not_found,{1,1}}, File, none),
+    case Res of
+        {ok,T={{_,_},{_,_}}} ->
+            T;
+        {not_found,_} ->
+            not_found
+    end.
+
+init(L) ->
+    lists:sublist(L,length(L)-1).
+
+lc_aggr({L,C},Txt) ->
+    ?MISC:string_linecol(Txt,inf,{1,L,C}).
+
+
 
 %% @spec pos(node()) -> {integer(), integer()}
 %% @doc Returns the character position of `Token' in the source file that
 %% contains the token. The returned tuple contains the indices of the first
-%% and last characters of the token.
+%% and last characters of the token without whitespace.
 pos(Token) ->
     File = ?Query:exec1(Token, file(), token_file),
     pos(File, Token).
 
-%% @spec pos(node(), node()) -> {integer(), integer()}
 %% @doc Returns the position of `Token' assuming that it is located in `File'.
 %% @see pos/1
-pos(File, Token) ->
+%% @spec (file_node(),token_node()) -> {integer(),integer()}
+pos(File,Token) ->
     foldpos(
-      fun (Node, _, Start, End, _) when Node =:= Token -> {stop, {Start, End}};
-          (_,_,_,_,Acc) -> {next,Acc}
-      end, not_found, File).
+      fun (Node, _, Start, End, _) when Node =:= Token ->
+              {stop,{Start,End}};
+          (_,_,_,_,Acc) ->
+              {next,Acc}
+      end, not_found, File, none).
+
+%% @doc Returns the position of all listed tokens from `File' in a single run.
+%% @spec (#file{},[#token{}]) -> [{#token{},{integer(),integer()}}]
+map_pos(_,[]) ->
+    [];
+map_pos(File,Tokens) ->
+    InitAcc =
+        {length(Tokens),
+         dict:from_list([{E,[]} || E <- Tokens]),
+         []},
+    {_,_,Result} =
+        ?Token:foldpos(
+           fun (Node, _, Start, End, Acc={N,Dict,Res}) ->
+                   case dict:is_key(Node,Dict) of
+                       false ->
+                           {next,Acc};
+                       true ->
+                           Dict2 = dict:erase(Node,Dict),
+                           Res2 = [{Node,{Start,End}}|Res],
+                           Acc2 = {N-1,Dict2,Res2},
+                           case N of
+                               1 ->
+                                   {stop,Acc2};
+                               _ ->
+                                   {next,Acc2}
+                           end
+                   end
+           end, InitAcc, File, none),
+    Result.
 
 
 %% ============================================================================
@@ -107,9 +169,9 @@ file() ->
 form() ->
     fun (Lex) -> first(form, ?Syn:root_path(Lex)) end.
 
-first(Tag, [{Tag, N}|_])    -> [N];
+first(Tag, [{Tag, N}|_])  -> [N];
 first(Tag, [_       |Tl]) -> first(Tag, Tl);
-first(_,   [])              -> [].
+first(_,   [])            -> [].
 
 %% @spec expr() -> query(#lex{}, #expr{})
 %% @doc The result query returns the direct containing expression of the
@@ -131,7 +193,7 @@ original() ->
 
 original(LexNode) ->
     case ?Graph:path(LexNode, [orig]) of
-        [] -> [LexNode];
+        []           -> [LexNode];
         [OrigNode|_] -> original(OrigNode)
     end.
 
@@ -143,7 +205,7 @@ virtuals() ->
 
 virtuals([Head | Tail], Virt) ->
     case ?Graph:path(Head, [{orig, back}]) of
-        [] -> virtuals(Tail, Virt);
+        []  -> virtuals(Tail, Virt);
         New -> virtuals(New ++ Tail, New ++ Virt)
     end;
 virtuals([], Virt) -> Virt.
@@ -166,29 +228,53 @@ virtuals([], Virt) -> Virt.
 foldpos(Fun, Acc0, File) ->
     foldpos(Fun, Acc0, File, both).
 
+%% @type wsmask() = 'none' | 'pre' | 'post' | 'both'
+
+%% @spec (Fun,Acc,node(),wsmask())->Acc
+%%       Fun = (node(), #token{}, integer(), integer(), Acc) ->
+%%          {stop, Acc} | {next, Acc}
 foldpos(Fun, Acc0, File, Ws) ->
     Tokens = ?Syn:leaves(File),
-    foldpos(Fun, Ws, Acc0, Tokens, 1).
+    WsMask = ws2mask(Ws),
+    StMask = lists:takewhile(fun id/1, ?MISC:map_not(WsMask)),
+    foldpos(Fun, {WsMask,StMask}, Acc0, Tokens, 1).
 
+%% @private
 foldpos(_, _, Acc, [], _) ->
     Acc;
-foldpos(Fun, Ws, Acc, [Head|Tail], Pos) ->
+foldpos(Fun, WsM={WsMask,StMask}, Acc, [Head|Tail], Pos) ->
     #lex{data=Data} = ?ESG:data(Head),
-    End = Pos + len(Data, Ws) - 1,
-    case Fun(Head, Data, Pos, End, Acc) of
+    Lens   = toklens(Data),
+    Start  = Pos   + sum_mask(StMask,Lens),
+    End    = Start + sum_mask(WsMask,Lens) - 1,
+    Next   = Pos   + lists:sum(Lens),
+    case Fun(Head, Data, Start, End, Acc) of
         {stop, Result} -> Result;
-        {next, Acc1}   -> foldpos(Fun, Ws, Acc1, Tail, End+1)
+        {next, Acc1}   -> foldpos(Fun, WsM, Acc1, Tail, Next)
     end.
 
+id(X) ->
+    X.
+
+%% @spec (#token{}) -> natural()
 len(Data) ->
     len(Data, both).
-len(#token{text=Text, prews=Pre, postws=Post}, Tag) ->
-    case Tag of
-        none -> length(Text);
-        pre  -> length(Pre)  + length(Text);
-        post -> length(Post) + length(Text);
-        both -> length(Pre)  + length(Text) + length(Post)
-    end.
+%% @spec (#token{},wsmask()) -> natural()
+len(Data, Tag) ->
+    sum_mask(ws2mask(Tag),toklens(Data)).
+
+sum_mask(M,L) ->
+    lists:sum(?MISC:mask(M,L)).
+
+toklens(#token{prews=Pre, text=Text, postws=Post}) ->
+    lists:map(fun length/1, [Pre,Text,Post]).
+
+%% @spec (wsmask()) -> [bool()]
+ws2mask(none) -> [false,true,false];
+ws2mask(pre)  -> [true, true,false];
+ws2mask(post) -> [false,true,true];
+ws2mask(both) -> [true, true,true].
+
 
 %%% ----------------------------------------------------------------------------
 %%% Token data generation

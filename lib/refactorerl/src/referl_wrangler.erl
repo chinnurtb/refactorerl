@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module provides functions to call functionalities from
 %%% Wrangler.
@@ -24,7 +24,7 @@
 %%% @author Melinda Tóth <toth_m@inf.elte.hu>
 
 -module(referl_wrangler).
--vsn("$Rev: 3020 $").
+-vsn("$Rev: 3185 $").
 
 -export([run_dup/1, test/0]).
 -export([rename_function/5]).
@@ -38,7 +38,7 @@
 
 %% @private
 test()->
-    try run_dup([{dirs,["/home/melinda/test"]},{token,2},{clone,1}])
+    try run_dup([{dirs,["/home/guestuser/test"]},{token,2},{clone,1}])
     catch 
         throw:Reason -> io:format(Reason)
     end.
@@ -73,17 +73,20 @@ run_dup(Args)->
         end,
     case Result of
        {error, Reason} -> 
-           io:format("Error: ~p ~n", [Reason]), [];
+           io:format("Error: ~p ~n", [Reason]), 
+           Res = [];
        {ok, []} -> 
-           io:format("Wrangler did not find duplicated code freagments ~n"), [];
+           io:format("Wrangler did not find duplicated code freagments ~n"), 
+           Res = [];
        {ok, List} -> 
 %%             [[io:format("Duplicated nodes: ~w ~n", 
 %%                        [[ets:lookup(ids,Id)||Id <- Ids]]) || 
 %%               {_, _, Ids} <- Clones ]|| {Clones, _, _} <- List],
 %% io:format("~nResultList ~p ~n", [List]),
-           result(List)
+           Res = result(List)
     end,
-    referl_mapping_server:stop().
+    referl_mapping_server:stop(),
+    Res.
 
 
 result(L)->

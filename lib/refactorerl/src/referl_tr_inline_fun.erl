@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
@@ -64,6 +64,8 @@
 %%%   <li>Where the actual and formal parameters are structurally equivalent,
 %%%   create variable name pairs and rename the corresponding variables in the
 %%%   copied body.</li>
+%%%   <li>For variable names which collide generate a new name which eliminates
+%%%   the collision.</li>
 %%%   <li>Where the formal and structural parameters are not equivalent, create
 %%%   a match expression from these parameters. The left hand side is a tuple
 %%%   from the formal parameters, and the right hand side is a tuple from the
@@ -113,7 +115,7 @@
 %%% @author Istvan Bozo <bozo_i@inf.elte.hu>
 
 -module(referl_tr_inline_fun).
--vsn("$Rev: 3025 $").
+-vsn("$Rev: 3185 $").
 -include("refactorerl.hrl").
 
 %% Callbacks
@@ -123,8 +125,6 @@
 %%% Errors
 
 %%% @private
-error_text(var_name_collision, CollVars) ->
-    ["Variable names would collide: ", ?MISC:separated_text(CollVars)];
 error_text(local_apps, [FunModuleName, LocalApps]) ->
     LocalAppsText =
         [ ?MISC:fun_text([Name, Arity]) || {_, Name, Arity} <- LocalApps],
@@ -177,12 +177,18 @@ prepare(Args)->
         [?Query:exec(Clause, ?Clause:body()) || Clause <- FunClauses],
     ScopeVariables =
         ?Query:exec(Expr, ?Query:seq(?Expr:clause(), ?Clause:variables())),
-    {VarPairLists, MatchPairLists} = get_attr_pairs(AppArgs, PatternLists),
-    {BoundVarLists, UnusedVarLists} =
-        get_bound_and_unused_vars_from_pattern(PatternLists),
-    %% Check the possible variable name collisions
-    CollVars = check_var_collisions(FunClauses, ScopeVariables, VarPairLists),
-    ?Check(CollVars == [], ?LocalError(var_name_collision, CollVars)),
+    {VarPLists, MatchPairLists} = get_attr_pairs(AppArgs, PatternLists),
+    UnusedVarLists =
+        get_unused_vars_from_pattern(PatternLists),
+    BoundVarLists =
+        [begin
+             AllClause = ?Query:exec(Clause, [{functx,back}]),
+             ?Query:exec(AllClause, ?Query:seq(?Clause:variables(),
+                                               ?Var:occurrences()))
+         end
+         || Clause <- FunClauses],
+    VarPairLists = 
+        eliminate_var_collisions(FunClauses, ScopeVariables, VarPLists),
     [{_, AppParent}] = ?Syn:parent(AppNode),
     VarsAndNames = varnodes_and_names(FunClauses),
     AppComments = ?Syn:get_comments(AppNode),
@@ -434,7 +440,8 @@ copy_node_and_return_variables(Node, BoundVars, VarsAndNames, UnusedVarList) ->
 varnodes_and_names(Clauses) ->
     lists:flatten(
       [ begin
-            VarObjs = ?Query:exec(Clause, ?Clause:variables()),
+            AllClause = ?Query:exec(Clause, [{functx, back}]),
+            VarObjs = ?Query:exec(AllClause, ?Clause:variables()),
             [ begin
                   Name = ?Var:name(VarObj),
                   Occ = ?Query:exec(VarObj, ?Var:occurrences()),
@@ -558,19 +565,14 @@ get_app_node(Expr)->
             Parent2
     end.
 
-get_bound_and_unused_vars_from_pattern(PatternLists) ->
+get_unused_vars_from_pattern(PatternLists) ->
     VarObjLists =
         [ ?Query:exec(PatternNodes, ?Expr:variables())
           || PatternNodes <- PatternLists],
-    VarNodes =
-        [ ?Query:exec(VarObjList, ?Var:occurrences())
-          || VarObjList <- VarObjLists],
-    UnusedVarNodes =
-        [lists:flatten([ ?Query:exec(Obj,?Var:bindings()) ||
-             Obj <- VarObjList,
-             length(?Query:exec(Obj, ?Var:references())) == 0])
-         || VarObjList <- VarObjLists],
-    {VarNodes, UnusedVarNodes}.
+    [lists:flatten([ ?Query:exec(Obj,?Var:bindings()) ||
+                       Obj <- VarObjList,
+                       length(?Query:exec(Obj, ?Var:references())) == 0])
+     || VarObjList <- VarObjLists].
 
 get_attr_pairs(Parameters, FunPatternLists) ->
     AttrPairLists =
@@ -710,25 +712,43 @@ get_application_data(AppNodeLists, AppMod, FunMod) when AppMod /= FunMod ->
 get_application_data(_,_,_) ->
     {[], [], []}.
 
+eliminate_var_collisions(FunClauses, ScopeVarObjs, VarPairLists) ->
+    ScopeVarNames =
+        [?Var:name(Obj) || Obj <- ScopeVarObjs],
+    Zipped = lists:zip(FunClauses, VarPairLists),
+    lists:map(
+      fun({Clause, VarPairList})->
+              AllClause = ?Query:exec(Clause, [{functx, back}]),
+              VarObjNodes =
+                    ?Query:exec(AllClause, ?Clause:variables()),
+              VarNames =
+                  [ ?Var:name(VarObj) || VarObj <- VarObjNodes],
+              PatternNames = [First || {First,_} <- VarPairList],
+              CollNames = 
+                  ?MISC:intersect(VarNames, ScopeVarNames) -- PatternNames,
+              VarPairList ++ 
+                  eliminate_vars(CollNames, VarNames ++ ScopeVarNames ++
+                                 PatternNames, [])
+      end, Zipped).
+
+eliminate_vars([], _, AddPairs)->
+    AddPairs;
+eliminate_vars([Name|Tail], ExVarNames, AddPairs) ->
+    NewName = gen_new_name(Name, ExVarNames, 0),
+    eliminate_vars(Tail, ExVarNames ++ [NewName], 
+                   AddPairs ++ [{Name, NewName}]).        
+
+gen_new_name(Name, VarNames, N) ->
+    NewName = Name ++ "_" ++ integer_to_list(N),
+    case ?MISC:intersect([NewName], VarNames) of
+        [] ->
+            NewName;
+        _ ->
+            gen_new_name(Name, VarNames, N+1)
+    end.
 
 %%% ============================================================================
 %%% Checks
-
-check_var_collisions(FunClauses, ScopeVarObjs, VarPairLists) ->
-    ScopeVarNames =
-        [?Var:name(Obj) || Obj <- ScopeVarObjs],
-    Zipped = lists:zip(FunClauses, VarPairLists),%%BoundVarNames),
-    lists:flatten(
-      lists:map(
-        fun({Clause, VarPairList})->
-                VarObjNodes =
-                    ?Query:exec(Clause, ?Clause:variables()),
-                VarNames =
-                    [ ?Var:name(VarObj) || VarObj <- VarObjNodes],
-                Inter = ?MISC:intersect(VarNames, ScopeVarNames) --
-                    [First || {First,_} <- VarPairList],
-                [ list_to_atom(In) || In <- Inter]
-        end, Zipped)).
 
 check_applications(LocalApps, AppMod, FunMod) ->
     case AppMod of

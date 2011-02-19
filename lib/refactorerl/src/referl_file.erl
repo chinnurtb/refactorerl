@@ -1,26 +1,26 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc File properties and file based queries
 
 -module(referl_file).
--vsn("$Rev: 2902 $").
+-vsn("$Rev: 3658 $").
 -include("refactorerl.hrl").
 
 -import(?MISC, [to_atom/1, to_list/1]).
@@ -68,25 +68,26 @@ length(FileNode) ->
 %% the inclusion. The names are collected and checked recursively in
 %% header files.
 includable(Target, Incl) ->
-    M1 = existing_ent_with_source(Target, macro),
-    M2 = existing_ent_with_source(Incl,   macro),
-    R1 = existing_ent_with_source(Target, record),
-    R2 = existing_ent_with_source(Incl,   record),
-    {MN1, _} = lists:unzip(M1--M2), %% Is in Target, but isn't in Incl
-    {MN2, _} = lists:unzip(M2--M1), %% Is in Incl, but isn't in Target
-    {RN1, _} = lists:unzip(R1--R2),
-    {RN2, _} = lists:unzip(R2--R1),
-    ?MISC:intersect(MN1, MN2) == [] andalso ?MISC:intersect(RN1, RN2) == [].
+    NoClash = 
+        fun(Tag) ->
+                X1 = existing_ent_with_source(Target, Tag),
+                X2 = existing_ent_with_source(Incl,   Tag),
+ % io:format("DEBUG: Targ=~p, Incl=~p~n",[X1,X2]),
+                {XN1, _} = lists:unzip(X1--X2),
+                    %% Is in Target, but isn't in Incl
+                {XN2, _} = lists:unzip(X2--X1),
+                    %% Is in Incl, but isn't in Target
+                ?MISC:intersect(XN1, XN2) == []
+        end,
+    lists:all(NoClash,[macro,record,module]).
 
 existing_ent_with_source(File, Tag) ->
-    FileQuery = case Tag of
-                    record -> records();
-                    macro  -> macros()
-                end,
-    GetName = case Tag of
-                  record -> fun ?Rec:name/1;
-                  macro  -> fun ?Macro:name/1
-              end,
+    {FileQuery,GetName} =
+        case Tag of
+            record -> {records(),fun ?Rec:name/1};
+            macro  -> {macros(), fun ?Macro:name/1};
+            module -> {module(), fun ?Mod:name/1}
+        end,
     ?MISC:flatsort(
        [{GetName(Node), File} || Node <- ?Query:exec(File, FileQuery)]
        ++ [existing_ent_with_source(F, Tag) ||
@@ -186,8 +187,8 @@ macro(Name) ->
 %% @spec add_include(node(#file{}), node(#file{}) | string()) -> ok
 %% @doc Adds an include form to the file if the include path is not present.
 add_include(File, InclPath) when is_list(InclPath) ->
-    case lists:member(?Graph:path(?Graph:root(), find(InclPath)),
-                      ?Graph:path(File, includes())) of
+    [InclFile] = ?Graph:path(?Graph:root(), find(InclPath)),
+    case lists:member(InclFile, ?Graph:path(File, includes())) of
         true ->
             ok;
         false ->
@@ -208,28 +209,23 @@ add_include(File, InclFile) ->
     add_include(File, path(InclFile)).
 
 %% @spec del_include(node(#file{}), node(#file{})) -> ok
-%% @doc Removes the including of a file.
-%% @todo incl links are not removed, only the include form
+%% @doc Removes the inclusion of `InclFile' from `File'. This includes
+%% removing the corresponding `-include' form from `File'.
 del_include(File, InclFile) ->
-    [begin ?Graph:rmlink(File, incl, I) end
-     || I <- incl_files_recur([InclFile])],
-    del_form(File, ?Query:exec1(File, include_form(InclFile),
-                                include_not_present)).
-
-incl_files_recur(Files) ->
-    case lists:usort(?Query:exec(Files, includes()) -- Files) of
-        [] -> Files;
-        Is -> lists:usort(Files ++ incl_files_recur(Is))
-    end.
+    InclForm = ?Query:exec1(File, include_form(InclFile), include_not_present),
+    ?FileMan:drop_form(File, InclForm).
 
 %% @spec del_form(node(#form{})) -> ok
-%% @doc Removes a form from a file
+%% @doc Removes a form from its file.
+%% @see del_form/2
 del_form(Form) ->
-    File = ?Query:exec1(Form, ?Form:file(), file_not_found),
-    ?ESG:remove(File, form, Form).
+    File = ?Query:exec1(Form, ?Form:file(), ?RefError(no_file,[form])),
+    del_form(File, Form).
 
 %% @spec del_form(node(#file{}), node(#form{})) -> ok
-%% @doc Removes a form from a file
+%% @doc Removes a form from a file. The form may be reinserted at another
+%% place. Note that this function does not do preprocessor clean-up, use
+%% {@link referl_fileman:drop_form/2} for that purpose.
 del_form(File, Form) ->
     ?ESG:remove(File, form, Form).
 
@@ -271,20 +267,23 @@ upd_path(File, NewPath) ->
 %% -----------------------------------------------------------------------------
 %% Path calculators
 
-%% Generates absolute path and eliminates "./" and "../" relative path
-%% elements. If the path is only a file name, the result is the
-%% original `Path'.
+%% Generates a canonical absolute path by eliminating "./" and "../" relative
+%% path elements.
+abs_path([]) ->
+    [];
 abs_path(Path) ->
-    S = filename:split(filename:absname(Path)),
-    LongName = hd(lists:reverse(S)),
-    case erlang:length(Path) /= erlang:length(LongName) of
-         true -> Z = fun("..", _) -> "";
-                        (_, "..") -> "";
-                        (E, _)    -> E
-                     end,
-                 filename:join(lists:zipwith(Z, S, tl(S) ++ [[]]));
-	    _ -> Path
+    Comp   = filename:split(filename:absname(Path)),
+    NonDot = lists:filter(fun(S)->S/="."end, tl(Comp)),
+    DotDot = fun ("..",{ I, R}) -> {I+1,R    };
+                 ( S,  { 0, R}) -> {0,  [S|R]};
+                 (_S,  {-1,_R}) -> {-1, []   };
+                 (_S,  { I, R}) -> {I-1,R    } end,
+    {I,Dirs} = lists:foldr(DotDot,{0,[]},NonDot),
+    case I of
+        0 -> filename:join([hd(Comp)|Dirs]);
+        _ -> []
     end.
+
 
 rel_path(Dir, Path) ->
     AbsDir  = filename:split(abs_path(Dir)),

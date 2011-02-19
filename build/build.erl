@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc RefactorErl build script: generates the scanner and the parser,
 %%% compiles modules, creates release descriptors, startup scripts, release
@@ -24,7 +24,7 @@
 %%% @author Laszlo Lovei <lovei@inf.elte.hu>
 
 -module(build).
--vsn("$Rev: 2716 $").
+-vsn("$Rev: 3622 $").
 
 -export([start/0, start/1, start/2]).
 -export([cmp/0, cmp/1, rel/0, rel/1, doc/0, build/3]).
@@ -179,7 +179,36 @@ build_parser(_Opts) ->
                               call_maker(fun yecc:file/2,
                                          ?PARSER_FILE,
                                          yecc_error)
-                      end}],
+                      end},
+      #make{input  = ["referl_sq_lexer.xrl"],
+            output = ["referl_sq_lexer.erl"],
+            make   = fun () ->
+                             call_maker(fun leex:file/2,
+                                        "referl_sq_lexer.xrl",
+                                        sq_lex_error)
+                     end},
+      #make{input  = ["referl_sq_parser.yrl"],
+            output = ["referl_sq_parser.erl"],
+            make   = fun () ->
+                             call_maker(fun yecc:file/2,
+                                        "referl_sq_parser.yrl",
+                                        sq_yecc_error)
+                     end},
+      #make{input  = ["referl_m_lexer.xrl"],
+            output = ["referl_m_lexer.erl"],
+            make   = fun () ->
+                             call_maker(fun leex:file/2,
+                                        "referl_m_lexer.xrl",
+                                        m_lex_error)
+                     end},
+      #make{input  = ["referl_m_parser.yrl"],
+            output = ["referl_m_parser.erl"],
+            make   = fun () ->
+                             call_maker(fun yecc:file/2,
+                                        "referl_m_parser.yrl",
+                                        m_yecc_error)
+                     end}
+                     ],
       _Opts).
 
 build_parser(ToMake, _Opts) ->
@@ -195,10 +224,13 @@ build_parser(ToMake, _Opts) ->
       ToMake).
 
 call_maker(Fun, File, Error) ->
-    case Fun(File, [verbose]) of
+    try Fun(File, [verbose]) of
         error -> throw(Error);
         {error, Reason} -> throw({Error, Reason});
         _ -> ok
+    catch
+        error:undef ->
+            io:format("WARNING: Builder for ~s not found!~n", [File])
     end.
 
 

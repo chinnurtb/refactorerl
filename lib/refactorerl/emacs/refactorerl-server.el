@@ -1,21 +1,21 @@
 ;; -*- coding: utf-8 -*-
-;; The contents of this file are subject to the Erlang Public License,
-;; Version 1.1, (the "License"); you may not use this file except in
-;; compliance with the License. You should have received a copy of the
-;; Erlang Public License along with this software. If not, it can be
-;; retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+
+;; The  contents of this  file are  subject to  the Erlang  Public License,
+;; Version  1.1, (the  "License");  you may  not  use this  file except  in
+;; compliance  with the License.  You should  have received  a copy  of the
+;; Erlang  Public License  along  with this  software.  If not,  it can  be
+;; retrieved at http://plc.inf.elte.hu/erlang/
 ;;
-;; Software distributed under the License is distributed on an "AS IS"
-;; basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-;; License for the specific language governing rights and limitations under
-;; the License.
+;; Software  distributed under  the License  is distributed  on an  "AS IS"
+;; basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+;; the License  for the specific language governing  rights and limitations
+;; under the License.
 ;;
 ;; The Original Code is RefactorErl.
 ;;
-;; The Initial Developer of the Original Code is Eötvös Loránd University.
-;; Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-;; Loránd University. All Rights Reserved.
-
+;; The Initial Developer of the  Original Code is Eötvös Loránd University.
+;; Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+;; Eötvös Loránd University. All Rights Reserved.
 
 (require 'widget)
 (require 'erlang)
@@ -24,10 +24,11 @@
   (require 'cl))
 
 (require 'refactorerl-handlers)
+(require 'refactorerl-ui)
+(require 'refactorerl-customization)
 
 (provide 'refactorerl-server)
 
-(defvar refac-server-buffer nil)
 (defvar refac-server-process nil
   "The RefactorErl server process.")
 
@@ -38,49 +39,46 @@
   (when (not (refac-server-is-running))
     (let* ((base-path (file-name-as-directory refactorerl-base-path))
            (server-cmd (concat base-path "bin/referl"))
-           (server-data-dir (if (eq refactorerl-data-dir 'base)
-                                refactorerl-base-path
-                                refactorerl-data-dir))
            (server-args (list "-base" refactorerl-base-path
                               "-erl" refactorerl-erlang-runtime)))
       (when (stringp refactorerl-wrangler-path)
         (setq server-args (append (list "-wrangler" refactorerl-wrangler-path)
                                   server-args)))
       (when (eq refactorerl-server-type 'shell)
-        (let ((default-directory (file-name-as-directory server-data-dir)))
-          (with-current-buffer
-              (apply #'make-comint "RefactorErlShell" server-cmd nil server-args)
-            (when (require 'erlang nil t)
-              (erlang-shell-mode)))))      
+        (make-directory (refactorerl-data-dir) t)
+        (let ((default-directory (refactorerl-data-dir)))
+          (with-current-buffer (apply #'make-comint "RefactorErlShell" server-cmd nil server-args)
+            (require 'erlang)
+            (when (featurep 'erlang)              
+              (erlang-shell-mode)))))
       (setf refac-server-buffer
             (save-excursion (refac-make-server-buffer)))
       (setf refac-server-process
             (apply #'start-process "RefactorErl" refac-server-buffer server-cmd
                    (append server-args (if (eq refactorerl-server-type 'internal)
                                            (list "-emacs")
-                                           (list "-emacs" "-client" "-name" "referlemacs")))))           
+                                           (list "-emacs" "-client" "-name" "referlemacs")))))
       (set-process-filter refac-server-process 'refac-output-filter)
       (set-process-sentinel refac-server-process 'refac-process-sentinel))))
 
-(defvar refac-output-buffer "")
 (defun refac-output-filter (proc string)
   "Analyses server output, puts unrecognised messages into the process buffer."
   (when (equal proc refac-server-process)
-    (setq refac-output-buffer (concat refac-output-buffer string))
+    (setf refac-output-buffer (concat refac-output-buffer string))
     (save-match-data
       (let (eol line)
         (while (setq eol (string-match "\n" refac-output-buffer))
-          (setq line (substring refac-output-buffer 0 eol))
-          (setq refac-output-buffer (substring refac-output-buffer (1+ eol)))
+          (setf line (substring refac-output-buffer 0 eol))
+          (setf refac-output-buffer (substring refac-output-buffer (1+ eol)))
           (if (or (equal line "")
-                  (not (equal 2 (elt line 0))))
+                  (not (equal (elt line 0) ?\02)))
               (with-current-buffer (process-buffer proc)
                 (save-excursion
                   (goto-char (point-max))
                   (widget-insert (concat line "\n"))))
             (let* ((data (read (substring line 1)))
                    (message-key (elt data 0))
-                   (func (gethash message-key refac-handlers)))              
+                   (func (gethash message-key refac-handlers)))
               (if (functionp func)
                   (funcall func (elt data 1))
                   (error "unhandled message type %s" message-key)))))))))
@@ -98,14 +96,10 @@
         else when (eq prop key) return 'true
         finally return default-value))
 
-(defun refac-list-buffer ()
-  (get-buffer-create "*RefactorErl File List*"))
-
 (defun refac-file-saved ()
   "Informs the server that a file is changed. Runs from `after-save-hook'."
-  (when (or (eq refac-buffer-state :ok)
-            (eq refac-buffer-state :err))
-    (setq refac-buffer-state nil)
+  (when (member refac-buffer-state '(:ok :err))
+    (refac-set-buffer-state nil)
     (refac-send-command 'add buffer-file-name)))
 
 (defun refactorerl-update-status ()
@@ -123,7 +117,7 @@ for available types."
   (let ((msg (concat "{"
                      (mapconcat 'refac-erl-format
                                 (append (list cmd) args) ",")
-                     "}.\n")))    
+                     "}.\n")))
     ;(insert msg)
     (process-send-string refac-server-process msg)))
 
@@ -165,3 +159,9 @@ for available types."
   (and refac-server-process
        (equal 'run (process-status refac-server-process))))
 
+(defun refac-save-config (&rest args)
+  (refac-send-command 'saveconfig
+                      (widget-value appdir-list)
+                      (widget-value incdir-list)
+                      (widget-value outdir-menu))
+  (refac-hide-config))

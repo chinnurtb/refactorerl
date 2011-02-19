@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc This module contains functions that return a queries stating 
 %%%      from the module and it contains two module related transformations
@@ -29,11 +29,10 @@
 %% =============================================================================
 %% Exports
 
--export([name/1, find/1, file/0, locals/0, local/2,
+-export([name/1, find/1, all/0, file/0, locals/0, local/2,
          references/0,
-         imported/2, exported/2, visible/2,
-         add_import/2,del_import/2
-        ]).
+         imported/2, exported/2, visible/2, is_imported/2,
+         add_import/2,del_import/2]).
 
 -include("refactorerl.hrl").
 
@@ -53,6 +52,10 @@ name(Mod) ->
 find(Name) ->
     [{module, {name, '==', Name}}].
 
+%% @spec all() -> query(root(), #module{})
+%% @doc The query returns every module in the graph.
+all() ->
+    [module].
 
 %% =============================================================================
 %% Queries starting from modules
@@ -81,10 +84,20 @@ local(Name, Ary)->
     [{func, {{name,'==', Name},'and',{arity,'==', Ary}}}]. 
 
 
-%% @spec imported(Name, Ary) -> query(#module{}, #func{})
+%% @spec imported(atom(), integer()) -> query(#module{}, #func{})
 %% @doc The result query returns a function that imported into this module.
-imported(Name, Ary)->
+imported(Name, Ary) ->
     [{funimp, {{name, '==', Name} ,'and' ,{arity,'==', Ary}}}].
+
+
+%% @spec is_imported(node(#module{}), node(#func{})) -> bool()
+is_imported(Mod, Fun) ->
+    Name = ?Fun:name(Fun),
+    Arity = ?Fun:arity(Fun),
+    case ?Query:exec(Mod, imported(Name, Arity)) of
+        [] -> false;
+        _ ->  true
+    end.
 
 
 %% @spec exported(Name, Ary) -> query(#module{}, #func{})
@@ -97,7 +110,7 @@ exported(Name, Ary)->
 %% @doc The result query returns a function visible in this module.
 visible(Name, Ary)-> 
     ?Query:all([{func,{{name, '==', Name}, 'and', {arity, '==', Ary}}}],
-                [{funimp,{{name, '==', Name}, 'and', {arity, '==', Ary}}}]).
+               [{funimp,{{name, '==', Name}, 'and', {arity, '==', Ary}}}]).
 
 
 %% =============================================================================
@@ -133,17 +146,17 @@ add_import(To, FunList) ->
     end,
     ok.
 
-
 add_import_form(File, FunList)->
     [Mod] = ?Query:exec(hd(FunList), ?Fun:module()),
     check_imports(Mod, FunList),
+    NewFuns = sort_imports(File, FunList),
 
     ModName = ?Mod:name(Mod),
     ModExpr = ?Syn:create(#expr{kind=atom, value=ModName},
                           [atom_to_list(ModName)]),
 
     NewImportItems = [ create_import_item(?Fun:name(Fun), ?Fun:arity(Fun)) || 
-                         Fun <- lists:usort(FunList) ],
+                         Fun <- NewFuns ],
 
     List = ?Syn:create(#expr{kind=cons},
                        [{sub,[ ?Syn:create(#expr{kind=list},
@@ -151,13 +164,13 @@ add_import_form(File, FunList)->
 
     ImportForm = ?Syn:create(#form{type=attrib, tag=import},
                              ["-","import", {attr, ModExpr}, {attr, List}]),
-    
+
     ?File:add_form(File, ImportForm).
 
 add_import_items(Form, FunList)->
     [Mod] = ?Query:exec(Form, [{attr,1},modref]),
     check_imports(Mod, FunList),
-    
+
     List = hd(?Query:exec(Form, [{attr,2},{sub,1}])),
 
     OldFuns = ?Query:exec(List, ?Query:seq([ ?Expr:children(),
@@ -171,11 +184,11 @@ add_import_items(Form, FunList)->
 
 create_import_item(Name, Arity) ->
     CName  = ?Syn:create(#expr{kind=atom, value=Name},
-                                [atom_to_list(Name)]),
+                         [atom_to_list(Name)]),
     CArity = ?Syn:create(#expr{kind=integer,value=Arity},
-                                [integer_to_list(Arity)]),
+                         [integer_to_list(Arity)]),
     ?Syn:create(#expr{kind=infix_expr, value='/'},
-                                   [{sub, [CName, CArity]}]).
+                [{sub, [CName, CArity]}]).
 
 %% All funs should come from module `Mod'.
 check_imports(Mod, FunList) ->
@@ -188,6 +201,13 @@ check_imports(Mod, FunList) ->
       end,
       FunList).
 
+%% Removes the duplicates from the `FunList' and leaves out the already imported
+%% ones.
+sort_imports(File, FunList)->
+    [Module] = ?Query:exec(File, ?File:module()),
+    [ Fun || Fun <- lists:usort(FunList), not is_imported(Module, Fun) ].
+
+
 %% @spec del_import(Mod, Fun) -> ok
 %% @doc Removes `Fun' from the export list wich contains
 %%      it in the module `Mod'.
@@ -199,11 +219,10 @@ del_import(Mod, Fun)->
     ParList = ?Query:exec1(Expr,?Expr:parent(),parent_list_not_found),
     case ?Query:exec1(Form,?Form:module(),module_not_found) of
         Mod -> case length(?Query:exec(ParList,?Expr:children())) of
-                1 -> ?File:del_form(Form);
-                _ -> ?Syn:replace(ParList,{node, Expr},[])
-
-              end,
-              ok;
-         _ -> ok
+                   1 -> ?File:del_form(Form);
+                   _ -> ?Syn:replace(ParList,{node, Expr},[])       
+               end,
+               ok;
+        _ -> ok
 
     end.

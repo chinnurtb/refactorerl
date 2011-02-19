@@ -1,47 +1,54 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
+
+%%% ============================================================================
+%%% Module Informations
 
 %%% @doc Clustering with data mining techniques
-%%%
+
+%%% @todo More description
+
 %%% @author Kornel Horvath <kornel@inf.elte.hu>
 
--module(kcl_dm).
+-module(ucl_alg_dm).
 -vsn("$Rev:  $").
 
--include("kcl.hrl").
+-include("ucluster.hrl").
 
 
 %%% ============================================================================
 %%% Imports/exports
 
-%Imports
--import(proplists, [get_value/2, get_value/3]).
+% Steps sequence
+-export([steps_default/0, steps_validator/0, steps/1]).
 
+% Callback functions - Run the complet algorithm
+-export([run_default/0, run_validator/0, run/2]).
 
-% Interface
--export([new/1, new_default/0, new_validator/0, delete/1,
-         prepare/2, run/2, store/2]).
-% Algorithm (debug)
--export([calc_alpha_set/2, calc_alpha_set/6, 
-         create_use_table/2, create_query_table/2, u_gen/1, q_gen/1,
-         transactions/2,
-         apriori/2]).
+% Callback functions - Steps
+-export([init_default/0, init_validator/0, init/2,
+         calc_use_query_tables/2,
+         calc_alpha_set/2,
+         calc_transactions/2,
+         calc_associations/2,
+         do_isa_alg/2,
+         reorder_attr_matrix/2]).
 
 
 
@@ -59,7 +66,8 @@
     ht_leafsize,        % int()
     % Stores
     uses,               % ETS_tid()
-    queries,            % ETS_tid()    
+    queries,            % ETS_tid()
+    alpha_set,          % {[term()], [term()]}
     transactions,       % ETS_tid()
     itemsets,           % ETS_tid()
     large_itemsets,     % [ItemsetId]
@@ -70,25 +78,127 @@
 
 
 %%% ============================================================================
-%%% Constructoin/destruction
+%%% Steps sequence
 
-%% @spec new_default() -> DefaultOptions::[{Key::atom(), Value::term()}]
-%% @doc Return the default options of the algorithm.
-%%      For the avaible options see {@link new_validator/0}.
-%% @see new_validator/0
-new_default() ->
+%% @spec steps_default() -> DefaultOptions::proplist()
+%% @doc  Return the default options of the {@link steps/1} function.
+%%       It is a wrapper function to the {@link init_default/0} function.
+%%       For more information see the {@link steps/1} function.
+%% @see steps/1
+%% @see init_default/0
+steps_default() -> init_default().
+
+%% @spec steps_validator() -> [{Key::atom(), ValidatorFun}]
+%%       ValidatorFun = ((Value::term()) -> boolean())
+%% @doc  Return the validator functions for the available options of the 
+%%       {@link steps/1} function.
+%%       It is a wrapper function to the {@link init_validator/0} function.
+%%       For more information see the {@link steps/1} function.
+%% @see steps/1
+%% @see init_validator/0
+steps_validator() -> init_validator().
+
+%% @spec steps(Options::proplist()) -> [StepDesc]
+%%       StepDesc = {FunctionName::atom(), 
+%%                   Options::[{Key::atom(), Value::term()}]}
+%% @doc Return a list which contains the steps of the complet algorithm.
+%%      The first step is the {@link init/2} function. All options in `Options'
+%%      will be given to the {@link init/2} step.
+%%
+%%      For the avaible options see {@link init_default/0} and
+%%      {@link init_validator/0} functions.
+%% @see init_default/0
+%% @see init_validator/0
+steps(Options) when is_list(Options) ->
+    [{init,                  Options},
+     {build_conn_matrix,
+        [{matrix,entity},
+         {conn_fun,{ucl_connection,common_attr_cnt}},
+         {conn_def_value,0},
+         {symmetric,true}]},
+     {build_conn_matrix,
+        [{matrix,attribute},
+         {conn_fun,{ucl_connection,common_ent_cnt}},
+         {conn_def_value,0},
+         {symmetric,true}]},
+     {calc_use_query_tables, []},
+     {calc_alpha_set,        []},
+     {calc_transactions,     []},
+     {calc_associations,     []},
+     {do_isa_alg,            []},
+     {reorder_attr_matrix,   []}].
+
+
+
+%%% ============================================================================
+%%% Callback functions - Run the complet algorithm
+
+%% @spec run_default() -> DefaultOptions::proplist()
+%% @doc  Return the default options of the {@link run/2} function.
+%%       It is a wrapper function to the {@link steps_default/0} function.
+%%       For more information see the {@link run/1} function.
+%% @see run/2
+%% @see steps_default/0
+run_default() ->
+    steps_default().
+
+%% @spec run_validator() -> [{Key::atom(), ValidatorFun}]
+%%       ValidatorFun = ((Value::term()) -> boolean())
+%% @doc  Return the validator functions for the available options of the 
+%%       {@link run/2} function.
+%%       It is a wrapper function to the {@link steps_validator/0} function.
+%%       For more information see the {@link run/2} function.
+%% @see run/2
+%% @see steps_validator/0
+run_validator() ->
+    steps_validator().
+
+%% @spec run(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), PlusSteps::proplist()}
+%% @doc  Run the complet clustering algorithm.
+%%       It is a wrapper function to the {@link steps/1} function.
+%%       For more information see the {@link steps/1} function.
+%% @see steps_default/0
+%% @see steps_validator/0
+run(St=#clState{}, Options) ->
+    {St, steps(Options)}.
+
+
+
+%%% ============================================================================
+%%% Callback functions - Steps
+
+%% @spec init_default() -> DefaultOptions::proplist()
+%% @doc Return the default options of the {@link init/2} function.
+%%      For the avaible options see the {@link init_validator/0} function.
+%% @see init_validator/0
+init_default() ->
     [{beta,1}, {gamma,1}, {minsup,3}, 
      {number_ids,false}, {hashtablesize,13}, {hashleafsize, 16}].
 
-
-%% @spec new_validator() -> [{Key::atom(), ValidatorFun}]
-%%      ValidatorFun = ((Value::term()) -> boolean())
-%% @doc  Return validator functions for the available options of the algorithm.
+%% @spec init_validator() -> [{Key::atom(), ValidatorFun}]
+%%       ValidatorFun = ((Value::term()) -> boolean())
+%% @doc  Return the validator functions for the available options of the 
+%%       {@link init/2} function.
 %%
 %% The availabe options and values are:
-%%
-%% TODO
-new_validator() ->
+%% <ul>
+%%   <li>`beta' = positive(): A positive integer.
+%%     Minimal query value in the Alpha Set.</li>
+%%   <li>`gamma' = positive(): A positive integer.
+%%     Minimal usage value in the Alpha Set.</li>
+%%   <li>`minsup' = positive(): An integer greater then one.
+%%     Minimal support value.</li>
+%%   <li>`number_ids' = boolean(): The identifiers of the clustering items
+%%     are integers, or aren't.</li>
+%%   <li>`hashtablesize' = positive(): An integer greater then one.
+%%     The size of hash tables in the inner nodes of multiple level hashing 
+%%     tree.</li>
+%%   <li>`hashleafsize' = positive(): An integer greater then one.
+%%     The maximal number of itemsets in the leaf nodes of multiple level 
+%%     hashing tree not in the bottom level.</li>
+%% </ul>
+init_validator() ->
     [{beta,             fun(V) -> is_integer(V) andalso 0<V end},
      {gamma,            fun(V) -> is_integer(V) andalso 0<V end},
      {minsup,           fun(V) -> is_integer(V) andalso 1<V end},
@@ -96,29 +206,134 @@ new_validator() ->
      {hashtablesize,    fun(V) -> is_integer(V) andalso 1<V end},
      {hashleafsize,     fun(V) -> is_integer(V) andalso 1<V end}].
 
-
-%% @spec new(Options::[{Key::atom(), Value::term()}]) -> dmState()
+%% @spec init(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), PlusSteps::proplist()}
 %% @doc Create a new algorithm state based on the options given in the `Options'
-%%      property list. For the avaible options see {@link new_validator/0} and
-%%      {@link new_default/0} functions.
-%% @see new_default/0
-%% @see new_validator/0
-new(Options) when is_list(Options) ->
-    Options1 = ?MISC:proplist_merge_def(Options, new_default()),
-    case ?MISC:proplist_validate(Options1, new_validator()) of
-        [] -> ok;
-        Wrongs -> throw(?LocalError(invalid_options, Wrongs))
+%%      property list and store it in the `custom' field of the `State'
+%%      clustering state.
+%%
+%%      For the avaible options see {@link init_default/0} and
+%%      {@link init_validator/0} functions.
+%% @see init_default/0
+%% @see init_validator/0
+init(St=#clState{}, Options) ->
+    DmSt = new(get_value(hashtablesize,Options),get_value(hashleafsize,Options),
+               get_value(number_ids,Options), get_value(beta,Options), 
+               get_value(gamma,Options), get_value(minsup,Options)),
+    % Return new state
+    {St#clState{custom=DmSt}, []}.
+
+
+%% @spec calc_use_query_tables(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), []}
+%% @doc Create the Use and Query tables based on the usage between the entities
+%%      and resources.
+%%      `Options' is not used.
+calc_use_query_tables(St=#clState{attr_matrix=AttrMatrix, 
+        custom=#dmState{uses=UsesETS, queries=QueriesETS}}, _Options) ->
+    create_use_table(AttrMatrix, UsesETS),
+    create_query_table(AttrMatrix, QueriesETS),
+    % Return new state
+    {St, []}.
+
+
+%% @spec calc_alpha_set(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), []}
+%% @doc Create Alpha Set.
+%%      `Options' is not used.
+calc_alpha_set(St=#clState{custom=DmSt=#dmState{}}, _Options) ->
+    {Ps, Fs} = calc_alpha_set(St),
+    io:format("Alpha set size: entities = ~p, resources = ~p\n", 
+        [length(Ps), length(Fs)]),
+    if
+        []==Ps orelse []==Fs -> throw(?LocalError(empty_alpha_set, []));
+        true -> ok
     end,
+    % Return new state
+    {St#clState{custom=DmSt#dmState{alpha_set={Ps,Fs}}}, []}.
+
+
+%% @spec calc_transactions(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), []}
+%% @doc Create the database view of the system. Create transaction database.
+%%      `Options' is not used.
+calc_transactions(St=#clState{custom=DmSt=#dmState{alpha_set=AS}}, _Options) ->
+    transactions(AS, DmSt),
+    % Return new state
+    {St, []}.
+
+
+%% @spec calc_associations(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), []}
+%% @doc Calculate the association rules from the transaction database.
+%%      `Options' is not used.
+calc_associations(St=#clState{custom=DmSt=#dmState{alpha_set=AS,itemsets=LETS}},
+        _Options) ->
+    % Generate large itemsets
+    LsIds0 = apriori(AS, DmSt),
+    % Remove 1-itemsets
+    {LsIds1, [L1Ids]} = lists:split(length(LsIds0)-1, LsIds0),
+    lists:foreach(fun(LId) -> ets:delete(LETS,LId) end, L1Ids),
+    % Sort itemsets by support value
+    LsIds = lists:reverse(element(3,lists:unzip3(lists:usort(lists:map(
+        fun(LId) ->
+            [{_LId, LItems, LSup}] = ets:lookup(LETS, LId),
+            {LSup, length(LItems), LId}
+        end,
+        lists:flatten(LsIds1)))))),
+    io:format("Number of large itemsets: ~p\n", [ets:info(LETS,size)]),
+    % Return new state
+    {St#clState{custom=DmSt#dmState{large_itemsets=LsIds}}, []}.
+
+
+%% @spec do_isa_alg(State::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), []}
+%% @doc The ISA algorithm. Reorder the entities into adjacent rows and the 
+%%      attributes into adjacent colums in the attribute matrix by the 
+%%      founded association rules in the previous step.
+%%      `Options' is not used.
+do_isa_alg(St=#clState{custom=#dmState{alpha_set={Ps,_Fs}}}, _Options) ->
+    St2 = isa(length(Ps), St),
+    % Return new state
+    {St2, []}.
+
+
+%% @spec reorder_attr_matrix(St::clState(), Options::proplist()) -> 
+%%           {NewState::clState(), []}
+%% @doc  Store the result of the algoritm back to the clustering state.
+%%       Reorder the rows and columns of the attribute matrix by the result
+%%       of the ISA algorithm.
+%%       `Options' is not used.
+reorder_attr_matrix(St=#clState{attr_matrix=AttrMatrix,
+        custom=DmSt=#dmState{group_ents=GroupEntIds, 
+                            group_attrs=GroupAttrIds}}, _Options) ->
+    % Reorder rows and columns
+    AllAttrIds = ?ClState:attrIds(St),
+    AttrIds1   = GroupAttrIds++(AllAttrIds--GroupAttrIds),
+    AM1 = ?Matrix:reorder_rows(GroupEntIds, AttrMatrix),
+    AM2 = ?Matrix:reorder_cols(AttrIds1, AM1),
+    % Delete algotihm state
+    delete(DmSt),
+    % Return new state
+    {St#clState{attr_matrix=AM2}, []}.
+
+
+
+%%% ============================================================================
+%%% Data mining state
+
+%%
+%%
+new(HashTableSize,HashLeafSize, NumberIds, Beta,Gamma,MinSup) ->
     % Select hash function
-    HS = get_value(hashtablesize, Options1),
-    HP = ?MHT:hash_gen(HS, get_value(number_ids, Options1)),
+    HP = ?MHT:hash_gen(HashTableSize, NumberIds),
     #dmState{
         % Options
-        beta            = get_value(beta,         Options1),
-        gamma           = get_value(gamma,        Options1),
-        minsup          = get_value(minsup,       Options1),
+        beta            = Beta,
+        gamma           = Gamma,
+        minsup          = MinSup,
         ht_hashparam    = HP,
-        ht_leafsize     = get_value(hashleafsize, Options1),
+        ht_leafsize     = HashLeafSize,
         % Stores
         uses            = ets:new(dm_uses, []),
         queries         = ets:new(dm_queries, []),
@@ -136,75 +351,17 @@ delete(St=#dmState{}) ->
     ets:delete(St#dmState.itemsets).
 
 
-%% @spec prepare(ClSt::clState(), DmSt::dmState()) -> {clState(), dmState()}
-%% @doc Prepare the algorithm. Fill connection matrix with number of common 
-%%      attributes and create use and query tables.
-prepare(ClSt=#clState{attr_matrix=AttrMatrix}, St=#dmState{}) ->    
-    create_use_table(AttrMatrix, St#dmState.uses),
-    create_query_table(AttrMatrix, St#dmState.queries),
-    {?ClState:calc_conn_matrix(fun ?ClAttr:common_attr/3, 0, true, ClSt), St}.
-
-
-%% @spec run(ClSt::clState(), DmSt::dmState()) -> {clState(), dmState()}
-%% @doc Run the algoritm.
-run(ClSt=#clState{}, St=#dmState{itemsets=LETS}) ->
-    % Create Alpha Set
-    io:format("Create alpha set ...\n", []),
-    {Ps, Fs} = calc_alpha_set(ClSt, St),
-    io:format("Alpha set size: entities = ~p, resources = ~p\n", 
-        [length(Ps), length(Fs)]),
-    if
-        []==Ps orelse []==Fs -> throw(?LocalError(empty_alpha_set, []));
-        true -> ok
-    end,
-    % Create transactions
-    io:format("Create database view, calculate transactions ...\n", []),
-    transactions({Ps, Fs}, St),
-    % Calculate associations
-    io:format("Calculate large itemsets ... \n", []),
-    LsIds0 = apriori({Ps,Fs}, St),
-    % Remove 1-itemsets
-    {LsIds1, [L1Ids]} = lists:split(length(LsIds0)-1, LsIds0),
-    lists:foreach(fun(LId) -> ets:delete(LETS,LId) end, L1Ids),
-    % Sort itemsets by support value
-    LsIds = lists:reverse(element(3,lists:unzip3(lists:usort(lists:map(
-        fun(LId) ->
-            [{_LId, LItems, LSup}] = ets:lookup(LETS, LId),
-            {LSup, length(LItems), LId}
-        end,
-        lists:flatten(LsIds1)))))),
-    io:format("Number of large itemsets: ~p\n", [ets:info(LETS,size)]),
-    % Update state
-    St1 = St#dmState{large_itemsets=LsIds},
-    % ISA
-    io:format("Calculate grouping table ... \n", []),
-    St2 = isa(length(Ps), ClSt, St1),
-    % Return
-    {ClSt, St2}.
-
-
-%% @spec store(ClSt::clState(), DmSt::dmState()) -> clStata()
-%% @doc  Store the result of the algoritm back to the clustering state.
-store(ClSt=#clState{attr_matrix=AttrMatrix}, #dmState{group_ents=GroupEntIds,
-        group_attrs=GroupAttrIds}) ->
-    AllAttrIds = ?ClState:attrIds(ClSt),
-    AttrIds1   = GroupAttrIds++(AllAttrIds--GroupAttrIds),
-    AM1 = ?Matrix:reorder_rows(GroupEntIds, AttrMatrix),
-    AM2 = ?Matrix:reorder_cols(AttrIds1, AM1),
-    ClSt#clState{attr_matrix=AM2}.
-
-
 
 %%% ============================================================================
 %%% Alpha set calculation
 
 %%
 %%
-calc_alpha_set(ClSt=#clState{}, #dmState{beta=Beta, gamma=Gamma, uses=UseETS,
-        queries=QueryETS}) ->
+calc_alpha_set(St=#clState{custom=#dmState{beta=Beta, gamma=Gamma, uses=UseETS,
+        queries=QueryETS}}) ->
     % Create initial values
-    Ps0 = lists:usort(?ClState:entIds(ClSt)),
-    Fs0 = lists:usort(?ClState:attrIds(ClSt)),
+    Ps0 = lists:usort(?ClState:entIds(St)),
+    Fs0 = lists:usort(?ClState:attrIds(St)),
     % Calculate alpha set
     calc_alpha_set(Ps0, Fs0, u_gen(UseETS), q_gen(QueryETS), Beta, Gamma).
 
@@ -296,11 +453,11 @@ transactions({Ps, Fs}, #dmState{queries=QueryETS, ht_hashparam={_HS,HF},
 %%      idices of the large n-itemsets. The second contains the indices of the 
 %%      large n-1-itemsets, and so on. The last one consists the indices of 
 %%      the large 1-itemset.
-apriori({Ps,Fs}, St=#dmState{}) ->
+apriori({Ps,Fs}, DmSt=#dmState{}) ->
     % Calculate initial large itemset: L1
-    {NextId, L1Ids, L1HT} = calc_l1({Ps,Fs}, St),
+    {NextId, L1Ids, L1HT} = calc_l1({Ps,Fs}, DmSt),
     % Loop
-    apriori_({L1Ids, L1HT}, 2, NextId, St, []).
+    apriori_({L1Ids, L1HT}, 2, NextId, DmSt, []).
 
 % Apriori candidate generation
 apriori_({[],      Lk_1HT},_K,_NextId, #dmState{}, LsIds) -> 
@@ -435,22 +592,22 @@ apriori_gen_prune(Items, Lk_1HT, CETS) ->
 
 %%
 %%
-isa(AlphaEntsCnt, ClSt=#clState{}, St=#dmState{uses=UseETS, itemsets=LETS, 
-        large_itemsets=LsIds}) ->
+isa(AlphaEntsCnt, St=#clState{custom=DmSt=#dmState{uses=UseETS, itemsets=LETS, 
+        large_itemsets=LsIds}}) ->
     % Put all entity in large itemset into adjacent rows
     {Ents,Attrs} = isa_loop(LsIds, UseETS,LETS, {AlphaEntsCnt,0}, {[[]],[[]]}),
     % If there are entities not in the rows, put them into the rows
-    RestEntIds = lists:usort(?ClState:entIds(ClSt))--lists:flatten(Ents),
+    RestEntIds = lists:usort(?ClState:entIds(St))--lists:flatten(Ents),
     {Ents2,Attrs2} = if
         []/=RestEntIds -> 
-            isa_rest_ents(RestEntIds, UseETS, {Ents,Attrs}, ClSt);
+            isa_rest_ents(RestEntIds, UseETS, {Ents,Attrs}, St);
         true -> {Ents,Attrs}
     end,
     % Flat deep lists
     Ents3  = lists:flatten(lists:reverse(Ents2)),
     Attrs3 = lists:flatten(lists:reverse(Attrs2)),
-    % Strore grouping lists    
-    St#dmState{group_ents=Ents3, group_attrs=Attrs3}.
+    % Strore grouping lists
+    St#clState{custom=DmSt#dmState{group_ents=Ents3, group_attrs=Attrs3}}.
 
 
 % Put all entity in large itemset into the grouping table
@@ -476,13 +633,13 @@ isa_rest_ents([RestEntId|RestEntIds], UseETS, {Ents,Attrs}, ClSt=#clState{}) ->
     EntId1 = hd(EntIds),
     {MaxEntId, _MaxConn} = lists:foldl(
         fun(EntId, {AccEntId, AccConn}) ->
-            Conn = ?ClState:get_conn(RestEntId, EntId, ClSt),
+            Conn = ?ClState:get_conn(entity, RestEntId, EntId, ClSt),
             if
                 AccConn<Conn -> {EntId, Conn};
                 true -> {AccEntId, AccConn}
             end
         end,
-        {EntId1, ?ClState:get_conn(RestEntId, EntId1, ClSt)},
+        {EntId1, ?ClState:get_conn(entity, RestEntId, EntId1, ClSt)},
         tl(EntIds)),
     % Add entities into adjacent rows and attributes into adjacent columns
     {_, Ents1, Attrs1} = isa_add_entities([RestEntId,MaxEntId], UseETS, 
@@ -615,5 +772,6 @@ list_adjacent_join([Ps1,{Cs2,Ps2}|Parts]) ->
     [Ps1 | list_adjacent_join([{Cs2,Ps2}|Parts])];
 list_adjacent_join([Ps1,Ps2|Parts]) -> 
     [Ps1 | list_adjacent_join([Ps2|Parts])].
+
 
 

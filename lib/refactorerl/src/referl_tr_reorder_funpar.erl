@@ -1,21 +1,21 @@
 %%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% @doc The order of a function's arguments is a small, aesthetic aspect 
 %%%      of a program. Swapping arguments can improve the readability of the
@@ -81,7 +81,7 @@
 %%% @author Roland Kiraly <kiralyroland@inf.elte.hu>
 
 -module(referl_tr_reorder_funpar).
--vsn("$Rev: 2968 $ ").
+-vsn("$Rev: 3185 $ ").
 
 -include("refactorerl.hrl").
 
@@ -92,20 +92,30 @@
 -export([transform1p/1, 
          transform2p/3,
          transform3p/3, 
-         prepare/1]).
+         prepare/1,
+         error_text/2]).
 
 %%% ============================================================================
 %%% Callbacks
 
+%% @private
+%% @spec error_text(Code::atom(), Args::[term()]) -> string()
+%% @doc
+%% Give back the error message text for the transformation specific errors.
+%% The error is specified by the `Code' and the `ArgsList'.
+error_text(side_effect, []) ->
+    ?MISC:format("The function may have side effects!", []).
+
+
 prepare(Args) ->
-    NewOrder       = ?Args:order(Args),
+    NewOrder    = ?Args:order(Args),
     FunNode     = ?Args:function(Args),
     Arity       = ?Fun:arity(FunNode),
 
-    ?Check(check_arity_in_order(NewOrder, Arity) == true, 
-                                 ?RefError(bad_order, NewOrder)),
+    ?Check(check_arity_in_order(NewOrder, Arity), 
+                                 ?RefError(bad_order, [Arity])),
 
-    ?Check(check_side_effect(FunNode) == false, ?RefError(side_effect,[])),
+    ?Check(not check_side_effect(FunNode), ?LocalErr0r(side_effect)),
 
     Clauses  = ?Query:exec(FunNode, 
                            ?Query:seq(?Fun:definition(), ?Form:clauses())),
@@ -168,9 +178,10 @@ change_order(Args,Order)->
 %% order list element.
 check_arity_in_order(NewOrder, Arity)->
     ValidOrder = lists:usort(NewOrder),
-    (lists:max(ValidOrder) =< length(ValidOrder))
-    and (lists:min(ValidOrder)>= 1) 
-    and (length(ValidOrder) == Arity).
+    N = length(ValidOrder),
+    (N == Arity) andalso
+    ((N == 0) orelse
+     (lists:max(ValidOrder) =< N) and (lists:min(ValidOrder) >= 1)).
 
 
 %% @private

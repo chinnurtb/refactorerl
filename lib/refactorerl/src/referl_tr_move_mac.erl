@@ -1,46 +1,62 @@
- %%% -*- coding: latin-1 -*-
+%%% -*- coding: latin-1 -*-
 
-%%% The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://plc.inf.elte.hu/erlang/
+%%% The  contents of this  file are  subject to  the Erlang  Public License,
+%%% Version  1.1, (the  "License");  you may  not  use this  file except  in
+%%% compliance  with the License.  You should  have received  a copy  of the
+%%% Erlang  Public License  along  with this  software.  If not,  it can  be
+%%% retrieved at http://plc.inf.elte.hu/erlang/
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%% License for the specific language governing rights and limitations under
-%%% the License.
+%%% Software  distributed under  the License  is distributed  on an  "AS IS"
+%%% basis, WITHOUT  WARRANTY OF ANY  KIND, either expressed or  implied. See
+%%% the License  for the specific language governing  rights and limitations
+%%% under the License.
 %%%
 %%% The Original Code is RefactorErl.
 %%%
-%%% The Initial Developer of the Original Code is Eötvös Loránd University.
-%%% Portions created by Eötvös Loránd University are Copyright 2008, Eötvös
-%%% Loránd University. All Rights Reserved.
+%%% The Initial Developer of the  Original Code is Eötvös Loránd University.
+%%% Portions created  by Eötvös  Loránd University are  Copyright 2008-2009,
+%%% Eötvös Loránd University. All Rights Reserved.
 
 %%% ============================================================================
 %%% Module information
 
-%%% @doc This module implements the `Move macros between files'
-%%% transformation
+%%% @doc This module implements the `Move macros between files' refactoring.
 %%%
-%%% Side conditions
-%%% ...
+%%% == Parameters ==
+%%% <ul>
+%%%   <li>The file from where the macro definition is to be moved
+%%%       (see {@link referl_args:file/1}).</li>
+%%%   <li>The destination file's name
+%%%       (see {@link referl_args:filename/1}).</li>
+%%%   <li>The list of macros to be moved
+%%%       (see {@link referl_args:macros/1}).</li>
+%%% </ul>
 %%%
-%%% Transformation steps and compensations
-%%% ...
-%%%
-%%% TODO: fill this place
-%%%
-%%% == New heading ==
+%%% == Conditions of applicability ==
+%%% <ol>
+%%%   <li>The names of the macros to be moved must not clash with existing
+%%%       macro names in none of:
+%%%     <ul>
+%%%       <li>the target file</li>
+%%%       <li>the target's included files</li>
+%%%       <li>files where the target is included</li>
+%%%     </ul> </li>
+%%%   <li>Moving macros from a header to a module is only allowed if there
+%%%       exist no other module that both includes the header and uses
+%%%       some of the macros to be moved.</li>
+%%%   <li>An include form can only by introduced when it does not cause
+%%%       inconsistency at the place of inclusion.</li>
+%%% </ol>
 %%%
 %%% @author Daniel Horpacsi <daniel_h@inf.elte.hu>
 %%% @author bkil.hu <v252bl39h07fgwqm@bkil.hu>
-%%% TODO: a clean rewrite of the code, perhaps accompanied by a fusion
+%%% @todo a clean rewrite of the code, perhaps accompanied by a fusion
 %%%       with move_rec, because at the moment, this is a tweaked copy
 %%%       of Daniel's move_rec.
+%%% @todo Perhaps also consider fusion with move_fun?
 
 -module(referl_tr_move_mac).
--vsn("$Rev: 0000 $").
+-vsn("$Rev: 3185 $").
 -include("refactorerl.hrl").
 
 %%% ============================================================================
@@ -80,7 +96,7 @@ error_text(not_movable, [FileName, Name]) ->
     ["File ", FileName, " also includes the target file ",
      "and causes name collision with macro ", Name];
 %    "Cannot move to header, because there's name " ++
-%        "collision (mediately) with a record in a file, " ++
+%        "collision (mediately) with a macro in a file, " ++
 %        "which includes the target header";
 
 error_text(delete, []) ->
@@ -160,7 +176,8 @@ transform(#info{fromfile=FFile, tofile=TFile, forms=Forms,
 check_name_conflicts(FromFile, ToFile, Names) ->
     Includes =
         fun(File) ->
-                lists:usort(?Query:exec(File, ?File:includes())) -- [FromFile]
+                Incs = ?Query:exec(File, ?File:includes()),
+                lists:delete(FromFile, lists:usort(Incs))
         end,
     Exists =
         fun(File, Name) ->

@@ -1,7 +1,7 @@
 % This is an -*- erlang -*- file.
 {application, refactorerl,
  [{description, "Erlang Refactorer Prototype"},
-  {vsn, "0.6"},
+  {vsn, "0.6.2"},
   {mod, {referl_superv, []}},
   {modules,
    [ %% Infrastructure
@@ -25,6 +25,9 @@
      referl_tr_rename_mod, referl_tr_rename_rec, referl_tr_rename_recfield,
      referl_tr_rename_var, referl_tr_reorder_funpar, referl_tr_tuple_funpar,
      referl_tr_upgrade_iface, referl_tr_upgrade_regexp,
+     %% User queries
+     referl_sq, referl_sq_lib, referl_sq_lexer, referl_sq_parser,
+     referl_metrics, referl_m_lexer, referl_m_parser,
      %% User interface
      referl_args, referl_error, referl_draw_graph,
      referl_ui, referl_ui_evsend, referl_emacs, referl_event_printer
